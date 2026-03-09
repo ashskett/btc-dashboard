@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="theme-color" content="#080c17"/>
+<title>BTC Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow-x: hidden; }
+  body {
+    background: #080c17;
+    color: white;
+    font-family: system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 3px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+  /* Animations */
+  @keyframes spin    { to { transform: rotate(360deg); } }
+  @keyframes pulse   { 0%,100%{opacity:1} 50%{opacity:0.25} }
+  @keyframes fadein  { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+  @keyframes slidein { from{opacity:0;transform:translateX(12px)} to{opacity:1;transform:none} }
+  /* Pill scroll */
+  .pill-row { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; scrollbar-width:none; }
+  .pill-row::-webkit-scrollbar { display:none; }
+  /* Input reset */
+  input { -webkit-appearance:none; appearance:none; }
+  input:focus { outline:none; }
+  button { -webkit-tap-highlight-color: transparent; }
+  /* Safe area */
+  .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 16px); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ── Helpers ─────────────────────────────────────────────────
+const fmt  = (n,d=0) => n==null?"—":Number(n).toLocaleString("en-US",{maximumFractionDigits:d});
+const pct  = (n,d=2) => n==null?"—":(n>=0?"+":"")+Number(n).toFixed(d)+"%";
+const bil  = n => n==null?"—":"$"+(n/1e9).toFixed(2)+"B";
+const SIG  = {bull:"#00e5a0", bear:"#ff4d6d", neutral:"#8892a4"};
+const REFRESH = 60000;
+
+async function tracked(url, fb=null, errs=[], proxied=[]) {
+  try {
+    const r = await fetch(url, {signal:AbortSignal.timeout(6000)});
+    if (r.ok) return await r.json();
+  } catch(_) {}
+  try {
+    proxied.push(1);
+    const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+      {signal:AbortSignal.timeout(12000)});
+    if (!r.ok) throw new Error();
+    return JSON.parse((await r.json()).contents);
+  } catch(_) { errs.push(url.split("?")[0].split("/").pop()); return fb; }
+}
+
+function calcOBV(candles) {
+  let obv=0; const arr=[];
+  for(let i=0;i<candles.length;i++){
+    if(i===0){arr.push(0);continue;}
+    const c=parseFloat(candles[i][4]),p=parseFloat(candles[i-1][4]),v=parseFloat(candles[i][5]);
+    obv+=c>p?v:c<p?-v:0; arr.push(obv);
+  }
+  return arr;
+}
+function emaCalc(arr,n){const k=2/(n+1);let e=arr[0];return arr.map((v,i)=>i===0?v:(e=v*k+e*(1-k)));}
+function rsiCalc(c,n=14){
+  if(c.length<n+1)return null;
+  let ag=0,al=0;
+  for(let i=1;i<=n;i++){const d=c[i]-c[i-1];d>=0?ag+=d:al-=d;}
+  ag/=n;al/=n;
+  for(let i=n+1;i<c.length;i++){const d=c[i]-c[i-1];ag=(ag*(n-1)+(d>=0?d:0))/n;al=(al*(n-1)+(d<0?-d:0))/n;}
+  return al===0?100:100-(100/(1+ag/al));
+}
+
+// ── Micro components ─────────────────────────────────────────
+function Spark({data,color,h=28}){
+  if(!data||data.length<2)return<div style={{height:h}}/>;
+  const v=data.map(Number).filter(x=>!isNaN(x));
+  const mn=Math.min(...v),mx=Math.max(...v),rng=mx-mn||1,W=90;
+  const pts=v.map((x,i)=>`${i/(v.length-1)*W},${h-((x-mn)/rng)*(h-3)-1.5}`).join(" ");
+  return<svg width={W} height={h} style={{display:"block",flexShrink:0}}>
+    <polyline points={pts} fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>;
+}
+
+function Arc({value,min=0,max=100,label,color}){
+  const p=Math.max(0,Math.min(1,(value-min)/(max-min)));
+  const r=30,cx=40,cy=44;
+  const pt=d=>{const a=(d-90)*Math.PI/180;return{x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)};};
+  const s=pt(-135),e=pt(-135+p*270),ts=pt(-135),te=pt(135);
+  return<svg viewBox="0 0 80 56" style={{width:66,height:46,flexShrink:0}}>
+    <path d={`M${ts.x},${ts.y} A${r},${r} 0 1,1 ${te.x},${te.y}`} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="4.5" strokeLinecap="round"/>
+    {value!=null&&<path d={`M${s.x},${s.y} A${r},${r} 0 ${p>0.5?1:0},1 ${e.x},${e.y}`} fill="none" stroke={color} strokeWidth="4.5" strokeLinecap="round"/>}
+    <text x={cx} y={cy-5} textAnchor="middle" fill="white" fontSize="11" fontWeight="700" fontFamily="'JetBrains Mono',monospace">{value!=null?Math.round(value):"—"}</text>
+    <text x={cx} y={cy+5} textAnchor="middle" fill="rgba(255,255,255,0.35)" fontSize="5.5">{label}</text>
+  </svg>;
+}
+
+function Badge({sig}){
+  const c=SIG[sig]||SIG.neutral;
+  return<span style={{fontSize:9,fontWeight:700,color:c,background:`${c}18`,border:`1px solid ${c}30`,borderRadius:4,padding:"2px 7px",letterSpacing:"0.07em",whiteSpace:"nowrap"}}>
+    {sig==="bull"?"▲ BULL":sig==="bear"?"▼ BEAR":"● NEUTRAL"}
+  </span>;
+}
+
+function Spinner({c="#00e5a0"}){
+  return<div style={{width:14,height:14,border:`2px solid rgba(255,255,255,0.08)`,borderTop:`2px solid ${c}`,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>;
+}
+
+// ── Card ─────────────────────────────────────────────────────
+function Card({title,value,sub,sig,spark,sparkColor,note,loading,accent,children}){
+  const c=SIG[sig]||SIG.neutral;
+  const borderCol = sig==="bull"?"rgba(0,229,160,0.18)":sig==="bear"?"rgba(255,77,109,0.15)":"rgba(255,255,255,0.07)";
+  return(
+    <div style={{background:"rgba(255,255,255,0.03)",border:`1px solid ${borderCol}`,borderRadius:14,
+      padding:"15px 16px",display:"flex",flexDirection:"column",gap:8,
+      animation:"fadein 0.35s ease",position:"relative",overflow:"hidden"}}>
+      {accent&&<div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${c},transparent)`}}/>}
+      {loading&&<div style={{position:"absolute",inset:0,background:"rgba(8,12,23,0.75)",display:"flex",alignItems:"center",justifyContent:"center",borderRadius:14,zIndex:3}}><Spinner c={c}/></div>}
+      <div style={{fontSize:9,letterSpacing:"0.13em",color:"rgba(255,255,255,0.3)",textTransform:"uppercase"}}>{title}</div>
+      {value&&<div style={{fontSize:24,fontWeight:700,color:"white",fontFamily:"'JetBrains Mono',monospace",lineHeight:1.05,letterSpacing:"-0.02em"}}>{value}</div>}
+      {sub&&<div style={{fontSize:11,color:"rgba(255,255,255,0.4)",lineHeight:1.45}}>{sub}</div>}
+      {children}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <Badge sig={sig}/>
+        {spark&&<Spark data={spark} color={sparkColor||c} h={28}/>}
+      </div>
+      {note&&<div style={{fontSize:10,color:"rgba(255,255,255,0.25)",borderTop:"1px solid rgba(255,255,255,0.05)",paddingTop:7,lineHeight:1.55}}>{note}</div>}
+    </div>
+  );
+}
+
+// ── Candle chart (mobile-optimised, 30 candles) ──────────────
+function CandleChart({candles,h=140}){
+  if(!candles||candles.length<2)return(
+    <div style={{height:h,display:"flex",alignItems:"center",justifyContent:"center",
+      color:"rgba(255,255,255,0.2)",fontSize:11}}>Loading chart…</div>
+  );
+  const W=360,padL=4,padR=32,padT=6,padB=18,iW=W-padL-padR,iH=h-padT-padB;
+  const sl=candles.slice(-30);
+  const op=sl.map(c=>parseFloat(c[1])),hi=sl.map(c=>parseFloat(c[2]));
+  const lo=sl.map(c=>parseFloat(c[3])),cl=sl.map(c=>parseFloat(c[4]));
+  const vl=sl.map(c=>parseFloat(c[5]));
+  const minP=Math.min(...lo)*0.999,maxP=Math.max(...hi)*1.001,rngP=maxP-minP;
+  const maxV=Math.max(...vl)||1,volH=iH*0.18;
+  const sY=v=>padT+iH-((v-minP)/rngP)*iH;
+  const n=sl.length,cW=iW/n,gap=Math.max(0.5,cW*0.12),bW=Math.max(1,cW-gap*2);
+  const e20=emaCalc(cl,20),e50=emaCalc(cl,50);
+  const ePath=arr=>arr.map((v,i)=>`${i===0?"M":"L"}${padL+i*cW+cW/2},${sY(v)}`).join(" ");
+  const labels=Array.from({length:4},(_,i)=>minP+(rngP/3)*i);
+  return(
+    <svg viewBox={`0 0 ${W} ${h}`} style={{width:"100%",height:h,display:"block"}}>
+      {labels.map((p,i)=><g key={i}>
+        <line x1={padL} y1={sY(p)} x2={W-padR} y2={sY(p)} stroke="rgba(255,255,255,0.04)" strokeWidth="1"/>
+        <text x={W-padR+3} y={sY(p)+3.5} fill="rgba(255,255,255,0.22)" fontSize="6" fontFamily="monospace">${Math.round(p/1000)}k</text>
+      </g>)}
+      {sl.map((_,i)=>{
+        const x=padL+i*cW,up=cl[i]>=op[i],vh=Math.max(1,(vl[i]/maxV)*volH);
+        return<rect key={"v"+i} x={x+gap} y={h-padB-vh} width={bW} height={vh} fill={up?"rgba(0,229,160,0.18)":"rgba(255,77,109,0.18)"}/>;
+      })}
+      <path d={ePath(e20)} fill="none" stroke="#facc15" strokeWidth="1.1" opacity="0.7" strokeLinejoin="round"/>
+      <path d={ePath(e50)} fill="none" stroke="#818cf8" strokeWidth="1.1" opacity="0.7" strokeLinejoin="round"/>
+      {sl.map((_,i)=>{
+        const x=padL+i*cW,cx2=x+cW/2,up=cl[i]>=op[i],col=up?"#00e5a0":"#ff4d6d";
+        const bT=Math.min(sY(op[i]),sY(cl[i])),bH=Math.max(1,Math.abs(sY(op[i])-sY(cl[i])));
+        return<g key={i}>
+          <line x1={cx2} y1={sY(hi[i])} x2={cx2} y2={sY(lo[i])} stroke={col} strokeWidth="0.9" opacity="0.8"/>
+          <rect x={x+gap} y={bT} width={bW} height={bH} fill={up?col:"transparent"} stroke={col} strokeWidth="0.9"/>
+        </g>;
+      })}
+      {cl.length>0&&<line x1={padL} y1={sY(cl[cl.length-1])} x2={W-padR} y2={sY(cl[cl.length-1])} stroke="white" strokeWidth="0.5" strokeDasharray="2,3" opacity="0.25"/>}
+    </svg>
+  );
+}
+
+// ── Settings sheet ────────────────────────────────────────────
+function SettingsSheet({onClose,glassnodeKey,setGlassnodeKey,fetchAll}){
+  const [inp,setInp]=useState(glassnodeKey);
+  const save=()=>{const k=inp.trim();localStorage.setItem("gn_key",k);setGlassnodeKey(k);onClose();setTimeout(fetchAll,120);};
+  const clear=()=>{localStorage.removeItem("gn_key");setGlassnodeKey("");setInp("");onClose();};
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:100,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+      <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.6)",backdropFilter:"blur(4px)"}} onClick={onClose}/>
+      <div style={{position:"relative",background:"#0e1525",borderRadius:"20px 20px 0 0",
+        padding:"0 20px 0",animation:"slidein 0.25s ease",maxHeight:"85vh",overflowY:"auto"}}>
+        {/* Handle */}
+        <div style={{display:"flex",justifyContent:"center",paddingTop:10,paddingBottom:6}}>
+          <div style={{width:36,height:4,borderRadius:2,background:"rgba(255,255,255,0.15)"}}/>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontSize:15,fontWeight:700}}>⚙ API Configuration</div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.08)",border:"none",
+            borderRadius:20,width:28,height:28,color:"rgba(255,255,255,0.5)",
+            fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+        </div>
+
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",lineHeight:1.65,marginBottom:16}}>
+          <span style={{color:"#00e5a0",fontWeight:600}}>Glassnode free tier</span> unlocks live ETF holdings and exchange reserves.<br/>
+          1. Visit <a href="https://studio.glassnode.com/settings/api" target="_blank" style={{color:"#7dd3fc"}}>studio.glassnode.com/settings/api</a><br/>
+          2. Create free account (no card needed)<br/>
+          3. Copy API key → paste below
+        </div>
+
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+          <input type="password" value={inp} onChange={e=>setInp(e.target.value)}
+            placeholder="Paste Glassnode API key…"
+            style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",
+              borderRadius:10,padding:"12px 14px",color:"white",fontSize:13,
+              fontFamily:"'JetBrains Mono',monospace",width:"100%"}}/>
+          <button onClick={save} style={{background:"#00e5a0",color:"#080c17",border:"none",
+            borderRadius:10,padding:"13px",fontWeight:700,fontSize:14,cursor:"pointer"}}>
+            Save &amp; Load Data
+          </button>
+          {glassnodeKey&&<button onClick={clear} style={{background:"rgba(255,77,109,0.1)",
+            color:"#ff4d6d",border:"1px solid rgba(255,77,109,0.2)",borderRadius:10,
+            padding:"11px",fontSize:13,cursor:"pointer"}}>Clear API Key</button>}
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:24}}>
+          {[
+            {l:"ETF Holdings",d:"Daily BTC flows into all spot ETFs",f:true},
+            {l:"Exchange Reserves",d:"Total BTC held on exchanges",f:true},
+            {l:"Miner Outflows",d:"BTC moving miner→exchange",f:false},
+            {l:"SOPR / NUPL",d:"On-chain profitability metrics",f:false},
+          ].map(({l,d,f})=>(
+            <div key={l} style={{background:"rgba(255,255,255,0.03)",
+              border:`1px solid ${f?"rgba(0,229,160,0.14)":"rgba(255,255,255,0.05)"}`,
+              borderRadius:10,padding:"10px 11px"}}>
+              <div style={{fontSize:10,fontWeight:700,color:f?"#00e5a0":"rgba(255,255,255,0.3)",marginBottom:3}}>
+                {f?"✓ ":"— "}{l}
+              </div>
+              <div style={{fontSize:9,color:"rgba(255,255,255,0.25)",lineHeight:1.4}}>{d}</div>
+              <div style={{fontSize:8.5,marginTop:5,color:f?"#4ade80":"rgba(255,255,255,0.18)"}}>{f?"Free tier":"Paid only"}</div>
+            </div>
+          ))}
+        </div>
+        <div className="safe-bottom"/>
+      </div>
+    </div>
+  );
+}
+
+// ── Checklist sheet ───────────────────────────────────────────
+function ChecklistSheet({onClose}){
+  const items=[
+    {title:"🟢 Strong Long",color:"#00e5a0",items:["F&G < 30 (extreme fear)","Funding negative/zero","OBV above its MA line","RSI making new uptrend (higher lows)","Volume capitulation candle","ETF net inflows positive","4+ of 9 signals aligned"]},
+    {title:"🔴 Strong Short",color:"#ff4d6d",items:["F&G > 70 (extreme greed)","Funding > +0.01%","OBV below MA + bear divergence","Weekly RSI overbought >65","Volume distribution candle","Exchange reserves rising","4+ of 9 signals aligned"]},
+    {title:"⚪ Skip / Wait",color:"#8892a4",items:["F&G 40–60","Funding neutral","OBV flat near MA","RSI 40–60 (mid-range)","Normal volume","Mixed signals (4v5 or less)"]},
+    {title:"⚡ Size Up",color:"#facc15",items:["6+ signals aligned","OBV bull divergence active","Weekly RSI < 30","Vol capitulation candle this week","Bot score ≥ 7","ETF inflows + neg funding"]},
+  ];
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:100,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+      <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.6)",backdropFilter:"blur(4px)"}} onClick={onClose}/>
+      <div style={{position:"relative",background:"#0e1525",borderRadius:"20px 20px 0 0",
+        padding:"0 20px 0",animation:"slidein 0.25s ease",maxHeight:"88vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"center",paddingTop:10,paddingBottom:6}}>
+          <div style={{width:36,height:4,borderRadius:2,background:"rgba(255,255,255,0.15)"}}/>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontSize:15,fontWeight:700}}>Signal Checklist</div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.08)",border:"none",
+            borderRadius:20,width:28,height:28,color:"rgba(255,255,255,0.5)",
+            fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+        </div>
+        {items.map(({title,color,items:its})=>(
+          <div key={title} style={{marginBottom:18}}>
+            <div style={{fontSize:13,fontWeight:700,color,marginBottom:8}}>{title}</div>
+            {its.map(item=>(
+              <div key={item} style={{display:"flex",gap:8,marginBottom:6,alignItems:"flex-start"}}>
+                <span style={{color:"rgba(255,255,255,0.18)",marginTop:1,flexShrink:0}}>›</span>
+                <span style={{fontSize:12,color:"rgba(255,255,255,0.45)",lineHeight:1.4}}>{item}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+        <div className="safe-bottom"/>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ─────────────────────────────────────────────────
+function App(){
+  const [d,setD]=useState({});
+  const [loading,setLoading]=useState(true);
+  const [lastUp,setLastUp]=useState(null);
+  const [overall,setOverall]=useState("neutral");
+  const [sheet,setSheet]=useState(null); // "settings"|"checklist"|null
+  const [tab,setTab]=useState("signals"); // "chart"|"signals"|"manual"
+  const [glassnodeKey,setGlassnodeKey]=useState(()=>localStorage.getItem("gn_key")||"");
+  const timer=useRef(null);
+
+  const fetchAll=useCallback(async()=>{
+    setLoading(true);
+    const errs=[],proxied=[];
+    const t=(url,fb=null)=>tracked(url,fb,errs,proxied);
+
+    const [price,global,fng,funding,oiHist,wklyCandles,dailyCandles,etfData,reservesData]=await Promise.all([
+      t("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true"),
+      t("https://api.coingecko.com/api/v3/global"),
+      t("https://api.alternative.me/fng/?limit=7"),
+      t("https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=8"),
+      t("https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=1d&limit=14"),
+      t("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1w&limit=52"),
+      t("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=90"),
+      glassnodeKey
+        ? t(`https://api.glassnode.com/v1/metrics/institutions/purpose_etf_holdings_sum?a=BTC&i=24h&f=JSON&api_key=${glassnodeKey}`,null)
+        : t("https://open-api.coinglass.com/public/v2/bitcoin/etf_flow_list",null),
+      glassnodeKey
+        ? t(`https://api.glassnode.com/v1/metrics/distribution/balance_exchanges_all?a=BTC&i=24h&f=JSON&api_key=${glassnodeKey}`,null)
+        : Promise.resolve(null),
+    ]);
+
+    // ── Parse ──────────────────────────────────────────────
+    const btcPrice=price?.bitcoin?.usd, btcChg=price?.bitcoin?.usd_24h_change;
+    const dom=global?.data?.market_cap_percentage?.btc;
+    const fngVals=fng?.data?.map(x=>parseInt(x.value))?.reverse()??[];
+    const fngCur=fngVals[fngVals.length-1], fngLbl=fng?.data?.[0]?.value_classification??"—";
+    const fundRates=funding?.map(f=>parseFloat(f.fundingRate)*100)??[];
+    const fundLast=fundRates[fundRates.length-1], fund8h=fundLast!=null?fundLast*3*365:null;
+    const oiVals=oiHist?.map(x=>parseFloat(x.sumOpenInterest)*(btcPrice||0))??[];
+    const oiChg=oiVals.length>=2?(oiVals[oiVals.length-1]-oiVals[0])/oiVals[0]*100:null;
+    const oiTrend=oiChg!=null?(oiChg>3?"rising":oiChg<-3?"falling":"flat"):null;
+    // OBV
+    const wklyCloses=wklyCandles?.map(c=>parseFloat(c[4]))??[];
+    const wklyObvArr=wklyCandles?calcOBV(wklyCandles):[];
+    const obvEMAArr=wklyObvArr.length>10?emaCalc(wklyObvArr,10):[];
+    const obvLast=wklyObvArr[wklyObvArr.length-1], obvEMALast=obvEMAArr[obvEMAArr.length-1];
+    const priceNow=wklyCloses[wklyCloses.length-1], price4w=wklyCloses[wklyCloses.length-5];
+    const obvAboveMA=obvLast!=null&&obvEMALast!=null&&obvLast>obvEMALast;
+    const obvBullDiv=obvAboveMA&&priceNow<price4w, obvBearDiv=!obvAboveMA&&priceNow>price4w;
+    // RSI
+    const wklyRSI=wklyCloses.length>=15?rsiCalc(wklyCloses):null;
+    const rsiHistory=[];
+    if(wklyCloses.length>26)for(let i=wklyCloses.length-12;i<wklyCloses.length;i++)rsiHistory.push(rsiCalc(wklyCloses.slice(0,i+1)));
+    // Volume
+    const wklyVols=wklyCandles?.map(c=>parseFloat(c[5]))??[];
+    const volMA20=wklyVols.length>=20?wklyVols.slice(-20).reduce((a,b)=>a+b,0)/20:null;
+    const lastVol=wklyVols[wklyVols.length-1];
+    const lastCdl=wklyCandles?parseFloat(wklyCandles[wklyCandles.length-1][4])-parseFloat(wklyCandles[wklyCandles.length-1][1]):0;
+    const volCapit=volMA20!=null&&lastVol>volMA20*1.5&&lastCdl<0;
+    const volDist=volMA20!=null&&lastVol>volMA20*1.5&&lastCdl>0;
+    const volRatio=volMA20!=null?lastVol/volMA20:null;
+    // ETF
+    let etfFlows=[],etfLatest=null,etfSig="neutral",etfAvg7=null,etfMode="none";
+    try{
+      let rows=etfData?.data&&Array.isArray(etfData.data)?etfData.data:Array.isArray(etfData)?etfData:null;
+      if(rows?.length>0){
+        if(rows[0].t!==undefined&&rows[0].v!==undefined){
+          etfMode="glassnode";
+          const h=rows.slice(-15).map(r=>r.v),fl=[];
+          for(let i=1;i<h.length;i++)fl.push(h[i]-h[i-1]);
+          etfFlows=fl.slice(-14); etfLatest=etfFlows[etfFlows.length-1];
+          etfAvg7=etfFlows.slice(-7).reduce((a,b)=>a+b,0)/7;
+          etfSig=etfAvg7>200?"bull":etfAvg7<-200?"bear":"neutral";
+        } else {
+          etfMode="coinglass";
+          const fk=Object.keys(rows[0]).find(k=>/flow|netflow/i.test(k)&&!/fund|name/i.test(k));
+          if(fk){
+            const by={};rows.forEach(r=>{by[r.date||"x"]=(by[r.date||"x"]||0)+parseFloat(r[fk])||0;});
+            etfFlows=Object.values(by).slice(-14); etfLatest=etfFlows[etfFlows.length-1];
+            if(Math.abs(etfLatest)>1e8){etfFlows=etfFlows.map(v=>v/1e6);etfLatest/=1e6;}
+            etfAvg7=etfFlows.slice(-7).reduce((a,b)=>a+b,0)/7;
+            etfSig=etfAvg7>50?"bull":etfAvg7<-50?"bear":"neutral";
+          }
+        }
+      }
+    }catch(_){}
+    // Reserves
+    let resHist=[],resLatest=null,resTrend=null,resSig="neutral",resChg=null;
+    try{
+      const rv=Array.isArray(reservesData)&&reservesData[0]?.v!==undefined?reservesData.map(p=>p.v):reservesData?.values?.map(p=>p.y):null;
+      if(rv?.length>1){
+        resHist=rv.slice(-90); resLatest=resHist[resHist.length-1];
+        const prev=resHist[Math.max(0,resHist.length-15)];
+        resChg=prev?(resLatest-prev)/prev*100:null;
+        resTrend=resChg!=null?(resChg<-0.3?"falling":resChg>0.3?"rising":"flat"):null;
+        resSig=resTrend==="falling"?"bull":resTrend==="rising"?"bear":"neutral";
+      }
+    }catch(_){}
+    // Signals
+    const domSig=dom>52?"bull":dom<48?"bear":"neutral";
+    const fngSig=fngCur<30?"bull":fngCur>65?"bear":"neutral";
+    const fundSig=fundLast!=null?(fundLast<-0.005?"bull":fundLast>0.01?"bear":"neutral"):"neutral";
+    const oiSig=oiTrend==="rising"&&btcChg>0?"bull":oiTrend==="rising"&&btcChg<0?"bear":"neutral";
+    const obvSig=obvBullDiv?"bull":obvBearDiv?"bear":obvAboveMA?"bull":"neutral";
+    const rsiSig=wklyRSI!=null?(wklyRSI<40?"bull":wklyRSI>65?"bear":"neutral"):"neutral";
+    const volSig=volCapit?"bull":volDist?"bear":"neutral";
+    const allSigs=[domSig,fngSig,fundSig,oiSig,obvSig,rsiSig,volSig,etfSig,resSig];
+    const sc={bull:0,bear:0,neutral:0}; allSigs.forEach(s=>sc[s]++);
+    const ovr=sc.bull>=4?"bull":sc.bear>=4?"bear":sc.bull>sc.bear?"bull":sc.bear>sc.bull?"bear":"neutral";
+
+    setD({btcPrice,btcChg,dom,fngVals,fngCur,fngLbl,fundRates,fundLast,fund8h,
+      oiVals,oiChg,oiTrend,domSig,fngSig,fundSig,oiSig,
+      wklyObvArr,obvEMALast,obvLast,obvAboveMA,obvBullDiv,obvBearDiv,obvSig,
+      wklyRSI,rsiSig,rsiHistory,wklyVols,volCapit,volDist,volSig,volRatio,
+      dailyCandles,etfFlows,etfLatest,etfSig,etfAvg7,etfMode,
+      resHist,resLatest,resTrend,resSig,resChg,
+      bullCount:sc.bull,bearCount:sc.bear});
+    setOverall(ovr);
+    setLastUp(new Date());
+    setLoading(false);
+  },[glassnodeKey]);
+
+  useEffect(()=>{fetchAll();timer.current=setInterval(fetchAll,REFRESH);return()=>clearInterval(timer.current);},[fetchAll]);
+
+  const OC=SIG[overall], fngColor=d.fngCur<25?"#00e5a0":d.fngCur<45?"#4ade80":d.fngCur<55?"#facc15":d.fngCur<75?"#fb923c":"#ff4d6d";
+  const sigList=[
+    {l:"DOM",s:d.domSig},{l:"F&G",s:d.fngSig},{l:"FUND",s:d.fundSig},
+    {l:"OI",s:d.oiSig},{l:"OBV",s:d.obvSig},{l:"RSI",s:d.rsiSig},
+    {l:"VOL",s:d.volSig},{l:"ETF",s:d.etfSig},{l:"RSRV",s:d.resSig},
+  ];
+
+  const TABS=[{id:"chart",icon:"📈",label:"Chart"},{id:"signals",icon:"📊",label:"Signals"},{id:"manual",icon:"🔗",label:"Links"}];
+
+  return(
+    <div style={{minHeight:"100vh",paddingBottom:72,
+      background:"radial-gradient(ellipse 90% 30% at 50% -2%,rgba(0,229,160,0.04),transparent) #080c17"}}>
+
+      {/* ── Sticky header ── */}
+      <div style={{position:"sticky",top:0,zIndex:50,background:"rgba(8,12,23,0.95)",
+        backdropFilter:"blur(16px)",borderBottom:"1px solid rgba(255,255,255,0.06)",
+        padding:"10px 16px 8px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div>
+            <div style={{fontSize:8,letterSpacing:"0.18em",color:"rgba(255,255,255,0.2)",textTransform:"uppercase",marginBottom:1}}>SMC Bot · Macro</div>
+            <div style={{fontSize:20,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",letterSpacing:"-0.02em",lineHeight:1.1}}>
+              BTC{" "}
+              <span style={{color:d.btcChg>=0?"#00e5a0":"#ff4d6d"}}>
+                {d.btcPrice?"$"+fmt(d.btcPrice):loading?"…":"—"}
+              </span>
+              {d.btcChg!=null&&<span style={{fontSize:11,marginLeft:5,color:d.btcChg>=0?"#00e5a0":"#ff4d6d"}}>{pct(d.btcChg)}</span>}
+            </div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{display:"flex",alignItems:"center",gap:5,justifyContent:"flex-end",marginBottom:4}}>
+              <div style={{width:5,height:5,borderRadius:"50%",background:OC,animation:loading?"pulse 1s infinite":"none"}}/>
+              <span style={{fontSize:9,fontWeight:700,color:OC,letterSpacing:"0.08em",maxWidth:130,textAlign:"right",lineHeight:1.2}}>
+                {overall==="bull"?"MACRO BULLISH":overall==="bear"?"MACRO BEARISH":"MACRO NEUTRAL"}
+              </span>
+            </div>
+            <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+              <button onClick={fetchAll} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:6,padding:"4px 9px",color:"rgba(255,255,255,0.5)",fontSize:10,cursor:"pointer"}}>↻</button>
+              <button onClick={()=>setSheet("settings")} style={{background:glassnodeKey?"rgba(0,229,160,0.12)":"rgba(250,204,21,0.1)",border:`1px solid ${glassnodeKey?"rgba(0,229,160,0.25)":"rgba(250,204,21,0.2)"}`,borderRadius:6,padding:"4px 9px",color:glassnodeKey?"#00e5a0":"#facc15",fontSize:10,cursor:"pointer"}}>⚙</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Bias bar */}
+        <div style={{marginTop:8,padding:"7px 10px",borderRadius:8,
+          background:`linear-gradient(90deg,${OC}10,${OC}05)`,border:`1px solid ${OC}20`,
+          display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:8,color:"rgba(255,255,255,0.25)",letterSpacing:"0.1em"}}>9-SIGNAL CONFLUENCE</div>
+            <div style={{fontSize:11,fontWeight:700,color:OC,marginTop:1}}>
+              {overall==="bull"?"LONG BIAS":overall==="bear"?"SHORT BIAS":"WAIT FOR SIGNAL"}
+            </div>
+          </div>
+          <div style={{fontSize:11,fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>
+            <span style={{color:"#00e5a0"}}>{d.bullCount||0}▲</span>
+            <span style={{color:"rgba(255,255,255,0.2)",margin:"0 4px"}}>/</span>
+            <span style={{color:"#ff4d6d"}}>{d.bearCount||0}▼</span>
+          </div>
+        </div>
+
+        {/* Signal pills */}
+        <div className="pill-row" style={{marginTop:8}}>
+          {sigList.map(({l,s})=>{
+            const c=SIG[s]||SIG.neutral;
+            return<div key={l} style={{flexShrink:0,background:`${c}10`,border:`1px solid ${c}25`,
+              borderRadius:6,padding:"4px 9px",textAlign:"center",minWidth:38}}>
+              <div style={{fontSize:7,color:"rgba(255,255,255,0.25)",letterSpacing:"0.05em",marginBottom:1}}>{l}</div>
+              <div style={{fontSize:9,fontWeight:700,color:c}}>{s==="bull"?"▲":s==="bear"?"▼":"●"}</div>
+            </div>;
+          })}
+        </div>
+      </div>
+
+      {/* ── Tab content ── */}
+      <div style={{padding:"12px 14px 0"}}>
+
+        {/* CHART TAB */}
+        {tab==="chart"&&(
+          <div style={{animation:"fadein 0.3s ease"}}>
+            <div style={{background:"rgba(255,255,255,0.025)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:14,padding:"12px 14px",marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:9,letterSpacing:"0.12em",color:"rgba(255,255,255,0.3)",textTransform:"uppercase"}}>BTC · Daily · 30 days</div>
+                <div style={{display:"flex",gap:8,fontSize:9}}>
+                  <span style={{color:"#facc15"}}>― EMA20</span>
+                  <span style={{color:"#818cf8"}}>― EMA50</span>
+                </div>
+              </div>
+              <CandleChart candles={d.dailyCandles} h={160}/>
+            </div>
+            {/* Quick stats under chart */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+              {[
+                {l:"Fear & Greed",v:d.fngCur??"—",s:d.fngSig,note:d.fngLbl},
+                {l:"BTC Dominance",v:d.dom?d.dom.toFixed(1)+"%":"—",s:d.domSig,note:d.dom>52?"Rising":"Neutral"},
+                {l:"Funding Rate",v:d.fundLast!=null?(d.fundLast>=0?"+":"")+d.fundLast.toFixed(4)+"%":"—",s:d.fundSig,note:"Binance perps"},
+                {l:"Open Interest",v:d.oiVals?.length?bil(d.oiVals[d.oiVals.length-1]):"—",s:d.oiSig,note:`14d: ${d.oiChg!=null?pct(d.oiChg,1):"—"}`},
+              ].map(({l,v,s,note})=>{
+                const c=SIG[s]||SIG.neutral;
+                return<div key={l} style={{background:"rgba(255,255,255,0.03)",border:`1px solid ${c}20`,borderRadius:12,padding:"11px 13px"}}>
+                  <div style={{fontSize:8.5,color:"rgba(255,255,255,0.28)",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:5}}>{l}</div>
+                  <div style={{fontSize:18,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"white",marginBottom:3}}>{v}</div>
+                  <div style={{fontSize:9.5,color:"rgba(255,255,255,0.35)"}}>{note}</div>
+                  <div style={{marginTop:6}}><Badge sig={s}/></div>
+                </div>;
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* SIGNALS TAB */}
+        {tab==="signals"&&(
+          <div style={{display:"flex",flexDirection:"column",gap:10,animation:"fadein 0.3s ease"}}>
+
+            <Card title="Fear & Greed Index" value={d.fngCur??"—"} accent
+              sub={`${d.fngLbl} · <30 = buy zone, >70 = sell zone`}
+              sig={d.fngSig} loading={loading&&!d.fngCur}
+              spark={d.fngVals} sparkColor={fngColor}
+              note={`7-day: ${d.fngVals?.join(" → ")||"—"}`}/>
+
+            {/* Dominance */}
+            <div style={{background:"rgba(255,255,255,0.03)",border:`1px solid ${d.domSig==="bull"?"rgba(0,229,160,0.18)":"rgba(255,255,255,0.07)"}`,borderRadius:14,padding:"15px 16px",animation:"fadein 0.35s ease"}}>
+              <div style={{fontSize:9,letterSpacing:"0.13em",color:"rgba(255,255,255,0.3)",textTransform:"uppercase",marginBottom:8}}>BTC Dominance</div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <Arc value={d.dom} min={38} max={68} label="BTC.D %" color={SIG[d.domSig]||SIG.neutral}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:26,fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{d.dom?d.dom.toFixed(1)+"%":"—"}</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.38)",marginTop:3}}>{d.dom>52?"Rising → BTC strength":d.dom<48?"Falling → altseason":"Neutral zone"}</div>
+                  <div style={{marginTop:7}}><Badge sig={d.domSig}/></div>
+                </div>
+              </div>
+            </div>
+
+            <Card title="Funding Rate (Binance Perps)" accent
+              value={d.fundLast!=null?(d.fundLast>=0?"+":"")+d.fundLast.toFixed(4)+"%":"—"}
+              sub={`Annualised ≈ ${d.fund8h!=null?(d.fund8h>=0?"+":"")+d.fund8h.toFixed(1)+"%":"—"} · every 8h`}
+              sig={d.fundSig} loading={loading&&d.fundLast==null}
+              spark={d.fundRates} sparkColor={SIG[d.fundSig]}
+              note={d.fundLast<-0.005?"Negative → shorts paying → bullish squeeze":d.fundLast>0.01?"Positive → longs overheated → fade rallies":"Neutral → no derivatives bias"}/>
+
+            <Card title="Open Interest (Binance Perps)" accent
+              value={d.oiVals?.length?bil(d.oiVals[d.oiVals.length-1]):"—"}
+              sub={`14d: ${d.oiChg!=null?pct(d.oiChg,1):"—"} · ${d.oiTrend??"—"}`}
+              sig={d.oiSig} loading={loading&&!d.oiVals?.length}
+              spark={d.oiVals?.map(v=>v/1e9)} sparkColor={SIG[d.oiSig]}
+              note={d.oiTrend==="rising"&&d.btcChg>0?"OI ↑ + Price ↑ → conviction longs":d.oiTrend==="rising"&&d.btcChg<0?"OI ↑ + Price ↓ → conviction shorts":"OI falling → positions closing"}/>
+
+            <Card title="Weekly OBV" accent
+              value={d.obvLast!=null&&d.obvEMALast!=null?(d.obvLast>d.obvEMALast?"▲ ABOVE MA":"▼ BELOW MA"):"—"}
+              sub={d.obvBullDiv?"🟢 Hidden bull divergence — OBV ↑ while price ↓":d.obvBearDiv?"🔴 Bear divergence — OBV ↓ while price ↑":d.obvAboveMA?"Accumulation in progress":"Distribution / selling pressure"}
+              sig={d.obvSig} loading={loading&&!d.wklyObvArr?.length}
+              spark={d.wklyObvArr?.slice(-20)} sparkColor={SIG[d.obvSig]}
+              note="Dishner: OBV must be ABOVE its MA for long bias. Divergence from price = strongest signal."/>
+
+            {/* RSI */}
+            <div style={{background:"rgba(255,255,255,0.03)",border:`1px solid ${d.rsiSig==="bull"?"rgba(0,229,160,0.18)":d.rsiSig==="bear"?"rgba(255,77,109,0.15)":"rgba(255,255,255,0.07)"}`,borderRadius:14,padding:"15px 16px",animation:"fadein 0.35s ease",position:"relative",overflow:"hidden"}}>
+              <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${SIG[d.rsiSig]||SIG.neutral},transparent)`}}/>
+              <div style={{fontSize:9,letterSpacing:"0.13em",color:"rgba(255,255,255,0.3)",textTransform:"uppercase",marginBottom:8}}>Weekly RSI (14)</div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <Arc value={d.wklyRSI} min={0} max={100} label="RSI wkly" color={d.rsiSig==="bull"?"#00e5a0":d.rsiSig==="bear"?"#ff4d6d":"#facc15"}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:26,fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{d.wklyRSI!=null?d.wklyRSI.toFixed(1):"—"}</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.38)",marginTop:3}}>
+                    {d.wklyRSI<30?"Extreme oversold":d.wklyRSI<40?"Oversold buy zone":d.wklyRSI>70?"Extreme overbought":d.wklyRSI>65?"Overbought":"Mid-range"}
+                  </div>
+                  <div style={{marginTop:7,display:"flex",alignItems:"center",gap:8}}>
+                    <Badge sig={d.rsiSig}/>
+                    {d.rsiHistory?.length>0&&<Spark data={d.rsiHistory} color={d.rsiSig==="bull"?"#00e5a0":d.rsiSig==="bear"?"#ff4d6d":"#facc15"} h={22}/>}
+                  </div>
+                </div>
+              </div>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.25)",borderTop:"1px solid rgba(255,255,255,0.05)",paddingTop:7,marginTop:7,lineHeight:1.5}}>
+                Dishner: RSI must be making a new uptrend (higher lows). Weekly &lt;30 = max conviction long.
+              </div>
+            </div>
+
+            <Card title="Weekly Volume Structure" accent
+              value={d.volRatio!=null?d.volRatio.toFixed(2)+"× avg":"—"}
+              sub={d.volCapit?"🟢 Capitulation — vol spike on red close":d.volDist?"🔴 Distribution — vol spike on green close":"Normal volume — no structural signal"}
+              sig={d.volSig} loading={loading&&!d.wklyVols?.length}
+              spark={d.wklyVols?.slice(-20)} sparkColor={SIG[d.volSig]}
+              note="Dishner: Big red vol candle at lows = exhaustion/reversal. Volume must confirm the move."/>
+
+            <Card title="BTC Spot ETF Flows (Daily)" accent
+              value={d.etfLatest!=null?(d.etfLatest>=0?"+":"")+d.etfLatest.toFixed(0)+(d.etfMode==="glassnode"?" BTC":" M USD"):glassnodeKey?"Loading…":"Add API key"}
+              sub={d.etfAvg7!=null?(d.etfMode==="glassnode"?`7d avg: ${d.etfAvg7>=0?"+":""}${d.etfAvg7.toFixed(0)} BTC/day · Glassnode`:`7d avg: ${d.etfAvg7>=0?"+":""}${d.etfAvg7.toFixed(0)}M USD`):glassnodeKey?"Fetching from Glassnode…":"Tap ⚙ to add free Glassnode key"}
+              sig={d.etfSig??"neutral"} loading={loading&&!d.etfFlows?.length}
+              spark={d.etfFlows} sparkColor={SIG[d.etfSig??"neutral"]}
+              note={d.etfLatest==null?(glassnodeKey?"Key set but no data — check key at studio.glassnode.com":"No API key. Tap ⚙ above. Backup: farside.co.uk"):d.etfSig==="bull"?"Net inflows → institutions buying → bullish demand":d.etfSig==="bear"?"Net outflows → institutional selling → bearish":"Mixed ETF flows — no strong directional bias"}/>
+
+            <Card title="BTC Exchange Reserves" accent
+              value={d.resLatest!=null?new Intl.NumberFormat("en-US",{notation:"compact",maximumFractionDigits:2}).format(d.resLatest/1e6)+"M BTC":glassnodeKey?"Loading…":"Add API key"}
+              sub={d.resTrend&&d.resChg!=null?`14d: ${d.resChg>=0?"+":""}${d.resChg.toFixed(2)}% · trend: ${d.resTrend} · Glassnode`:glassnodeKey?"Fetching from Glassnode…":"Tap ⚙ to add free Glassnode key"}
+              sig={d.resSig??"neutral"} loading={loading&&!d.resHist?.length}
+              spark={d.resHist} sparkColor={SIG[d.resSig??"neutral"]}
+              note={d.resLatest==null?(glassnodeKey?"Key set but no data — verify at studio.glassnode.com/settings/api":"No API key. Tap ⚙. Backup: cryptoquant.com"):d.resSig==="bull"?"Reserves falling → BTC leaving exchanges → supply squeeze (bullish)":d.resSig==="bear"?"Reserves rising → BTC moving TO exchanges → sell pressure":"Reserves stable — no supply shock signal"}/>
+
+            {/* Checklist CTA */}
+            <button onClick={()=>setSheet("checklist")} style={{width:"100%",background:"rgba(255,255,255,0.04)",
+              border:"1px solid rgba(255,255,255,0.08)",borderRadius:14,padding:"14px 16px",
+              color:"white",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",
+              animation:"fadein 0.35s ease"}}>
+              <div style={{textAlign:"left"}}>
+                <div style={{fontSize:11,fontWeight:700,marginBottom:2}}>Signal Checklist</div>
+                <div style={{fontSize:10,color:"rgba(255,255,255,0.35)"}}>Long / Short / Skip / Size Up criteria</div>
+              </div>
+              <span style={{fontSize:18,color:"rgba(255,255,255,0.3)"}}>›</span>
+            </button>
+          </div>
+        )}
+
+        {/* MANUAL TAB */}
+        {tab==="manual"&&(
+          <div style={{display:"flex",flexDirection:"column",gap:8,animation:"fadein 0.3s ease"}}>
+            {[
+              {label:"ETF Flows (Farside)",url:"https://farside.co.uk/bitcoin-etf-flow-all-data/",hint:"Daily inflow/outflow across all spot BTC ETFs. Backup for live ETF card.",icon:"📊"},
+              {label:"Exchange Reserves (CryptoQuant)",url:"https://cryptoquant.com/asset/btc/chart/exchange-flows/exchange-reserve",hint:"BTC held on exchanges — declining = supply leaving = bullish.",icon:"🏦"},
+              {label:"Miner Outflows (CryptoQuant)",url:"https://cryptoquant.com/asset/btc/chart/miner-flows/miner-to-exchange-all",hint:"BTC moving miner→exchange = potential selling pressure.",icon:"⛏"},
+              {label:"CME Futures + OI (TradingView)",url:"https://www.tradingview.com/chart/?symbol=CME%3ABTC1%21",hint:"Check OI trend, gap levels. OBV above MA line = bullish.",icon:"📉"},
+              {label:"TBT Divergence — @MooninPapa",url:"https://x.com/MooninPapa",hint:"Aaron Dishner's True Bearish/Bullish Trend divergence. Add to weekly chart.",icon:"🐦"},
+              {label:"Glassnode API Key",url:"https://studio.glassnode.com/settings/api",hint:"Free account. Unlocks live ETF holdings and exchange reserves cards.",icon:"🔑"},
+            ].map(({label,url,hint,icon})=>(
+              <a key={label} href={url} target="_blank" rel="noopener noreferrer"
+                style={{display:"flex",gap:12,alignItems:"flex-start",background:"rgba(255,255,255,0.03)",
+                  border:"1px solid rgba(255,255,255,0.07)",borderRadius:14,padding:"14px 15px",
+                  textDecoration:"none",color:"white",animation:"fadein 0.35s ease"}}>
+                <div style={{fontSize:20,flexShrink:0,marginTop:1}}>{icon}</div>
+                <div>
+                  <div style={{fontSize:12.5,fontWeight:600,color:"#7dd3fc",marginBottom:4}}>{label} <span style={{fontSize:9,opacity:0.5}}>↗</span></div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",lineHeight:1.5}}>{hint}</div>
+                </div>
+              </a>
+            ))}
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.15)",textAlign:"center",padding:"12px 0 4px",lineHeight:1.6}}>
+              Binance · CoinGecko · Alternative.me · allorigins.win proxy<br/>
+              Auto-refreshes every 60s · OBV/RSI computed client-side · Not financial advice
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Bottom tab bar ── */}
+      <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:50,
+        background:"rgba(8,12,23,0.97)",backdropFilter:"blur(20px)",
+        borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+        <div style={{display:"flex",padding:"6px 0 env(safe-area-inset-bottom,6px)"}}>
+          {TABS.map(({id,icon,label})=>(
+            <button key={id} onClick={()=>setTab(id)} style={{flex:1,display:"flex",flexDirection:"column",
+              alignItems:"center",gap:2,background:"none",border:"none",cursor:"pointer",
+              padding:"6px 0",color:tab===id?OC:"rgba(255,255,255,0.3)",transition:"color 0.2s"}}>
+              <span style={{fontSize:17}}>{icon}</span>
+              <span style={{fontSize:9,fontWeight:tab===id?700:400,letterSpacing:"0.04em"}}>{label}</span>
+              {tab===id&&<div style={{width:16,height:2,borderRadius:1,background:OC,marginTop:1}}/>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Bottom sheets ── */}
+      {sheet==="settings"&&<SettingsSheet onClose={()=>setSheet(null)} glassnodeKey={glassnodeKey} setGlassnodeKey={setGlassnodeKey} fetchAll={fetchAll}/>}
+      {sheet==="checklist"&&<ChecklistSheet onClose={()=>setSheet(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
