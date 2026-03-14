@@ -332,11 +332,26 @@ sed -i 's/DRY_RUN = False/DRY_RUN = True/' /root/grid-engine/engine.py
 
 Since SSH is sandboxed, the workflow is:
 
-1. **For dashboard HTML changes** (this repo): Claude edits → commits → pushes → you `git pull` on the droplet + copy files over
-2. **For engine Python changes**: Claude writes the code here, you copy it to the droplet manually or via `deploy.sh`
-3. **Future goal**: webhook auto-deploy so step 2 is automatic
+1. Claude edits files in `engine/`, commits, and pushes to the feature branch.
+2. You deploy to the droplet by curling the raw files directly from GitHub.
 
-To enable auto-deploy (run once on droplet):
+**`/root/grid-engine` is NOT a git repo** — do not `git pull` there. Use curl instead:
+
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/ashskett/btc-dashboard/main/scripts/droplet-setup.sh)
+# Stop the running server first
+tmux send-keys -t grid C-c Enter
+
+# Pull updated engine files from the current branch
+cd /root/grid-engine && source venv/bin/activate
+branch="claude/grid-engine-chat-review-hEEGu"   # update when branch changes
+base="https://raw.githubusercontent.com/ashskett/btc-dashboard/${branch}/engine"
+curl -fsSL "${base}/dashboard.html"        -o dashboard.html
+curl -fsSL "${base}/dashboard_server.py"   -o dashboard_server.py
+curl -fsSL "${base}/threecommas_dca.py"    -o threecommas_dca.py
+# add more files here as needed
+
+# Restart
+python dashboard_server.py
 ```
+
+**Future goal**: webhook auto-deploy so the curl step happens automatically on push.
