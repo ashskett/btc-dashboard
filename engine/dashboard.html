@@ -704,6 +704,11 @@ let dryRun=false;   // synced from engine status on first poll; default false (l
 let prevPrice=null;
 let connected=false;
 
+// Infinite-scroll-left: track all loaded candle data so we can prepend older bars
+let _candleData = [];
+let _loadingOlder = false;
+let _noMoreOlderCandles = false;
+
 // ── CHART INIT ───────────────────────────────────────────
 function initChart(){
   const el = document.getElementById('chart');
@@ -754,15 +759,20 @@ async function loadCandles(tf){
     const mapped = data.map(c=>({time:c[0]/1000,open:c[1],high:c[2],low:c[3],close:c[4]}));
 
     if (!_candlesInitialised) {
-      candles.setData(mapped);
-      const n = mapped.length;
+      _candleData = mapped;
+      _noMoreOlderCandles = false;
+      candles.setData(_candleData);
+      const n = _candleData.length;
       ts.setVisibleLogicalRange({ from: n - 80, to: n + 5 });
       _candlesInitialised = true;
     } else {
-      // Save position, reload data, restore — works because fixLeftEdge:false
-      // allows negative logical indices (empty space left of first bar)
+      // Save position, reload only the newest candles (don't clobber history)
       const saved = ts.getVisibleLogicalRange();
-      candles.setData(mapped);
+      // Merge: keep all candles older than what just arrived, append/update recent ones
+      const newOldest = mapped[0].time;
+      const historical = _candleData.filter(c => c.time < newOldest);
+      _candleData = [...historical, ...mapped];
+      candles.setData(_candleData);
       if (saved) ts.setVisibleLogicalRange(saved);
     }
 
@@ -778,6 +788,47 @@ async function loadCandles(tf){
   } finally {
     _candlesLoading = false;
   }
+}
+
+// ── INFINITE SCROLL LEFT ──────────────────────────────────
+async function loadOlderCandles(){
+  if(_loadingOlder || _noMoreOlderCandles || !_candleData.length) return;
+  _loadingOlder = true;
+  try{
+    const beforeMs = Math.round(_candleData[0].time * 1000);
+    const r = await fetch(`${API}/candles?tf=${currentTf}&limit=150&before=${beforeMs}`);
+    if(!r.ok) return;
+    const data = await r.json();
+    if(!Array.isArray(data) || data.length === 0){ _noMoreOlderCandles = true; return; }
+
+    const newCandles = data.map(c=>({time:c[0]/1000,open:c[1],high:c[2],low:c[3],close:c[4]}));
+    const uniqueNew  = newCandles.filter(c => c.time < _candleData[0].time);
+    if(uniqueNew.length === 0){ _noMoreOlderCandles = true; return; }
+
+    const ts    = chart.timeScale();
+    const saved = ts.getVisibleLogicalRange();
+    _candleData = [...uniqueNew, ..._candleData];
+    candles.setData(_candleData);
+
+    // Shift viewport right so the user's current view stays in place
+    if(saved){
+      ts.setVisibleLogicalRange({
+        from: saved.from + uniqueNew.length,
+        to:   saved.to  + uniqueNew.length,
+      });
+    }
+    redrawLines();
+    applyFillMarkers();
+  } catch(e){
+    console.warn('loadOlderCandles error:', e);
+  } finally {
+    _loadingOlder = false;
+  }
+}
+
+// Trigger fetch when user scrolls close to the left edge
+function _onLogicalRangeChange(range){
+  if(range && range.from < 10) loadOlderCandles();
 }
 
 // ── GRID LINES ────────────────────────────────────────────
@@ -1248,6 +1299,8 @@ document.querySelectorAll('.tf-btn').forEach(btn=>{
     currentTf = btn.dataset.tf;
     _candlesInitialised = false;
     _candlesLoading = false;
+    _noMoreOlderCandles = false;
+    _candleData = [];
     loadCandles(currentTf);
   });
 });
@@ -2074,6 +2127,7 @@ async function loadOverrideState(){
 // ── BOOT ─────────────────────────────────────────────────
 initChart();
 initTlCanvas();
+chart.timeScale().subscribeVisibleLogicalRangeChange(_onLogicalRangeChange);
 
 loadCandles(currentTf);
 pollStatus();

@@ -133,11 +133,24 @@ def candles():
             '4h':  '6h',   # Coinbase has no 4h — use 6h as nearest
             '1d':  '1d',
         }
-        tf_raw = request.args.get("tf", "1h")
-        tf     = TF_MAP.get(tf_raw, '1h')
-        limit  = min(int(request.args.get("limit", 150)), 300)
+        tf_raw    = request.args.get("tf", "1h")
+        tf        = TF_MAP.get(tf_raw, '1h')
+        limit     = min(int(request.args.get("limit", 150)), 500)
+        before_ms = request.args.get("before")
 
-        data = exchange.fetch_ohlcv("BTC/USDC", timeframe=tf, limit=limit)
+        if before_ms:
+            # Fetch a window of candles ending strictly before the given timestamp.
+            # ccxt fetch_ohlcv(since) fetches from that point forward, so we back-calculate.
+            TF_MS = {'5m': 300_000, '15m': 900_000, '1h': 3_600_000,
+                     '6h': 21_600_000, '1d': 86_400_000}
+            tf_ms = TF_MS.get(tf, 3_600_000)
+            since = int(before_ms) - limit * tf_ms
+            data  = exchange.fetch_ohlcv("BTC/USDC", timeframe=tf, since=since, limit=limit)
+            # Strip any candles that overlap with what the frontend already has
+            data  = [c for c in data if c[0] < int(before_ms)]
+        else:
+            data = exchange.fetch_ohlcv("BTC/USDC", timeframe=tf, limit=limit)
+
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
