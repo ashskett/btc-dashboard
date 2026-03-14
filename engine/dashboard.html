@@ -2456,13 +2456,20 @@ function renderDcaBots(){
     const mult     = parseFloat(bot.martingale_volume_coefficient|| 1);
     const maxSo    = parseInt(bot.max_safety_orders || 0);
     const pCol     = profit >= 0 ? 'var(--green)' : 'var(--red)';
-    // Three-state status: ACTIVE (has deals) / STANDBY (enabled, waiting) / OFF
-    const stBg  = !enabled ? 'rgba(255,61,90,.1)'
-                : deals > 0 ? 'rgba(0,230,118,.15)' : 'rgba(255,179,0,.15)';
-    const stCol = !enabled ? 'var(--red)'
-                : deals > 0 ? 'var(--green)' : 'var(--amber)';
-    const stTxt = !enabled ? 'OFF'
-                : deals > 0 ? `ACTIVE · ${deals} deal${deals>1?'s':''}` : 'STANDBY';
+    // Four-state status: ACTIVE / STANDBY / FINISHING / OFF
+    // FINISHING = disabled but deals still running to completion
+    const stBg  = deals > 0 && enabled  ? 'rgba(0,230,118,.15)'
+                : deals > 0 && !enabled ? 'rgba(255,179,0,.15)'
+                : enabled               ? 'rgba(0,212,255,.1)'
+                :                         'rgba(255,61,90,.1)';
+    const stCol = deals > 0 && enabled  ? 'var(--green)'
+                : deals > 0 && !enabled ? 'var(--amber)'
+                : enabled               ? 'var(--accent)'
+                :                         'var(--red)';
+    const stTxt = deals > 0 && enabled  ? `ACTIVE · ${deals} deal${deals>1?'s':''}`
+                : deals > 0 && !enabled ? `FINISHING · ${deals} deal${deals>1?'s':''}`
+                : enabled               ? 'STANDBY'
+                :                         'OFF';
     // Max exposure = base + sum of safety orders with martingale
     let exp = base, cur = so;
     for(let i=0;i<maxSo;i++){ exp += cur; cur *= mult; }
