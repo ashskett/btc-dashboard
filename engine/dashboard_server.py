@@ -355,6 +355,79 @@ def config_bots():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+# ── Price targets ─────────────────────────────────────────
+from price_targets import (
+    load_targets, add_target, update_target, delete_target, clear_target
+)
+
+@app.route("/targets", methods=["GET"])
+def get_targets():
+    return jsonify(load_targets())
+
+
+@app.route("/targets", methods=["POST"])
+def create_target():
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        label         = body.get("label", "").strip()
+        trigger_price = body.get("trigger_price")
+        direction     = body.get("direction", "UP").upper()
+
+        if not label:
+            return jsonify({"ok": False, "msg": "label is required"}), 400
+        if not trigger_price:
+            return jsonify({"ok": False, "msg": "trigger_price is required"}), 400
+        if direction not in ("UP", "DOWN"):
+            return jsonify({"ok": False, "msg": "direction must be UP or DOWN"}), 400
+
+        t = add_target(
+            label=label,
+            trigger_price=float(trigger_price),
+            direction=direction,
+            price_target=float(body["price_target"]) if body.get("price_target") else None,
+            reversal_atr_mult=float(body.get("reversal_atr_mult", 2.0)),
+            dca_enabled=bool(body.get("dca_enabled", False)),
+            dca_base_order_usd=float(body.get("dca_base_order_usd", 500)),
+            dca_safety_count=int(body.get("dca_safety_count", 5)),
+            dca_safety_step_pct=float(body.get("dca_safety_step_pct", 1.5)),
+            dca_safety_volume_mult=float(body.get("dca_safety_volume_mult", 1.2)),
+        )
+        return jsonify({"ok": True, "target": t})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/targets/<target_id>", methods=["PUT"])
+def patch_target(target_id):
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        t = update_target(target_id, body)
+        if t is None:
+            return jsonify({"ok": False, "msg": "target not found"}), 404
+        return jsonify({"ok": True, "target": t})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/targets/<target_id>", methods=["DELETE"])
+def remove_target(target_id):
+    try:
+        ok = delete_target(target_id)
+        return jsonify({"ok": ok, "msg": "deleted" if ok else "not found"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/targets/<target_id>/clear", methods=["POST"])
+def clear_target_route(target_id):
+    """Re-arm a fired target without deleting it."""
+    try:
+        ok = clear_target(target_id)
+        return jsonify({"ok": ok, "msg": "cleared (re-armed)" if ok else "not found"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 # ── Breakout state management ─────────────────────────────
 @app.route("/breakout/clear", methods=["POST"])
 def breakout_clear():

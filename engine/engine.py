@@ -27,6 +27,14 @@ from market_data import get_btc_data
 from indicators import add_indicators
 from regime import detect_regime, trend_strength
 from threecommas import stop_bot, start_bot, redeploy_all_bots
+from price_targets import check_targets, update_target
+from threecommas_dca import (
+    create_dca_bot,
+    enable_dca_bot,
+    disable_dca_bot,
+    panic_sell_dca_bot,
+    estimate_max_exposure,
+)
 
 DRY_RUN = False
 MAX_ACTIONS_PER_HOUR = 3
@@ -117,6 +125,7 @@ def run():
 
     state = EngineState()
     _bo_state  = {}      # populated in breakout section; needed in finally block
+    _pt_state  = None    # active price target (if any); needed in finally block
     _prox      = None    # proximity alert direction; needed in finally block
     TRENDLINE  = None    # declared early so finally block can always reference it
     _trendline_active = False
@@ -313,6 +322,80 @@ def run():
                         stop_bot(bot)
             return
 
+        # ===============================
+        # PRICE TARGETS (user-defined trigger levels)
+        # ===============================
+        # Check before fresh breakout detection — if a target is active we skip
+        # the auto-detector entirely (prevents a DOWN false-fire on a dip during
+        # an expected upward move). Drift detection is also bypassed while a
+        # target is active; the outer bot's 3×ATR range handles the move.
+        _pt_state = check_targets(state.price, state.atr)
+        if _pt_state:
+            _pt_label  = _pt_state.get("label", "unnamed")
+            _pt_dir    = _pt_state.get("direction", "UP")
+            _pt_trig   = _pt_state.get("trigger_price", 0)
+            _pt_tp     = _pt_state.get("price_target")
+            _pt_fp     = _pt_state.get("fired_price", state.price)
+
+            move_pct   = (_pt_fp - _pt_trig) / _pt_trig * 100 if _pt_trig else 0
+            to_target  = ((_pt_tp - state.price) / state.price * 100) if _pt_tp else None
+
+            print(f"[Target] ACTIVE: '{_pt_label}'  trigger=${_pt_trig:,.0f}  "
+                  f"fire=${_pt_fp:,.0f}  now=${state.price:,.0f}"
+                  + (f"  → target=${_pt_tp:,.0f} ({to_target:+.1f}%)" if _pt_tp else ""))
+
+            if _pt_dir == "UP":
+                print(f"  [Target] inner+mid off, outer running")
+                for i, bot in enumerate(GRID_BOTS[:3]):
+                    tier_name = ["inner", "mid", "outer"][i]
+                    _act(bot, i >= 2, f"{tier_name} (target: {_pt_label})")
+
+                # ── DCA bot launch ─────────────────────────────────────────
+                # Only on the first cycle after firing (dca_bot_id not yet set)
+                if _pt_state.get("dca_enabled") and not _pt_state.get("dca_bot_id") and _pt_tp:
+                    bo_usd    = float(_pt_state.get("dca_base_order_usd", 500))
+                    so_usd    = round(bo_usd * 0.5, 2)
+                    tp_pct    = round((_pt_tp - state.price) / state.price * 100, 2)
+                    so_count  = int(_pt_state.get("dca_safety_count", 5))
+                    so_step   = float(_pt_state.get("dca_safety_step_pct", 1.5))
+                    so_mult   = float(_pt_state.get("dca_safety_volume_mult", 1.2))
+                    max_exp   = estimate_max_exposure(bo_usd, so_usd, so_count, so_mult)
+
+                    if DRY_RUN:
+                        print(f"  [SIM] Would create DCA bot '{_pt_label}' | "
+                              f"base=${bo_usd} SO=${so_usd}×{so_count} "
+                              f"step={so_step}% mult={so_mult}× | "
+                              f"TP={tp_pct:.1f}% | max_exposure=${max_exp:,.0f}")
+                    elif _can_act():
+                        _record_action()
+                        try:
+                            bot_data = create_dca_bot(
+                                label=_pt_label,
+                                base_order_usd=bo_usd,
+                                safety_order_usd=so_usd,
+                                take_profit_pct=tp_pct,
+                                safety_order_count=so_count,
+                                safety_order_step_pct=so_step,
+                                safety_order_volume_mult=so_mult,
+                            )
+                            dca_id = str(bot_data.get("id", ""))
+                            if dca_id:
+                                enable_dca_bot(dca_id)
+                                update_target(_pt_state["id"], {"dca_bot_id": dca_id})
+                                print(f"  DCA bot launched: id={dca_id} "
+                                      f"base=${bo_usd} TP={tp_pct:.1f}% max_exp=${max_exp:,.0f}")
+                        except Exception as _dca_err:
+                            print(f"  Warning: DCA bot launch failed: {_dca_err}")
+                    else:
+                        print(f"  Rate limit reached — DCA bot launch deferred to next cycle")
+
+            else:  # DOWN target
+                print(f"  [Target] all bots off (capital protection)")
+                for bot in GRID_BOTS:
+                    _act(bot, False, f"target DOWN: {_pt_label}")
+
+            return   # skip fresh breakout detection AND drift while target is live
+
         # Fresh breakout detection
         _direction = breakout_detected(df)
         if _direction:
@@ -498,6 +581,12 @@ def run():
                 "breakout_active":     _bo_state.get("active"),
                 "breakout_fire_price": _bo_state.get("fire_price"),
                 "proximity_alert":     _prox,
+                # Price target state
+                "price_target_active":  bool(_pt_state),
+                "price_target_label":   _pt_state.get("label")   if _pt_state else None,
+                "price_target_trigger": _pt_state.get("trigger_price") if _pt_state else None,
+                "price_target_tp":      _pt_state.get("price_target")  if _pt_state else None,
+                "price_target_dca_id":  _pt_state.get("dca_bot_id")    if _pt_state else None,
             }
             write_status(log_data)
             write_log_entry(log_data)
