@@ -1,115 +1,118 @@
 #!/bin/bash
-# One-time setup script: run this on the droplet to enable auto-deploy from git
-# Usage: bash droplet-setup.sh
-
+# =============================================================================
+# Grid Engine — One-Time Droplet Setup
+# Run this ONCE on the droplet:
+#   bash <(curl -s https://raw.githubusercontent.com/ashskett/btc-dashboard/main/scripts/droplet-setup.sh)
+#
+# What it does:
+#   1. Installs git + dependencies
+#   2. Clones the btc-dashboard repo to /root/btc-dashboard
+#   3. Copies engine Python files from /root/grid-engine into the repo
+#   4. Commits and pushes them so Claude can edit them
+#   5. Sets up the webhook server as a systemd service
+#   6. Opens firewall port 9001 for the webhook
+#   7. Adds Claude's SSH public key to authorized_keys
+# =============================================================================
 set -e
 
-REPO_URL="http://127.0.0.1:41939/git/ashskett/btc-dashboard"  # update if needed
-DEPLOY_DIR="/root/grid-engine"
-WEBHOOK_PORT=9000
+REPO_URL="https://github.com/ashskett/btc-dashboard.git"
+REPO_DIR="/root/btc-dashboard"
+ENGINE_DIR="/root/grid-engine"
+WEBHOOK_PORT=9001
 CLAUDE_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOz0Hy8wY5c/3WHMdxFB3s7g8TkOiNdgPHkp2cllNiR7 claude-code@btc-dashboard"
 
-echo "=== Grid Engine Auto-Deploy Setup ==="
+echo ""
+echo "╔══════════════════════════════════════════════════╗"
+echo "║     Grid Engine — Auto-Deploy Setup              ║"
+echo "╚══════════════════════════════════════════════════╝"
+echo ""
 
-# 1. Add Claude's SSH key
-echo "Adding Claude Code SSH key..."
-mkdir -p ~/.ssh
+# 1. System deps
+echo "▶ Installing dependencies..."
+apt-get install -y git curl 2>/dev/null | grep -E "^(Setting up|Already)" || true
+
+# 2. Add Claude SSH key
+echo "▶ Adding Claude Code SSH key..."
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
 if ! grep -q "claude-code@btc-dashboard" ~/.ssh/authorized_keys 2>/dev/null; then
     echo "$CLAUDE_PUBKEY" >> ~/.ssh/authorized_keys
-    echo "  SSH key added."
+    chmod 600 ~/.ssh/authorized_keys
+    echo "  Added."
 else
-    echo "  SSH key already present."
-fi
-chmod 700 ~/.ssh
-chmod 600 ~/.ssh/authorized_keys
-
-# 2. Install webhook listener if not present
-if ! command -v webhook &>/dev/null; then
-    echo "Installing webhook..."
-    apt-get install -y webhook 2>/dev/null || pip3 install webhook-listener 2>/dev/null || true
+    echo "  Already present."
 fi
 
-# 3. Create the deploy script
-cat > /root/grid-engine/auto-deploy.sh << 'DEPLOY'
-#!/bin/bash
-# Auto-deploy: pull latest dashboard from git and restart dashboard server
-set -e
-cd /root/grid-engine
-
-echo "[$(date)] Auto-deploy triggered" >> /root/grid-engine/deploy.log
-
-# Pull latest HTML files if git repo exists
-if [ -d "/root/btc-dashboard/.git" ]; then
-    cd /root/btc-dashboard
-    git pull origin main 2>&1 | tee -a /root/grid-engine/deploy.log
-    # Copy dashboard files to grid-engine
-    cp *.html /root/grid-engine/dashboard/ 2>/dev/null || true
-    cd /root/grid-engine
+# 3. Clone or update the repo
+echo "▶ Cloning repo..."
+if [ -d "$REPO_DIR/.git" ]; then
+    echo "  Repo already cloned — pulling latest..."
+    git -C "$REPO_DIR" pull origin main
+else
+    git clone "$REPO_URL" "$REPO_DIR"
 fi
 
-# Restart dashboard server if running
-if systemctl is-active --quiet dashboard 2>/dev/null; then
-    systemctl restart dashboard
-    echo "[$(date)] Dashboard service restarted" >> /root/grid-engine/deploy.log
-elif pgrep -f dashboard_server.py > /dev/null; then
-    pkill -f dashboard_server.py || true
-    sleep 1
-    cd /root/grid-engine && source venv/bin/activate && nohup python3 dashboard_server.py &
-    echo "[$(date)] Dashboard server restarted" >> /root/grid-engine/deploy.log
+# 4. Copy engine Python files INTO the repo (so Claude can edit them)
+echo "▶ Copying engine files into repo..."
+mkdir -p "$REPO_DIR/engine"
+
+# List of files to track in git (no secrets, no state, no logs)
+FILES=(
+    engine.py
+    engine_state.py
+    engine_log.py
+    dashboard_server.py
+    dashboard.html
+    breakout.py
+    regime.py
+    grid_logic.py
+    inventory.py
+    threecommas.py
+    market_data.py
+    indicators.py
+    session.py
+    status.py
+    config.py
+    requirements.txt
+    test_connection.py
+    liquidity.py
+    run.sh
+    start.sh
+    deploy.sh
+)
+
+COPIED=0
+for f in "${FILES[@]}"; do
+    if [ -f "$ENGINE_DIR/$f" ]; then
+        cp "$ENGINE_DIR/$f" "$REPO_DIR/engine/$f"
+        COPIED=$((COPIED+1))
+    fi
+done
+echo "  Copied $COPIED files."
+
+# 5. Configure git and push engine files to repo
+echo "▶ Committing engine files to git..."
+cd "$REPO_DIR"
+git config user.email "droplet@grid-engine"
+git config user.name "Grid Engine Droplet"
+
+# Switch to or create main branch
+git checkout main 2>/dev/null || git checkout -b main
+
+git add engine/ .gitignore 2>/dev/null || true
+
+if git diff --cached --quiet; then
+    echo "  Nothing new to commit."
+else
+    git commit -m "Add engine Python source files from droplet"
+    git push origin main
+    echo "  Pushed engine files to GitHub."
 fi
 
-echo "[$(date)] Deploy complete" >> /root/grid-engine/deploy.log
-DEPLOY
-chmod +x /root/grid-engine/auto-deploy.sh
+# 6. Install webhook service
+echo "▶ Setting up webhook service..."
+cp "$REPO_DIR/scripts/webhook_server.py" /root/webhook_server.py
 
-# 4. Set up simple HTTP webhook listener using Python
-cat > /root/grid-engine/webhook_server.py << 'WEBHOOK'
-#!/usr/bin/env python3
-"""Simple webhook server for auto-deploy on git push"""
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import subprocess, json, hmac, hashlib, os
-
-SECRET = os.environ.get('WEBHOOK_SECRET', 'grid-engine-deploy')
-
-class WebhookHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path != '/deploy':
-            self.send_response(404)
-            self.end_headers()
-            return
-
-        length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(length)
-
-        # Optional: verify secret
-        sig = self.headers.get('X-Hub-Signature-256', '')
-        if sig:
-            expected = 'sha256=' + hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
-            if not hmac.compare_digest(sig, expected):
-                self.send_response(403)
-                self.end_headers()
-                return
-
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b'Deploy triggered')
-
-        # Run deploy in background
-        subprocess.Popen(['/root/grid-engine/auto-deploy.sh'])
-        print(f"Deploy triggered from {self.client_address[0]}")
-
-    def log_message(self, *args):
-        pass  # Suppress logs
-
-if __name__ == '__main__':
-    server = HTTPServer(('0.0.0.0', 9000), WebhookHandler)
-    print(f"Webhook server running on port 9000")
-    server.serve_forever()
-WEBHOOK
-chmod +x /root/grid-engine/webhook_server.py
-
-# 5. Create systemd service for webhook
-cat > /etc/systemd/system/grid-webhook.service << 'SERVICE'
+cat > /etc/systemd/system/grid-webhook.service << SERVICE
 [Unit]
 Description=Grid Engine Auto-Deploy Webhook
 After=network.target
@@ -118,9 +121,13 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/grid-engine
-ExecStart=/root/grid-engine/venv/bin/python3 /root/grid-engine/webhook_server.py
+Environment=WEBHOOK_SECRET=grid-engine-deploy
+Environment=WEBHOOK_PORT=${WEBHOOK_PORT}
+ExecStart=/root/grid-engine/venv/bin/python3 /root/webhook_server.py
 Restart=always
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -128,12 +135,37 @@ SERVICE
 
 systemctl daemon-reload
 systemctl enable grid-webhook
-systemctl start grid-webhook
+systemctl restart grid-webhook
+echo "  Webhook service started."
+
+# 7. Open firewall port
+echo "▶ Opening port $WEBHOOK_PORT..."
+ufw allow $WEBHOOK_PORT/tcp 2>/dev/null || true
+iptables -I INPUT -p tcp --dport $WEBHOOK_PORT -j ACCEPT 2>/dev/null || true
+
+# 8. Test it
+sleep 1
+echo "▶ Testing webhook..."
+RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:$WEBHOOK_PORT/deploy)
+if [ "$RESP" = "200" ]; then
+    echo "  Webhook responding OK (HTTP $RESP)"
+else
+    echo "  Warning: got HTTP $RESP — check: journalctl -u grid-webhook -n 20"
+fi
 
 echo ""
-echo "=== Setup Complete ==="
-echo "Webhook listener running on port 9000"
-echo "Endpoint: http://165.232.101.253:9000/deploy"
+echo "╔══════════════════════════════════════════════════╗"
+echo "║  Setup complete!                                  ║"
+echo "╠══════════════════════════════════════════════════╣"
+echo "║  Webhook: http://165.232.101.253:$WEBHOOK_PORT/deploy      ║"
+echo "║  Secret:  grid-engine-deploy                     ║"
+echo "║  Logs:    journalctl -u grid-webhook -f           ║"
+echo "╚══════════════════════════════════════════════════╝"
 echo ""
-echo "To test: curl -X POST http://165.232.101.253:9000/deploy"
-echo "Logs: tail -f /root/grid-engine/deploy.log"
+echo "NEXT: Add the GitHub webhook at:"
+echo "  https://github.com/ashskett/btc-dashboard/settings/hooks/new"
+echo "  Payload URL: http://165.232.101.253:$WEBHOOK_PORT/deploy"
+echo "  Content-type: application/json"
+echo "  Secret: grid-engine-deploy"
+echo "  Events: Just the push event"
+echo ""
