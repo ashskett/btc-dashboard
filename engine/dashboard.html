@@ -2518,18 +2518,20 @@ function _dcaModalHtml(title, bot){
     </button>
   </div>
   <!-- single TP (shown when no steps) -->
-  <div id="dcaTpSingle" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+  <div id="dcaTpSingle" style="margin-bottom:8px;">
     <div>
       <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TP % <span style="color:#4a5a72;">(single close)</span></div>
       <input id="dca_tp" type="number" value="${v('take_profit',2.0)}" min="0.1" step="0.1"
         style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
         font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:6px 8px;border-radius:4px;"/>
     </div>
-    <div style="display:flex;flex-direction:column;justify-content:flex-end;">
-      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">MAX EXPOSURE</div>
-      <div id="dcaExposure" style="font-size:11px;font-weight:700;color:var(--amber);padding:6px 8px;
-        background:#080c10;border:1px solid #243044;border-radius:4px;">—</div>
-    </div>
+  </div>
+
+  <!-- MAX EXPOSURE — always visible -->
+  <div style="background:#080c10;border:1px solid #243044;border-radius:4px;padding:8px 10px;
+    margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">
+    <span style="font-size:9px;color:var(--muted);letter-spacing:.06em;">MAX TOTAL INVESTMENT</span>
+    <span id="dcaExposure" style="font-size:12px;font-weight:700;color:var(--amber);">—</span>
   </div>
   <!-- TP steps (shown when steps added) -->
   <div id="dcaTpSteps" style="display:none;margin-bottom:8px;">
