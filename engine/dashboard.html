@@ -818,7 +818,7 @@ async function pollStatus(){
     }
     if(d.tiers) status.tiers = d.tiers;
     document.getElementById('pInv').textContent     = `${(d.btc_ratio*100).toFixed(1)}%`;
-    const sk = d.skew;
+    const sk = d.skew ?? 0;
     document.getElementById('pSkew').textContent    = `${sk>=0?'+':''}${sk.toFixed(4)}`;
 
     // sidebar
