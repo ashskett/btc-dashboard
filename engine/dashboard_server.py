@@ -171,8 +171,15 @@ def get_bots():
 
 
 # ── Bot start / stop ──────────────────────────────────────
+def _engine_bot_ids():
+    """Return the set of bot IDs managed by this engine (from GRID_BOT_IDS env var)."""
+    return {b.strip() for b in os.getenv("GRID_BOT_IDS", "").split(",") if b.strip()}
+
+
 @app.route("/bots/<bot_id>/start", methods=["POST"])
 def start_bot(bot_id):
+    if bot_id not in _engine_bot_ids():
+        return jsonify({"error": "Bot not managed by this engine"}), 403
     try:
         r = signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
         return jsonify({"ok": True, "code": r.status_code})
@@ -182,9 +189,81 @@ def start_bot(bot_id):
 
 @app.route("/bots/<bot_id>/stop", methods=["POST"])
 def stop_bot(bot_id):
+    if bot_id not in _engine_bot_ids():
+        return jsonify({"error": "Bot not managed by this engine"}), 403
     try:
         r = signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
         return jsonify({"ok": True, "code": r.status_code})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Account balance + capital allocation ─────────────────
+_balance_cache = {"data": None, "ts": 0.0}
+
+@app.route("/account/balance")
+def account_balance():
+    global _balance_cache
+    now = time.time()
+    if _balance_cache["data"] is not None and now - _balance_cache["ts"] < 60:
+        return jsonify(_balance_cache["data"])
+    try:
+        # Trigger 3Commas balance refresh
+        signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
+        time.sleep(2)
+
+        # Get pie chart data (per-currency breakdown)
+        r = signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
+        pie = r.json() if r.status_code == 200 else []
+        if not isinstance(pie, list):
+            pie = []
+
+        btc_usd  = 0.0
+        usdc_usd = 0.0
+        for item in pie:
+            code = (item.get("code") or item.get("currency_code") or "").upper()
+            val  = float(item.get("current_value_usd") or item.get("current_value") or 0)
+            if code == "BTC":
+                btc_usd = val
+            elif code in ("USDC", "USDT", "USD"):
+                usdc_usd += val
+
+        # Get bot configs to calculate deployed capital
+        ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
+        bots_capital = []
+        total_deployed = 0.0
+        for bid in ids:
+            rb = signed_request("GET", f"/ver1/grid_bots/{bid}")
+            if rb.status_code == 200:
+                b = rb.json()
+                qpg      = float(b.get("quantity_per_grid") or b.get("investment_quote_currency") or 0)
+                grids    = int(b.get("grids_quantity") or b.get("grid_quantity") or 0)
+                deployed = qpg * grids
+                total_deployed += deployed
+                bots_capital.append({
+                    "id":         bid,
+                    "name":       b.get("name", f"Bot {bid}"),
+                    "enabled":    b.get("is_enabled", False),
+                    "deployed":   deployed,
+                    "qpg":        qpg,
+                    "grids":      grids,
+                })
+            else:
+                bots_capital.append({"id": bid, "name": f"Bot {bid}", "deployed": 0.0, "error": rb.status_code})
+
+        total_usd  = btc_usd + usdc_usd
+        usdc_idle  = max(0.0, usdc_usd - total_deployed)
+
+        result = {
+            "btc_usd":        btc_usd,
+            "usdc_usd":       usdc_usd,
+            "total_usd":      total_usd,
+            "total_deployed": total_deployed,
+            "usdc_idle":      usdc_idle,
+            "bots":           bots_capital,
+        }
+        _balance_cache = {"data": result, "ts": now}
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

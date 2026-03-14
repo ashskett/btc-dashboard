@@ -214,7 +214,7 @@ def update_dca_bot(
 
 def delete_dca_bot(bot_id: str) -> bool:
     """Delete a DCA bot (bot must be disabled first)."""
-    r = _signed_request("DELETE", f"/ver1/bots/{bot_id}/delete")
+    r = _signed_request("POST", f"/ver1/bots/{bot_id}/delete")
     return r.status_code in (200, 201, 204)
 
 

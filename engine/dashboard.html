@@ -272,6 +272,17 @@
   .aside-panel::-webkit-scrollbar { width:3px; }
   .aside-panel::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
 
+  /* BALANCE PANEL */
+  .bal-bar-wrap { display:flex; height:18px; border-radius:4px; overflow:hidden; width:100%; background:var(--border); }
+  .bal-segment  { height:100%; transition:width .4s; position:relative; }
+  .bal-leg-row  { display:flex; align-items:center; gap:6px; font-size:9px; color:var(--text); margin-bottom:3px; }
+  .bal-leg-dot  { width:8px; height:8px; border-radius:2px; flex-shrink:0; }
+  .bal-bot-row  { display:flex; justify-content:space-between; align-items:center;
+                  padding:5px 0; border-bottom:1px solid var(--border); font-size:10px; }
+  .bal-bot-row:last-child { border-bottom:none; }
+  .bal-bot-name { color:var(--text); display:flex; align-items:center; gap:5px; }
+  .bal-bot-val  { color:var(--accent); font-family:var(--mono); }
+
   /* P&L PANEL */
   .pnl-sec { border-bottom:1px solid var(--border); padding:12px 14px; }
   .pnl-kpi { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:0; }
@@ -366,6 +377,7 @@
     <button class="aside-tab active" id="tabControls" onclick="switchTab('controls')">Controls</button>
     <button class="aside-tab"        id="tabPnl"      onclick="switchTab('pnl')">P&amp;L</button>
     <button class="aside-tab"        id="tabDca"      onclick="switchTab('dca')">DCA</button>
+    <button class="aside-tab"        id="tabBalance"  onclick="switchTab('balance');loadBalance()">Balance</button>
   </div>
 
   <!-- ── CONTROLS PANEL (existing content) ── -->
@@ -520,8 +532,16 @@
   <div class="sec" id="ptSection">
     <div class="sec-title">
       Price Targets
-      <button class="cbtn on-b" id="addTargetBtn" onclick="showAddTargetModal()"
-        style="font-size:9px;padding:3px 8px;flex:none;">+ Add</button>
+      <div style="display:flex;gap:4px;flex:none;">
+        <button class="cbtn on-b" id="ptPickBtn" onclick="togglePtPickMode()"
+          style="font-size:9px;padding:3px 8px;" title="Click on chart to set trigger price">⊕ Pick</button>
+        <button class="cbtn on-b" id="addTargetBtn" onclick="showAddTargetModal()"
+          style="font-size:9px;padding:3px 8px;">+ Add</button>
+      </div>
+    </div>
+    <div id="ptPickHint" style="display:none;font-size:9px;color:var(--accent);margin-bottom:6px;padding:4px 6px;
+      background:rgba(0,212,255,.07);border:1px solid rgba(0,212,255,.2);border-radius:3px;">
+      Click on the chart to place trigger price. ESC to cancel.
     </div>
     <div id="ptList" style="margin-bottom:6px;">
       <div style="color:var(--muted);font-size:10px;">No targets — click Add to set a trigger level</div>
@@ -681,6 +701,57 @@
     </div>
 
   </div><!-- end #panelDca -->
+
+  <!-- ── BALANCE PANEL ── -->
+  <div class="aside-panel" id="panelBalance">
+    <div class="sec">
+      <div class="sec-title" style="display:flex;align-items:center;justify-content:space-between;">
+        Capital Allocation
+        <button class="cbtn on-b" onclick="loadBalance()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
+      </div>
+      <div id="balLoading" style="color:var(--muted);font-size:10px;text-align:center;padding:20px 0;">Loading…</div>
+      <div id="balContent" style="display:none;">
+        <!-- Total value -->
+        <div class="row" style="margin-bottom:6px;">
+          <span class="rk">Total Portfolio</span>
+          <span class="rv c" id="balTotal">—</span>
+        </div>
+        <div class="row">
+          <span class="rk">BTC (held)</span>
+          <span class="rv" id="balBtc">—</span>
+        </div>
+        <div class="row" style="margin-bottom:10px;">
+          <span class="rk">USDC (total)</span>
+          <span class="rv" id="balUsdc">—</span>
+        </div>
+
+        <!-- Stacked allocation bar -->
+        <div style="margin-bottom:6px;font-size:9px;color:var(--muted);letter-spacing:.06em;">ALLOCATION</div>
+        <div class="bal-bar-wrap" id="balBar">
+          <!-- filled by JS -->
+        </div>
+        <div id="balLegend" style="margin-top:8px;"><!-- filled by JS --></div>
+
+        <div class="hr" style="margin:10px 0;"></div>
+
+        <!-- Bot breakdown -->
+        <div style="margin-bottom:5px;font-size:9px;color:var(--muted);letter-spacing:.06em;">DEPLOYED CAPITAL</div>
+        <div id="balBots"><!-- filled by JS --></div>
+
+        <div class="hr" style="margin:10px 0;"></div>
+        <div class="row">
+          <span class="rk">Deployed</span>
+          <span class="rv" id="balDeployed">—</span>
+        </div>
+        <div class="row">
+          <span class="rk">USDC Idle</span>
+          <span class="rv" id="balIdle">—</span>
+        </div>
+        <div style="font-size:9px;color:var(--muted);margin-top:8px;text-align:center;" id="balTs">—</div>
+      </div>
+      <div id="balError" style="display:none;color:var(--red);font-size:10px;text-align:center;padding:12px 0;"></div>
+    </div>
+  </div><!-- end #panelBalance -->
 
 </aside>
 
@@ -1477,7 +1548,7 @@ async function deleteTarget(id){
   } catch(e){ toast('Delete failed','err'); }
 }
 
-function showAddTargetModal(){
+function showAddTargetModal(pickedPrice){
   const old = document.getElementById('ptModal');
   if(old) old.remove();
 
@@ -1488,8 +1559,8 @@ function showAddTargetModal(){
     z-index:9999;min-width:300px;font-family:'Space Mono',monospace;
     box-shadow:0 8px 48px rgba(0,0,0,.9);`;
 
-  // Pre-fill trigger price from current price if available
-  const curPrice = status.price ? Math.round(status.price) : '';
+  // Pre-fill trigger price from chart pick or current price
+  const curPrice = pickedPrice ? Math.round(pickedPrice) : (status.price ? Math.round(status.price) : '');
 
   div.innerHTML = `
     <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:#c9d4e0;
@@ -1711,6 +1782,7 @@ function initTlCanvas(){
   }
   requestAnimationFrame(rafRedraw);
   chart.subscribeCrosshairMove(()=>renderTlCanvas());
+  _initChartPick();
 }
 
 // ── Coord conversion ─────────────────────────────────────
@@ -2853,6 +2925,135 @@ async function runPnlSim() {
     document.getElementById('pnlLoading').style.display = 'none';
     document.getElementById('pnlRunBtn').disabled = false;
   }
+}
+
+// ── BALANCE PANEL ────────────────────────────────────────────
+const BAL_COLORS = {
+  btc:   '#f7931a',
+  inner: '#00d4ff',
+  mid:   '#ff6b35',
+  outer: '#b388ff',
+  idle:  '#2a3547',
+};
+
+async function loadBalance(){
+  const loading = document.getElementById('balLoading');
+  const content = document.getElementById('balContent');
+  const errEl   = document.getElementById('balError');
+  loading.style.display = 'block';
+  content.style.display = 'none';
+  errEl.style.display   = 'none';
+
+  try {
+    const r = await apiFetch(`${API}/account/balance`);
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+
+    const fmt = v => v >= 1000
+      ? `$${(v/1000).toFixed(1)}k`
+      : `$${v.toFixed(0)}`;
+
+    document.getElementById('balTotal').textContent  = fmt(d.total_usd);
+    document.getElementById('balBtc').textContent    = fmt(d.btc_usd);
+    document.getElementById('balUsdc').textContent   = fmt(d.usdc_usd);
+    document.getElementById('balDeployed').textContent = fmt(d.total_deployed);
+    document.getElementById('balIdle').textContent   = fmt(d.usdc_idle);
+    document.getElementById('balTs').textContent     = 'Updated ' + new Date().toLocaleTimeString();
+
+    // Stacked bar
+    const total = d.total_usd || 1;
+    const NAMES = ['Inner','Mid','Outer'];
+    const segments = [
+      { key:'btc',   label:'BTC (held)',   val: d.btc_usd,  color: BAL_COLORS.btc },
+      ...d.bots.map((b,i) => ({
+        key:   `bot${i}`,
+        label: `${b.name || NAMES[i]} (deployed)`,
+        val:   b.deployed,
+        color: [BAL_COLORS.inner, BAL_COLORS.mid, BAL_COLORS.outer][i] || '#888',
+      })),
+      { key:'idle', label:'USDC Idle', val: d.usdc_idle, color: BAL_COLORS.idle },
+    ].filter(s => s.val > 0);
+
+    const bar = document.getElementById('balBar');
+    bar.innerHTML = segments.map(s => {
+      const pct = Math.max(0.5, (s.val / total) * 100);
+      return `<div class="bal-segment" style="width:${pct}%;background:${s.color};"
+        title="${s.label}: ${fmt(s.val)} (${((s.val/total)*100).toFixed(1)}%)"></div>`;
+    }).join('');
+
+    // Legend
+    document.getElementById('balLegend').innerHTML = segments.map(s =>
+      `<div class="bal-leg-row">
+        <div class="bal-leg-dot" style="background:${s.color};"></div>
+        <span style="flex:1">${s.label}</span>
+        <span style="color:var(--accent);font-family:var(--mono)">${fmt(s.val)}</span>
+        <span style="color:var(--muted);font-size:8px;margin-left:4px">${((s.val/total)*100).toFixed(1)}%</span>
+      </div>`
+    ).join('');
+
+    // Bot breakdown
+    const TIER_NAMES = ['Inner','Mid','Outer'];
+    const BOT_DOTS   = [BAL_COLORS.inner, BAL_COLORS.mid, BAL_COLORS.outer];
+    document.getElementById('balBots').innerHTML = d.bots.map((b,i) => {
+      const col    = BOT_DOTS[i] || '#888';
+      const online = b.enabled ? 'var(--green)' : 'var(--muted)';
+      const onTxt  = b.enabled ? '● LIVE' : '○ STOPPED';
+      return `<div class="bal-bot-row">
+        <span class="bal-bot-name">
+          <span style="width:8px;height:8px;border-radius:2px;background:${col};display:inline-block;flex-shrink:0;"></span>
+          ${b.name || TIER_NAMES[i] || 'Bot'}
+          <span style="font-size:8px;color:${online};margin-left:2px;">${onTxt}</span>
+        </span>
+        <span class="bal-bot-val">${fmt(b.deployed)}</span>
+      </div>`;
+    }).join('');
+
+    loading.style.display = 'none';
+    content.style.display = 'block';
+  } catch(e){
+    loading.style.display = 'none';
+    errEl.style.display   = 'block';
+    errEl.textContent     = `Failed to load balance: ${e.message}`;
+  }
+}
+
+// ── PRICE TARGET CHART PICK MODE ─────────────────────────────
+let _ptPickMode = false;
+
+function togglePtPickMode(){
+  _ptPickMode = !_ptPickMode;
+  const btn  = document.getElementById('ptPickBtn');
+  const hint = document.getElementById('ptPickHint');
+  if(_ptPickMode){
+    btn.textContent  = '✕ Cancel';
+    btn.className    = 'cbtn on-r';
+    hint.style.display = 'block';
+    document.body.classList.add('draw-mode');  // crosshair cursor on chart
+  } else {
+    _exitPtPickMode();
+  }
+}
+
+function _exitPtPickMode(){
+  _ptPickMode = false;
+  const btn  = document.getElementById('ptPickBtn');
+  const hint = document.getElementById('ptPickHint');
+  if(btn)  { btn.textContent = '⊕ Pick'; btn.className = 'cbtn on-b'; }
+  if(hint) hint.style.display = 'none';
+  document.body.classList.remove('draw-mode');
+}
+
+// Hook chart click for price-pick mode — runs after chart is initialised
+function _initChartPick(){
+  if(!chart) return;
+  chart.subscribeClick(param => {
+    if(!_ptPickMode) return;
+    if(!param.point) return;
+    const price = chart.priceScale('right').coordinateToPrice(param.point.y);
+    if(!price || isNaN(price)) return;
+    _exitPtPickMode();
+    showAddTargetModal(price);
+  });
 }
 
 </script>
