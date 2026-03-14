@@ -1,0 +1,1936 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grid Engine Terminal</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:      #080c10;
+    --panel:   #0d1117;
+    --border:  #1c2433;
+    --border2: #243044;
+    --text:    #c9d4e0;
+    --muted:   #4a5a72;
+    --accent:  #00d4ff;
+    --green:   #00e676;
+    --red:     #ff3d5a;
+    --amber:   #ffab00;
+    --purple:  #b388ff;
+    --bot0:    #00d4ff;
+    --bot1:    #ff6b35;
+    --bot2:    #b388ff;
+    --bot3:    #00e676;
+    --mono:    'Space Mono', monospace;
+    --ui:      'Syne', sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    height: 100vh;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: 48px 1fr;
+    grid-template-columns: 1fr 300px;
+  }
+
+  /* HEADER */
+  header {
+    grid-column: 1/-1;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 20px;
+  }
+  .logo { font-family:var(--ui); font-size:15px; font-weight:800; color:var(--accent); letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; }
+  .hprice { font-family:var(--ui); font-size:22px; font-weight:800; color:#fff; letter-spacing:-.02em; }
+  .hchange { font-size:11px; padding:2px 7px; border-radius:3px; font-weight:700; }
+  .hchange.up   { background:rgba(0,230,118,.15); color:var(--green); }
+  .hchange.down { background:rgba(255,61,90,.15);  color:var(--red); }
+  .pills { display:flex; gap:8px; flex:1; justify-content:center; }
+  .pill { display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:6px; padding:4px 12px; min-width:85px; }
+  .pill-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+  .pill-val { font-size:12px; font-weight:700; margin-top:1px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s ease-in-out infinite; margin-left:auto; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  /* CONNECTION ERROR BANNER */
+  #connBanner {
+    display:none;
+    position:fixed; top:48px; left:0; right:300px;
+    background:rgba(255,61,90,.12);
+    border-bottom:1px solid rgba(255,61,90,.3);
+    color:var(--red);
+    font-size:11px; text-align:center; padding:6px;
+    z-index:50;
+  }
+  #connBanner.show { display:block; }
+
+  /* CHART */
+  main { position:relative; overflow:hidden; background:var(--bg); }
+  #chart { width:100%; height:100%; }
+  .tf-bar { position:absolute; top:10px; left:10px; display:flex; gap:4px; z-index:10; }
+  .tf-btn {
+    background:rgba(13,17,23,.9); border:1px solid var(--border);
+    color:var(--muted); font-family:var(--mono); font-size:10px;
+    padding:4px 10px; border-radius:4px; cursor:pointer; transition:all .15s;
+    backdrop-filter:blur(8px);
+  }
+  .tf-btn:hover,.tf-btn.active { background:rgba(0,212,255,.12); border-color:var(--accent); color:var(--accent); }
+  .grid-legend {
+    position:absolute; top:10px; right:10px; z-index:10;
+    background:rgba(13,17,23,.9); border:1px solid var(--border);
+    border-radius:6px; padding:10px 14px; backdrop-filter:blur(8px);
+    display:flex; flex-direction:column; gap:5px;
+  }
+  .leg-title { font-family:var(--ui); font-size:9px; color:var(--muted); letter-spacing:.1em; text-transform:uppercase; margin-bottom:2px; }
+  .leg-row { display:flex; align-items:center; gap:8px; font-size:10px; color:var(--text); }
+  .leg-line { width:16px; height:2px; border-radius:1px; }
+
+  /* SIDEBAR */
+  aside { background:var(--panel); border-left:1px solid var(--border); overflow-y:auto; overflow-x:hidden; display:flex; flex-direction:column; min-width:0; }
+  aside::-webkit-scrollbar { width:3px; }
+  aside::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+  .sec { border-bottom:1px solid var(--border); padding:12px 14px; }
+  .sec-title { font-family:var(--ui); font-size:9px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; }
+  .row { display:flex; justify-content:space-between; align-items:center; padding:3px 0; }
+  .rk { color:var(--muted); font-size:10px; }
+  .rv { font-size:11px; font-weight:700; }
+  .rv.g { color:var(--green); }
+  .rv.r { color:var(--red); }
+  .rv.a { color:var(--amber); }
+  .rv.c { color:var(--accent); }
+  .rv.p { color:var(--purple); }
+
+  /* inventory bar */
+  .ibar-wrap { margin:8px 0 3px; height:6px; background:rgba(255,61,90,.25); border-radius:3px; overflow:hidden; }
+  .ibar-fill { height:100%; background:linear-gradient(90deg,var(--green),var(--accent)); border-radius:3px; transition:width .5s; }
+  .ibar-lbls { display:flex; justify-content:space-between; font-size:9px; color:var(--muted); }
+
+  /* regime badge */
+  .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:.05em; }
+  .RANGE       { background:rgba(0,212,255,.15); color:var(--accent); }
+  .TREND_UP    { background:rgba(0,230,118,.15); color:var(--green); }
+  .TREND_DOWN  { background:rgba(255,61,90,.15);  color:var(--red); }
+  .COMPRESSION { background:rgba(255,171,0,.15);  color:var(--amber); }
+
+  /* controls */
+  .ctl-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:5px; display:block; }
+  .btn-row { display:flex; gap:4px; margin-bottom:8px; }
+  .cbtn {
+    flex:1; background:rgba(255,255,255,.04); border:1px solid var(--border);
+    color:var(--muted); font-family:var(--mono); font-size:10px;
+    padding:6px 4px; border-radius:4px; cursor:pointer; transition:all .15s; text-align:center;
+  }
+  .cbtn:hover { border-color:var(--border2); background:rgba(255,255,255,.07); }
+  .cbtn.on-b { background:rgba(0,212,255,.15);  border-color:var(--accent); color:var(--accent); }
+  .cbtn.on-g { background:rgba(0,230,118,.15);  border-color:var(--green);  color:var(--green); }
+  .cbtn.on-r { background:rgba(255,61,90,.15);   border-color:var(--red);    color:var(--red); }
+  .cbtn.on-a { background:rgba(255,171,0,.15);   border-color:var(--amber);  color:var(--amber); }
+  .irow { display:flex; gap:6px; align-items:center; }
+  .cinput {
+    flex:1; background:rgba(255,255,255,.04); border:1px solid var(--border);
+    color:var(--text); font-family:var(--mono); font-size:11px;
+    padding:6px 8px; border-radius:4px; outline:none;
+  }
+  .cinput:focus { border-color:var(--accent); }
+  .cset {
+    background:rgba(0,212,255,.12); border:1px solid var(--accent); color:var(--accent);
+    font-family:var(--mono); font-size:10px; padding:6px 10px; border-radius:4px; cursor:pointer; transition:all .15s;
+  }
+  .cset:hover { background:rgba(0,212,255,.25); }
+
+  /* bot cards */
+  .bot-card {
+    background:rgba(255,255,255,.025); border:1px solid var(--border);
+    border-radius:6px; padding:9px 10px 9px 14px; margin-bottom:7px; position:relative; overflow:hidden;
+  }
+  .bot-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; }
+  .bot-card[data-i="0"]::before { background:var(--bot0); }
+  .bot-card[data-i="1"]::before { background:var(--bot1); }
+  .bot-card[data-i="2"]::before { background:var(--bot2); }
+  .bot-card[data-i="3"]::before { background:var(--bot3); }
+  .bot-hdr { display:flex; justify-content:space-between; align-items:center; margin-bottom:5px; }
+  .bot-name { font-size:11px; font-weight:700; }
+  .bot-badge { font-size:9px; padding:2px 6px; border-radius:3px; font-weight:700; }
+  .bot-badge.on  { background:rgba(0,230,118,.15); color:var(--green); }
+  .bot-badge.off { background:rgba(255,61,90,.12);  color:var(--red); }
+  .tier-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 0;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+  }
+  .tier-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .tier-label {
+    color: var(--muted);
+    width: 32px;
+    flex-shrink: 0;
+    letter-spacing: .04em;
+  }
+  .tier-range {
+    flex: 1;
+    color: var(--text);
+    font-size: 9px;
+  }
+  .tier-inside {
+    font-size: 10px;
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+  }
+  .bot-tier {
+    font-size: 9px;
+    font-family: var(--mono);
+    opacity: 0.85;
+    padding: 2px 0 4px 0;
+    letter-spacing: 0.02em;
+  }
+  .bot-meta { display:flex; gap:10px; margin-bottom:7px; }
+  .bm { font-size:9px; color:var(--muted); }
+  .bm span { color:var(--text); font-weight:700; display:block; font-size:10px; }
+  .bot-btns { display:flex; gap:4px; }
+  .bot-btn { flex:1; padding:4px; border-radius:3px; font-family:var(--mono); font-size:9px; cursor:pointer; border:1px solid var(--border); background:rgba(255,255,255,.03); color:var(--muted); transition:all .15s; text-align:center; }
+  .bot-btn.start:hover { background:rgba(0,230,118,.15); border-color:var(--green); color:var(--green); }
+  .bot-btn.stop:hover  { background:rgba(255,61,90,.15);  border-color:var(--red);   color:var(--red); }
+
+  /* toast */
+  #toast { position:fixed; bottom:18px; right:18px; background:var(--panel); border:1px solid var(--border2); color:var(--text); font-family:var(--mono); font-size:11px; padding:9px 14px; border-radius:6px; z-index:999; opacity:0; transform:translateY(6px); transition:all .2s; pointer-events:none; max-width:250px; }
+  #toast.show { opacity:1; transform:translateY(0); }
+  #toast.ok  { border-color:var(--green); }
+  #toast.err { border-color:var(--red); }
+
+  .ts { font-size:9px; color:var(--muted); text-align:center; padding:8px; margin-top:auto; }
+  .hr { height:1px; background:var(--border); margin:6px 0; }
+
+  @keyframes flashRed { 0%,100%{opacity:1} 50%{opacity:.4} }
+  @keyframes flashBorder { 0%,100%{box-shadow:0 0 0 0 rgba(255,61,90,.4)} 50%{box-shadow:0 0 12px 2px rgba(255,61,90,.6)} }
+
+  .draw-mode main { cursor:crosshair !important; }
+  .draw-mode #tlCanvas { pointer-events:all !important; cursor:crosshair !important; }
+
+  .tl-card {
+    background:rgba(255,255,255,.025); border:1px solid var(--border);
+    border-radius:5px; padding:8px 10px; margin-bottom:6px;
+    position:relative; overflow:hidden;
+  }
+  .tl-card::before { content:''; position:absolute; left:0;top:0;bottom:0;width:3px; }
+  .tl-hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+  .tl-name { font-size:10px; font-weight:700; }
+  .tl-level { font-size:11px; font-weight:700; font-family:var(--mono); }
+  .tl-meta { font-size:9px; color:var(--muted); margin-bottom:5px; }
+  .tl-btns { display:flex; gap:4px; }
+  .tl-btn { flex:1; padding:3px; border-radius:3px; font-family:var(--mono); font-size:9px;
+    cursor:pointer; border:1px solid var(--border); background:rgba(255,255,255,.03);
+    color:var(--muted); transition:all .15s; text-align:center; }
+  .tl-btn:hover { border-color:var(--border2); background:rgba(255,255,255,.07); }
+  .tl-btn.del:hover { background:rgba(255,61,90,.15); border-color:var(--red); color:var(--red); }
+  .tl-btn.engine:hover { background:rgba(0,212,255,.15); border-color:var(--accent); color:var(--accent); }
+
+  .tl-label-select {
+    width:100%; background:rgba(255,255,255,.04); border:1px solid var(--border);
+    color:var(--text); font-family:var(--mono); font-size:10px;
+    padding:4px 6px; border-radius:4px; outline:none; margin-bottom:6px; cursor:pointer;
+  }
+
+  /* SIDEBAR TABS */
+  .aside-tabs { display:flex; border-bottom:1px solid var(--border); flex-shrink:0; }
+  .aside-tab {
+    flex:1; padding:9px 0; font-family:var(--ui); font-size:10px; font-weight:600;
+    letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+    background:transparent; border:none; cursor:pointer; border-bottom:2px solid transparent;
+    transition:all .15s; margin-bottom:-1px;
+  }
+  .aside-tab:hover { color:var(--text); }
+  .aside-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .aside-panel { display:none; flex:1; overflow-y:auto; overflow-x:hidden; flex-direction:column; min-height:0; }
+  .aside-panel.active { display:flex; flex-direction:column; }
+  .aside-panel::-webkit-scrollbar { width:3px; }
+  .aside-panel::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+
+  /* P&L PANEL */
+  .pnl-sec { border-bottom:1px solid var(--border); padding:12px 14px; }
+  .pnl-kpi { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:0; }
+  .pnl-kpi-card { background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:6px; padding:10px 12px; }
+  .pnl-kpi-lbl { font-size:9px; color:var(--muted); letter-spacing:.1em; text-transform:uppercase; margin-bottom:4px; }
+  .pnl-kpi-val { font-size:17px; font-weight:700; font-family:var(--mono); }
+  .pnl-bot-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; border-bottom:1px solid rgba(255,255,255,.04); }
+  .pnl-bot-row:last-child { border-bottom:none; }
+  .pnl-input {
+    width:100%; max-width:100%; background:rgba(255,255,255,.04); border:1px solid var(--border);
+    color:var(--text); font-family:var(--mono); font-size:12px;
+    padding:6px 10px; border-radius:5px; outline:none; box-sizing:border-box;
+    transition:border-color .15s;
+  }
+  .pnl-input:focus { border-color:var(--accent); }
+  .pnl-run { width:100%; padding:8px; background:rgba(0,212,255,.12); border:1px solid var(--accent);
+    color:var(--accent); font-family:var(--mono); font-size:11px; border-radius:5px;
+    cursor:pointer; letter-spacing:.06em; transition:all .15s; margin-top:8px; }
+  .pnl-run:hover { background:rgba(0,212,255,.2); }
+  .pnl-run:disabled { opacity:.4; cursor:default; }
+  .pnl-chart { height:90px; width:100%; position:relative; }
+  .pnl-fill-badge {
+    display:inline-block; padding:1px 6px; border-radius:3px; font-size:9px;
+    font-weight:700; font-family:var(--mono); background:rgba(0,212,255,.12); color:var(--accent);
+  }
+  .cbtn.pnl-tf.active { background:rgba(0,212,255,.12); border-color:var(--accent); color:var(--accent); }
+  input[type="datetime-local"].pnl-input { color-scheme: dark; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">⬡ Grid Engine</span>
+  <span class="hprice" id="hprice">———</span>
+  <span class="hchange up" id="hchange">—</span>
+  <div class="pills">
+    <div class="pill"><span class="pill-lbl">Regime</span><span class="pill-val c" id="pRegime">—</span></div>
+    <div class="pill"><span class="pill-lbl">Session</span><span class="pill-val" id="pSession">—</span></div>
+    <div class="pill"><span class="pill-lbl">ATR 1H</span><span class="pill-val" id="pAtr">—</span></div>
+    <div class="pill"><span class="pill-lbl" style="color:#00d4ff">Inner</span><span class="pill-val" id="pGW0">—</span></div>
+    <div class="pill"><span class="pill-lbl" style="color:#ff6b35">Mid</span><span class="pill-val" id="pGW1">—</span></div>
+    <div class="pill"><span class="pill-lbl" style="color:#b388ff">Outer</span><span class="pill-val" id="pGW2">—</span></div>
+    <div class="pill"><span class="pill-lbl">Inventory</span><span class="pill-val" id="pInv">—</span></div>
+    <div class="pill"><span class="pill-lbl">Skew</span><span class="pill-val" id="pSkew">—</span></div>
+  </div>
+  <div class="dot" id="dot"></div>
+</header>
+
+<div id="connBanner">⚠ Cannot reach dashboard server at localhost:5050 — make sure dashboard_server.py is running</div>
+<div id="crossAlert" style="display:none;position:fixed;top:48px;left:0;right:300px;z-index:60;
+  background:rgba(255,61,90,.18);border-bottom:2px solid var(--red);color:var(--red);
+  font-family:var(--mono);font-size:11px;text-align:center;padding:6px;letter-spacing:.06em;
+  animation:flashRed 1s ease-in-out infinite;">
+  ⚠ PRICE CROSSED TRENDLINE — <span id="crossAlertMsg"></span>
+</div>
+
+<main>
+  <!-- Canvas overlay — sits on top of LightweightCharts canvas -->
+  <canvas id="tlCanvas" style="position:absolute;top:0;left:0;pointer-events:none;z-index:10;"></canvas>
+  <!-- Draw hint shown in draw mode -->
+  <div id="drawHint" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    pointer-events:none;z-index:20;color:rgba(0,212,255,.55);font-family:var(--mono);font-size:13px;
+    letter-spacing:.08em;text-align:center;background:rgba(8,12,16,.7);padding:14px 20px;border-radius:6px;
+    border:1px solid rgba(0,212,255,.2);">
+    CLICK &amp; DRAG TO DRAW TRENDLINE<br>
+    <span style="font-size:10px;color:var(--muted)">ESC to cancel</span>
+  </div>
+  <div id="chart"></div>
+  <div class="tf-bar">
+    <button class="tf-btn" data-tf="5m">5m</button>
+    <button class="tf-btn active" data-tf="1h">1H</button>
+    <button class="tf-btn" data-tf="4h">6H</button>
+    <button class="tf-btn" data-tf="1d">1D</button>
+  </div>
+  <div id="chartErr" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--red);font-size:12px;text-align:center;background:rgba(8,12,16,.9);padding:16px 24px;border:1px solid var(--red);border-radius:6px;"></div>
+  <div class="grid-legend">
+    <div class="leg-title">Grid Lines</div>
+    <div class="leg-row"><div class="leg-line" style="background:#00d4ff;"></div>Inner (Bot 1)</div>
+    <div class="leg-row"><div class="leg-line" style="background:#ff6b35;"></div>Mid (Bot 2)</div>
+    <div class="leg-row"><div class="leg-line" style="background:#b388ff;"></div>Outer (Bot 3)</div>
+    <div class="leg-row"><div class="leg-line" style="background:var(--muted);opacity:.5"></div>Center</div>
+  </div>
+</main>
+
+<aside>
+  <!-- SIDEBAR TAB BAR -->
+  <div class="aside-tabs">
+    <button class="aside-tab active" id="tabControls" onclick="switchTab('controls')">Controls</button>
+    <button class="aside-tab"        id="tabPnl"      onclick="switchTab('pnl')">P&amp;L</button>
+  </div>
+
+  <!-- ── CONTROLS PANEL (existing content) ── -->
+  <div class="aside-panel active" id="panelControls">
+
+  <!-- ENGINE STATUS -->
+  <div class="sec">
+    <div class="sec-title">Engine Status</div>
+    <div class="row"><span class="rk">Price</span><span class="rv c" id="sPrice">—</span></div>
+    <div class="row"><span class="rk">Regime</span><span id="sRegime"><span class="badge RANGE">—</span></span></div>
+    <div class="row"><span class="rk">Session</span><span class="rv" id="sSession">—</span></div>
+    <div class="row"><span class="rk">Compression</span><span class="rv" id="sComp">—</span></div>
+    <div class="row"><span class="rk">Active TL</span><span class="rv a" id="sTL">—</span></div>
+    <div class="row"><span class="rk">Inv. Mode</span><span class="rv" id="sInvMode">—</span></div>
+    <div class="hr"></div>
+    <div class="sec-title">Grid Tiers</div>
+    <div id="tierRows">
+      <div class="tier-row" id="tierRow0">
+        <span class="tier-dot" style="background:#00d4ff"></span>
+        <span class="tier-label">Inner</span>
+        <span class="tier-range" id="tierRange0">—</span>
+        <span class="tier-inside" id="tierInside0">—</span>
+      </div>
+      <div class="tier-row" id="tierRow1">
+        <span class="tier-dot" style="background:#ff6b35"></span>
+        <span class="tier-label">Mid</span>
+        <span class="tier-range" id="tierRange1">—</span>
+        <span class="tier-inside" id="tierInside1">—</span>
+      </div>
+      <div class="tier-row" id="tierRow2">
+        <span class="tier-dot" style="background:#b388ff"></span>
+        <span class="tier-label">Outer</span>
+        <span class="tier-range" id="tierRange2">—</span>
+        <span class="tier-inside" id="tierInside2">—</span>
+      </div>
+    </div>
+    <div class="hr"></div>
+    <div class="row" style="margin-top:2px">
+      <span class="rk">Center</span><span class="rv" id="sCenter">—</span>
+    </div>
+  </div>
+
+  <!-- INVENTORY -->
+  <div class="sec">
+    <div class="sec-title">Inventory <span id="invOverrideBadge" style="display:none;font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(255,171,0,.15);color:var(--amber);letter-spacing:.05em;">MANUAL</span></div>
+    <div class="ibar-wrap"><div class="ibar-fill" id="ibarFill" style="width:50%"></div></div>
+    <div class="ibar-lbls"><span>USDC</span><span id="ibarPct">—</span><span>BTC</span></div>
+    <div class="row" style="margin-top:5px;"><span class="rk">BTC ratio</span><span class="rv c" id="iBtcR">—</span></div>
+    <div class="row"><span class="rk">Skew</span><span class="rv" id="iSkew">—</span></div>
+    <div class="hr"></div>
+    <span class="ctl-lbl">Override BTC %</span>
+    <input type="range" id="btcSlider" min="0" max="100" step="1" value="50" oninput="onBtcSlider(this.value)" style="width:100%;accent-color:var(--accent);margin:4px 0 2px;">
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-bottom:8px;">
+      <span>0% BTC</span><span id="btcSliderVal" style="color:var(--accent);font-weight:700;">50%</span><span>100% BTC</span>
+    </div>
+    <span class="ctl-lbl">Override Skew</span>
+    <input type="range" id="skewSlider" min="-25" max="25" step="1" value="0" oninput="onSkewSlider(this.value)" style="width:100%;accent-color:var(--purple);margin:4px 0 2px;">
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-bottom:8px;">
+      <span>-0.25</span><span id="skewSliderVal" style="color:var(--purple);font-weight:700;">0.00</span><span>+0.25</span>
+    </div>
+    <div class="btn-row">
+      <button class="cbtn" onclick="applyInvOverride()">Apply Override</button>
+      <button class="cbtn on-r" id="clearInvBtn" style="display:none;" onclick="clearInvOverride()">Clear</button>
+    </div>
+  </div>
+
+  <!-- BOTS -->
+  <div class="sec">
+    <div class="sec-title">Bots <span id="botCountLbl" style="color:var(--muted)"></span></div>
+    <div id="botCards"><div style="color:var(--muted);font-size:10px;">Loading bots…</div></div>
+  </div>
+
+  <!-- INVENTORY MODE -->
+  <div class="sec">
+    <div class="sec-title">Inventory Mode</div>
+    <div class="btn-row">
+      <button class="cbtn on-b" id="mNormal" onclick="setMode('NORMAL')">NORMAL</button>
+      <button class="cbtn" id="mBuy"    onclick="setMode('BUY_ONLY')">BUY ONLY</button>
+      <button class="cbtn" id="mSell"   onclick="setMode('SELL_ONLY')">SELL ONLY</button>
+    </div>
+  </div>
+
+
+
+  <!-- MASTER CONTROLS -->
+  <div class="sec">
+    <div class="sec-title">Master Controls</div>
+    <span class="ctl-lbl">Engine</span>
+    <div class="btn-row" style="margin-bottom:6px;">
+      <button class="cbtn" id="engStartBtn" onclick="engineStart()" style="border-color:var(--green);color:var(--green);">▶ Start Engine</button>
+      <button class="cbtn" id="engStopBtn"  onclick="engineStop()"  style="border-color:var(--red);color:var(--red);">■ Stop Engine</button>
+    </div>
+    <div class="row" style="margin-bottom:6px;">
+      <span class="rk">Engine Process</span>
+      <span class="rv" id="engProcStatus">—</span>
+    </div>
+    <div class="hr"></div>
+    <span class="ctl-lbl">Grid Bots</span>
+    <div class="btn-row">
+      <button class="cbtn" onclick="allBots('start')">▶ Start All</button>
+      <button class="cbtn" onclick="allBots('stop')">■ Stop All</button>
+    </div>
+    <div class="hr"></div>
+    <span class="ctl-lbl">Dry Run Mode</span>
+    <div class="btn-row">
+      <button class="cbtn on-a" id="dryOn"  onclick="setDry(true)">ON — safe</button>
+      <button class="cbtn"      id="dryOff" onclick="setDry(false)">OFF — live</button>
+    </div>
+    <div class="hr"></div>
+    <span class="ctl-lbl">Engine Log</span>
+    <div class="row" style="margin-top:4px;">
+      <span class="rk">Entries</span>
+      <span class="rv" id="logCount">—</span>
+    </div>
+    <div class="btn-row" style="margin-top:4px;">
+      <button class="cbtn" onclick="downloadLog()" style="flex:1;">↓ Download</button>
+      <button class="cbtn" onclick="clearLog()"    style="flex:1;border-color:var(--red);color:var(--red);">✕ Clear</button>
+    </div>
+  </div>
+
+  <!-- TRENDLINES -->
+  <div class="sec" id="tlSection">
+    <div class="sec-title">
+      Trendlines
+      <button class="cbtn on-b" id="drawModeBtn" onclick="toggleDrawMode()"
+        style="font-size:9px;padding:3px 8px;flex:none;">+ Draw</button>
+    </div>
+    <div id="tlList" style="margin-bottom:6px;">
+      <div style="color:var(--muted);font-size:10px;">No trendlines yet — click Draw to start</div>
+    </div>
+  </div>
+
+  <!-- CHART SETTINGS -->
+  <div class="sec">
+    <div class="sec-title">Chart Settings</div>
+    <span class="ctl-lbl">Grid Lines</span>
+    <div class="btn-row">
+      <button class="cbtn on-b" id="glOn"  onclick="toggleGrid(true)">ON</button>
+      <button class="cbtn"      id="glOff" onclick="toggleGrid(false)">OFF</button>
+    </div>
+
+    <div class="btn-row">
+      <button class="cbtn on-b" id="tlOn"  onclick="toggleTL(true)">ON</button>
+      <button class="cbtn"      id="tlOff" onclick="toggleTL(false)">OFF</button>
+    </div>
+  </div>
+
+  <div class="ts">Last sync: <span id="lastSync">—</span></div>
+
+  </div><!-- end #panelControls -->
+
+  <!-- ── P&L PANEL ── -->
+  <div class="aside-panel" id="panelPnl">
+
+    <!-- Timeframe selector -->
+    <div class="pnl-sec">
+      <div class="sec-title">Timeframe</div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+        <button class="cbtn pnl-tf active" data-tf="1"   onclick="setPnlTf(this)">1h</button>
+        <button class="cbtn pnl-tf"        data-tf="6"   onclick="setPnlTf(this)">6h</button>
+        <button class="cbtn pnl-tf"        data-tf="24"  onclick="setPnlTf(this)">24h</button>
+        <button class="cbtn pnl-tf"        data-tf="168" onclick="setPnlTf(this)">7d</button>
+        <button class="cbtn pnl-tf"        data-tf="0"   onclick="setPnlTf(this)">All</button>
+      </div>
+      <div style="margin-bottom:6px;">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">From</div>
+        <input type="datetime-local" id="pnlFrom" class="pnl-input" style="font-size:10px;padding:5px 7px;width:100%;" oninput="onPnlRangeInput()">
+      </div>
+      <div style="margin-bottom:6px;">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">To</div>
+        <input type="datetime-local" id="pnlTo" class="pnl-input" style="font-size:10px;padding:5px 7px;width:100%;" oninput="onPnlRangeInput()">
+      </div>
+      <div style="font-size:9px;color:var(--muted);" id="pnlTfNote">Last 1 hour of log data</div>
+    </div>
+
+    <!-- Capital inputs -->
+    <div class="pnl-sec">
+      <div class="sec-title">Capital Per Bot (USD)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;">
+        <div>
+          <div style="font-size:9px;color:#00d4ff;margin-bottom:4px;">Inner</div>
+          <input class="pnl-input" id="pnlCapInner" type="text" value="1000" placeholder="1000">
+        </div>
+        <div>
+          <div style="font-size:9px;color:#ff6b35;margin-bottom:4px;">Mid</div>
+          <input class="pnl-input" id="pnlCapMid" type="text" value="1000" placeholder="1000">
+        </div>
+        <div>
+          <div style="font-size:9px;color:#b388ff;margin-bottom:4px;">Outer</div>
+          <input class="pnl-input" id="pnlCapOuter" type="text" value="1000" placeholder="1000">
+        </div>
+      </div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:8px;">
+        Total: $<span id="pnlTotalCap">3,000</span> · Fee 0.40% round-trip
+      </div>
+      <button class="pnl-run" id="pnlRunBtn" onclick="runPnlSim()">▶ Run Simulation</button>
+    </div>
+
+    <!-- Loading state -->
+    <div id="pnlLoading" style="display:none;padding:24px;text-align:center;color:var(--muted);font-size:11px;">Fetching log…</div>
+    <div id="pnlError"   style="display:none;padding:14px;color:var(--red);font-size:11px;"></div>
+
+    <!-- Results -->
+    <div id="pnlResults" style="display:none;">
+
+      <!-- KPI cards -->
+      <div class="pnl-sec">
+        <div class="pnl-kpi">
+          <div class="pnl-kpi-card">
+            <div class="pnl-kpi-lbl">Net Profit</div>
+            <div class="pnl-kpi-val" id="pnlNet">—</div>
+          </div>
+          <div class="pnl-kpi-card">
+            <div class="pnl-kpi-lbl">APY Equiv.</div>
+            <div class="pnl-kpi-val" id="pnlApy">—</div>
+          </div>
+          <div class="pnl-kpi-card">
+            <div class="pnl-kpi-lbl">Gross</div>
+            <div class="pnl-kpi-val" id="pnlGross">—</div>
+          </div>
+          <div class="pnl-kpi-card">
+            <div class="pnl-kpi-lbl">Fees Paid</div>
+            <div class="pnl-kpi-val" id="pnlFees">—</div>
+          </div>
+        </div>
+        <div style="margin-top:8px;font-size:9px;color:var(--muted);" id="pnlMeta">—</div>
+      </div>
+
+      <!-- Mini cumulative P&L chart -->
+      <div class="pnl-sec">
+        <div class="sec-title">Cumulative P&amp;L</div>
+        <canvas id="pnlChart" class="pnl-chart"></canvas>
+      </div>
+
+      <!-- Per-bot breakdown -->
+      <div class="pnl-sec">
+        <div class="sec-title">Per-Bot Breakdown</div>
+        <div class="pnl-bot-row">
+          <span style="font-size:10px;color:#00d4ff;">■ Inner</span>
+          <span style="font-size:10px;" id="pnlInnerFills">—</span>
+          <span class="rv" id="pnlInnerNet" style="font-size:12px;">—</span>
+        </div>
+        <div class="pnl-bot-row">
+          <span style="font-size:10px;color:#ff6b35;">■ Mid</span>
+          <span style="font-size:10px;" id="pnlMidFills">—</span>
+          <span class="rv" id="pnlMidNet" style="font-size:12px;">—</span>
+        </div>
+        <div class="pnl-bot-row">
+          <span style="font-size:10px;color:#b388ff;">■ Outer</span>
+          <span style="font-size:10px;" id="pnlOuterFills">—</span>
+          <span class="rv" id="pnlOuterNet" style="font-size:12px;">—</span>
+        </div>
+        <div style="margin-top:8px;font-size:9px;color:var(--muted);">
+          Total fills: <span id="pnlTotalFills">—</span>
+        </div>
+      </div>
+
+      <!-- Regime breakdown -->
+      <div class="pnl-sec">
+        <div class="sec-title">Regime Breakdown</div>
+        <div id="pnlRegimeRows" style="font-size:10px;"></div>
+      </div>
+
+      <div class="ts" id="pnlNote"></div>
+    </div><!-- end #pnlResults -->
+
+  </div><!-- end #panelPnl -->
+
+</aside>
+
+<div id="toast"></div>
+
+<script>
+// ── CONFIG ───────────────────────────────────────────────
+// Since this page is served BY Flask, all API calls go to the same origin
+const API = '';   // empty = same origin (http://localhost:5050)
+const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
+
+let chart, candles, gridLines=[];
+let showGrid=true, showTL=true;
+let currentTf='1h';
+let status={};
+let bots=[];
+let dryRun=true;
+let prevPrice=null;
+let connected=false;
+
+// ── CHART INIT ───────────────────────────────────────────
+function initChart(){
+  const el = document.getElementById('chart');
+  chart = LightweightCharts.createChart(el, {
+    layout:{ background:{color:'#080c10'}, textColor:'#4a5a72' },
+    grid:{ vertLines:{color:'#0d1117'}, horzLines:{color:'#0d1117'} },
+    crosshair:{ mode:LightweightCharts.CrosshairMode.Normal,
+      vertLine:{color:'#243044',labelBackgroundColor:'#0d1117'},
+      horzLine:{color:'#243044',labelBackgroundColor:'#0d1117'} },
+    rightPriceScale:{ borderColor:'#1c2433' },
+    timeScale:{
+      borderColor: '#1c2433',
+      timeVisible: true,
+      secondsVisible: false,
+      shiftVisibleRangeOnNewBar: false,
+      fixLeftEdge: false,
+      fixRightEdge: false,
+    },
+  });
+
+  candles = chart.addCandlestickSeries({
+    upColor:'#00e676', downColor:'#ff3d5a',
+    borderUpColor:'#00e676', borderDownColor:'#ff3d5a',
+    wickUpColor:'#00e676', wickDownColor:'#ff3d5a',
+  });
+
+  new ResizeObserver(()=>{
+    const m = document.querySelector('main');
+    chart.resize(m.clientWidth, m.clientHeight);
+  }).observe(document.querySelector('main'));
+}
+
+// ── CANDLE LOAD ───────────────────────────────────────────
+let _candlesInitialised = false;
+let _candlesLoading = false;
+
+async function loadCandles(tf){
+  if (_candlesLoading) return;
+  _candlesLoading = true;
+  try {
+    const r = await fetch(`${API}/candles?tf=${tf}&limit=150`);
+    if(!r.ok) throw new Error(`Server error ${r.status}`);
+    const data = await r.json();
+    if(data.error) throw new Error(data.error);
+    if(!Array.isArray(data) || data.length === 0) throw new Error('No candle data returned');
+
+    const ts = chart.timeScale();
+    const mapped = data.map(c=>({time:c[0]/1000,open:c[1],high:c[2],low:c[3],close:c[4]}));
+
+    if (!_candlesInitialised) {
+      candles.setData(mapped);
+      const n = mapped.length;
+      ts.setVisibleLogicalRange({ from: n - 80, to: n + 5 });
+      _candlesInitialised = true;
+    } else {
+      // Save position, reload data, restore — works because fixLeftEdge:false
+      // allows negative logical indices (empty space left of first bar)
+      const saved = ts.getVisibleLogicalRange();
+      candles.setData(mapped);
+      if (saved) ts.setVisibleLogicalRange(saved);
+    }
+
+    redrawLines();
+    document.getElementById('chartErr').style.display = 'none';
+    setConnected(true);
+  } catch(e){
+    const el = document.getElementById('chartErr');
+    el.style.display = 'block';
+    el.textContent = `Chart error: ${e.message}`;
+    console.warn('Candle error:', e);
+  } finally {
+    _candlesLoading = false;
+  }
+}
+
+// ── GRID LINES ────────────────────────────────────────────
+function clearLines(){
+  gridLines.forEach(l=>{ try{ candles.removePriceLine(l); }catch(e){} });
+  gridLines=[];
+
+}
+
+function redrawLines(){
+  clearLines();
+  if(!status.grid_low) return;
+
+  if(showGrid){
+    const add = (price, color, style, title, lw=1) => {
+      const l = candles.createPriceLine({ price, color, lineWidth:lw,
+        lineStyle:style, axisLabelVisible:!!title, title:title||'' });
+      gridLines.push(l);
+    };
+
+    const tiers = status.tiers;
+
+    if(tiers && tiers.length){
+      // Draw each bot's own tier range + internal levels
+      const TIER_LABELS = ['Inner','Mid','Outer'];
+      tiers.forEach((tier, i) => {
+        const col = BOT_COLORS[i % BOT_COLORS.length];
+        // Outer boundary lines with label
+        add(tier.grid_high, col, LightweightCharts.LineStyle.Dashed,
+            i===0 ? 'Grid High' : '', i===1 ? 1.5 : 1);
+        add(tier.grid_low,  col, LightweightCharts.LineStyle.Dashed,
+            i===0 ? 'Grid Low'  : '', i===1 ? 1.5 : 1);
+        // Internal levels for this tier
+        for(let n=1; n<tier.levels; n++){
+          const p = tier.grid_low + (tier.step * n);
+          gridLines.push(candles.createPriceLine({
+            price:p, color:col+'33', lineWidth:1,
+            lineStyle:LightweightCharts.LineStyle.Dotted, axisLabelVisible:false
+          }));
+        }
+      });
+      // Shared center line
+      add(status.center, '#4a5a72', LightweightCharts.LineStyle.Dotted, 'Center');
+
+    } else {
+      // Fallback — no tier data yet, draw single mid grid
+      add(status.grid_high, '#00e676', LightweightCharts.LineStyle.Dashed, 'Grid High');
+      add(status.center,    '#4a5a72', LightweightCharts.LineStyle.Dotted,  'Center');
+      add(status.grid_low,  '#ff3d5a', LightweightCharts.LineStyle.Dashed,  'Grid Low');
+      const range = status.grid_high - status.grid_low;
+      for(let n=1; n<12; n++){
+        const p = status.grid_low + (range/12)*n;
+        gridLines.push(candles.createPriceLine({
+          price:p, color:'#1c2433', lineWidth:1,
+          lineStyle:LightweightCharts.LineStyle.Dotted, axisLabelVisible:false
+        }));
+      }
+    }
+  }
+
+  // Static trendline price line removed — trendlines are now drawn on canvas
+  // and managed via the trendlines system (draw tool in sidebar)
+}
+
+// ── STATUS POLL ───────────────────────────────────────────
+async function pollStatus(){
+  try {
+    const r = await fetch(`${API}/status`);
+    if(!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    status = d;
+    setConnected(true);
+
+    const f = v => `$${Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+    const n = v => Number(v).toFixed(2);
+
+    // header
+    document.getElementById('hprice').textContent = f(d.price);
+    if(prevPrice!==null){
+      const chg = (d.price-prevPrice)/prevPrice*100;
+      const el = document.getElementById('hchange');
+      el.textContent = `${chg>=0?'+':''}${chg.toFixed(2)}%`;
+      el.className = `hchange ${chg>=0?'up':'down'}`;
+    }
+    prevPrice = d.price;
+
+    document.getElementById('pRegime').textContent  = d.regime||'—';
+    document.getElementById('pSession').textContent = d.session||'—';
+    document.getElementById('pAtr').textContent     = n(d.atr);
+    // Tier pills in header
+    if(d.tiers && d.tiers.length){
+      const tw = ['pGW0','pGW1','pGW2'];
+      d.tiers.forEach((t,i) => {
+        const el = document.getElementById(tw[i]);
+        if(el) el.textContent = n(t.grid_high - t.grid_low);
+      });
+    } else {
+      // fallback — just show mid width in all three until engine cycles
+      ['pGW0','pGW1','pGW2'].forEach(id => {
+        const el = document.getElementById(id);
+        if(el) el.textContent = n(d.grid_high - d.grid_low);
+      });
+    }
+    if(d.tiers) status.tiers = d.tiers;
+    document.getElementById('pInv').textContent     = `${(d.btc_ratio*100).toFixed(1)}%`;
+    const sk = d.skew;
+    document.getElementById('pSkew').textContent    = `${sk>=0?'+':''}${sk.toFixed(4)}`;
+
+    // sidebar
+    document.getElementById('sPrice').textContent   = f(d.price);
+    document.getElementById('sCenter').textContent  = f(d.center);
+    document.getElementById('sSession').textContent = d.session || '—';
+    document.getElementById('sComp').textContent    = d.compression ? 'ON' : 'OFF';
+
+    // Tier rows
+    if(d.tiers && d.tiers.length && d.price){
+      const price = d.price;
+      d.tiers.forEach((t, i) => {
+        const rangeEl  = document.getElementById('tierRange'  + i);
+        const insideEl = document.getElementById('tierInside' + i);
+        if(!rangeEl) return;
+        const inside = price >= t.grid_low && price <= t.grid_high;
+        const feeOk  = t.fee_ok !== false;
+        rangeEl.innerHTML = `$${Math.round(t.grid_low).toLocaleString()} – $${Math.round(t.grid_high).toLocaleString()}` +
+          `<span style="color:var(--muted);margin-left:4px">·</span>` +
+          `<span style="color:${feeOk?'var(--green)':'var(--red)'}"> ${Math.round(t.step).toLocaleString()}/${ feeOk?'✓':'⚠fee'}</span>`;
+        insideEl.textContent = inside ? '●' : '○';
+        insideEl.style.color = inside ? 'var(--green)' : 'var(--muted)';
+        document.getElementById('tierRow' + i).style.opacity = inside ? '1' : '0.6';
+      });
+    }
+    // sTL is driven by active drawn trendline, not static engine value
+    // Only show static value if no drawn trendline is active
+    const activeTl = trendlines.find(t => t.active);
+    if(!activeTl){
+      const tl = d.trendline || 66000;
+      document.getElementById('sTL').textContent = f(tl);
+    }
+
+    document.getElementById('sInvMode').textContent = d.inventory_mode||'—';
+    document.getElementById('sRegime').innerHTML    = `<span class="badge ${d.regime}">${d.regime}</span>`;
+
+    // inventory bar — don't overwrite if manual override is active
+    if(!invOverrideActive){
+      const pct = (d.btc_ratio*100).toFixed(1);
+      document.getElementById('ibarFill').style.width = pct+'%';
+      document.getElementById('ibarPct').textContent  = pct+'%';
+      document.getElementById('iBtcR').textContent    = pct+'%';
+      document.getElementById('iSkew').textContent    = `${sk>=0?'+':''}${sk.toFixed(4)}`;
+      // Keep sliders in sync with live data when not overriding
+      document.getElementById('btcSlider').value = Math.round(d.btc_ratio*100);
+      document.getElementById('btcSliderVal').textContent = pct+'%';
+      const skewPct = Math.round(sk*100);
+      document.getElementById('skewSlider').value = skewPct;
+      document.getElementById('skewSliderVal').textContent = (skewPct/100).toFixed(2);
+    }
+
+    // mode highlight
+    const modes = {NORMAL:['mNormal','on-b'], BUY_ONLY:['mBuy','on-g'], SELL_ONLY:['mSell','on-r']};
+    Object.entries(modes).forEach(([k,[id,cls]])=>{
+      document.getElementById(id).className = `cbtn ${d.inventory_mode===k?cls:''}`;
+    });
+
+    document.getElementById('lastSync').textContent = new Date(d.timestamp).toLocaleTimeString();
+    redrawLines();
+
+  } catch(e){
+    setConnected(false);
+  }
+}
+
+// ── BOTS ─────────────────────────────────────────────────
+async function loadBots(){
+  try {
+    const r = await fetch(`${API}/bots`);
+    if(!r.ok) throw new Error(r.status);
+    const data = await r.json();
+    if(!Array.isArray(data)) throw new Error('bad');
+    bots = data;
+    document.getElementById('botCountLbl').textContent = `(${bots.length})`;
+
+    const cont = document.getElementById('botCards');
+    if(!bots.length){ cont.innerHTML='<div style="color:var(--muted);font-size:10px">No bots in GRID_BOT_IDS</div>'; return; }
+
+    const TIER_META = [
+      {name:'Inner', desc:'tight scalp'},
+      {name:'Mid',   desc:'swing range'},
+      {name:'Outer', desc:'wide catch'},
+    ];
+    cont.innerHTML = bots.map((b,i)=>{
+      const on     = b.is_enabled;
+      const name   = b.name || `Bot ${b.id}`;
+      const profit = b.profit != null ? `$${Number(b.profit).toFixed(2)}` : '—';
+      const deals  = b.active_deals_count ?? '—';
+      const tier   = (status.tiers && status.tiers[i]) || null;
+      const tm     = TIER_META[i] || {name:'—', desc:'—'};
+      const col    = BOT_COLORS[i % BOT_COLORS.length];
+      const feeOk = tier ? tier.fee_ok !== false : true;
+      const tierLine = tier
+        ? `<div class="bot-tier" style="color:${col}">
+             ${tm.name} — ${tm.desc} &nbsp;·&nbsp;
+             $${Math.round(tier.grid_low).toLocaleString()} – $${Math.round(tier.grid_high).toLocaleString()}
+             &nbsp;·&nbsp; ${tier.levels} lvls @ $${Math.round(tier.step).toLocaleString()}
+             &nbsp;<span style="color:${feeOk?'var(--green)':'var(--red)'};font-size:9px">${feeOk?'✓ fee ok':'⚠ fee risk'}</span>
+           </div>`
+        : '';
+      return `<div class="bot-card" data-i="${i}">
+        <div class="bot-hdr">
+          <span class="bot-name">${name}</span>
+          <span class="bot-badge ${on?'on':'off'}">${on?'● LIVE':'○ STOPPED'}</span>
+        </div>
+        ${tierLine}
+        <div class="bot-meta">
+          <div class="bm">Profit<span>${profit}</span></div>
+          <div class="bm">Deals<span>${deals}</span></div>
+          <div class="bm">ID<span>#${b.id}</span></div>
+        </div>
+        <div class="bot-btns">
+          <button class="bot-btn start" onclick="botAct(${b.id},'start')">▶ Start</button>
+          <button class="bot-btn stop"  onclick="botAct(${b.id},'stop')">■ Stop</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    // legend
+    document.getElementById('botLegendLines').innerHTML = bots.map((b,i)=>`
+      <div class="leg-row" style="margin-top:3px;">
+        <div class="leg-line" style="background:${BOT_COLORS[i]}"></div>
+        ${b.name||'Bot '+b.id}
+      </div>`).join('');
+
+    redrawLines();
+  } catch(e){
+    document.getElementById('botCards').innerHTML =
+      '<div style="color:var(--muted);font-size:10px">Bot data unavailable — check server</div>';
+  }
+}
+
+// ── ACTIONS ───────────────────────────────────────────────
+async function botAct(id, action){
+  if(dryRun){ toast(`[DRY RUN] Would ${action} bot ${id}`,'ok'); return; }
+  try {
+    await fetch(`${API}/bots/${id}/${action}`, {method:'POST'});
+    toast(`Bot ${id} ${action}ed`,'ok');
+    setTimeout(loadBots, 1200);
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+async function allBots(action){
+  if(dryRun){ toast(`[DRY RUN] Would ${action} all bots`,'ok'); return; }
+  for(const b of bots) await botAct(b.id, action);
+}
+
+// ── INVENTORY OVERRIDE ───────────────────────────────────
+let invOverrideActive = false;
+
+function onBtcSlider(v){
+  document.getElementById('btcSliderVal').textContent = v + '%';
+  // auto-update skew to match
+  const skew = ((v / 100) - 0.5) * 100;
+  const clamped = Math.max(-25, Math.min(25, Math.round(skew)));
+  document.getElementById('skewSlider').value = clamped;
+  document.getElementById('skewSliderVal').textContent = (clamped / 100).toFixed(2);
+}
+
+function onSkewSlider(v){
+  document.getElementById('skewSliderVal').textContent = (v / 100).toFixed(2);
+  // auto-update BTC % to match
+  const btc = Math.round((parseFloat(v) / 100 + 0.5) * 100);
+  const clamped = Math.max(0, Math.min(100, btc));
+  document.getElementById('btcSlider').value = clamped;
+  document.getElementById('btcSliderVal').textContent = clamped + '%';
+}
+
+async function applyInvOverride(){
+  const btcRatio = parseFloat(document.getElementById('btcSlider').value) / 100;
+  const skew     = parseFloat(document.getElementById('skewSlider').value) / 100;
+  try{
+    const r = await fetch(`${API}/inventory/override`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ btc_ratio: btcRatio, skew })
+    });
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    invOverrideActive = true;
+    document.getElementById('invOverrideBadge').style.display = 'inline-flex';
+    document.getElementById('clearInvBtn').style.display = 'block';
+    // Update display immediately
+    const pct = (btcRatio * 100).toFixed(1);
+    document.getElementById('ibarFill').style.width = pct + '%';
+    document.getElementById('ibarPct').textContent  = pct + '%';
+    document.getElementById('iBtcR').textContent    = pct + '%';
+    document.getElementById('iSkew').textContent    = (skew >= 0 ? '+' : '') + skew.toFixed(4);
+    toast(`Inventory override applied: ${pct}% BTC, skew ${skew >= 0 ? '+' : ''}${skew.toFixed(4)}`, 'ok');
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+async function clearInvOverride(){
+  try{
+    await fetch(`${API}/inventory/override`, {
+      method:'DELETE',
+      headers:{'Content-Type':'application/json'}
+    });
+    invOverrideActive = false;
+    document.getElementById('invOverrideBadge').style.display = 'none';
+    document.getElementById('clearInvBtn').style.display = 'none';
+    // Reset sliders to neutral
+    document.getElementById('btcSlider').value = 50;
+    document.getElementById('btcSliderVal').textContent = '50%';
+    document.getElementById('skewSlider').value = 0;
+    document.getElementById('skewSliderVal').textContent = '0.00';
+    toast('Inventory override cleared — reverting to live data', 'ok');
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+async function setMode(mode){
+  try{
+    await fetch(`${API}/inventory/mode`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+    toast(`Mode → ${mode}`,'ok');
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+
+
+function setDry(v){
+  dryRun=v;
+  document.getElementById('dryOn').className  = `cbtn ${v?'on-a':''}`;
+  document.getElementById('dryOff').className = `cbtn ${!v?'on-r':''}`;
+  toast(v?'DRY RUN on — no real actions':'⚠ LIVE MODE — real orders will fire', v?'ok':'err');
+}
+
+function toggleGrid(v){
+  showGrid=v;
+  document.getElementById('glOn').className  = `cbtn ${v?'on-b':''}`;
+  document.getElementById('glOff').className = `cbtn ${!v?'on-r':''}`;
+  redrawLines();
+}
+
+function toggleTL(v){
+  showTL=v;
+  document.getElementById('tlOn').className  = `cbtn ${v?'on-b':''}`;
+  document.getElementById('tlOff').className = `cbtn ${!v?'on-r':''}`;
+  redrawLines();
+}
+
+// ── TIMEFRAME ─────────────────────────────────────────────
+document.querySelectorAll('.tf-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentTf = btn.dataset.tf;
+    _candlesInitialised = false;
+    _candlesLoading = false;
+    loadCandles(currentTf);
+  });
+});
+
+// ── CONNECTION STATE ──────────────────────────────────────
+function setConnected(ok){
+  connected=ok;
+  const dot = document.getElementById('dot');
+  const banner = document.getElementById('connBanner');
+  if(ok){
+    dot.style.background='var(--green)';
+    dot.style.boxShadow='0 0 8px var(--green)';
+    banner.classList.remove('show');
+  } else {
+    dot.style.background='var(--red)';
+    dot.style.boxShadow='0 0 8px var(--red)';
+    banner.classList.add('show');
+  }
+}
+
+// ── TOAST ─────────────────────────────────────────────────
+let _tt;
+function toast(msg, type='ok'){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.className=`show ${type}`;
+  clearTimeout(_tt); _tt=setTimeout(()=>el.className='',3200);
+}
+
+// ── TRENDLINE ENGINE ─────────────────────────────────────
+// Uses a <canvas> overlay that sits on top of the LightweightCharts canvas.
+// In draw mode pointer-events are enabled on it; otherwise it's transparent.
+
+const TL_COLORS = ['#ffab00','#00d4ff','#ff6b35','#b388ff','#00e676','#ff3d5a'];
+const TL_LABELS = ['Support','Resistance','Custom','Alert'];
+
+let trendlines  = [];
+let drawMode    = false;
+let drawing     = false;
+let drawStart   = null;   // {x, y, t, p}
+let crossStates = {};
+let tlCtx       = null;   // canvas 2d context — used only for draw preview
+let pickerColor = TL_COLORS[0];
+
+// ── Init overlay canvas (call after initChart) ───────────
+function initTlCanvas(){
+  const cvs  = document.getElementById('tlCanvas');
+  const main = document.querySelector('main');
+  cvs.width  = main.clientWidth;
+  cvs.height = main.clientHeight;
+  tlCtx = cvs.getContext('2d');
+
+  // Keep canvas sized to main
+  new ResizeObserver(()=>{
+    cvs.width  = main.clientWidth;
+    cvs.height = main.clientHeight;
+    renderTlCanvas();
+  }).observe(main);
+
+  // Redraw when chart is scrolled / zoomed
+  // rAF loop to catch pan events
+  let _lastFrom = null;
+  function rafRedraw(){
+    const vr = chart.timeScale().getVisibleRange();
+    if(vr && vr.from !== _lastFrom){
+      _lastFrom = vr.from;
+      renderTlCanvas();
+    }
+    requestAnimationFrame(rafRedraw);
+  }
+  requestAnimationFrame(rafRedraw);
+  chart.subscribeCrosshairMove(()=>renderTlCanvas());
+}
+
+// ── Coord conversion ─────────────────────────────────────
+function priceToY(price){
+  return candles.priceToCoordinate(price);
+}
+function timeToX(t){
+  return chart.timeScale().timeToCoordinate(t);
+}
+function xToTime(x){
+  const cvs = document.getElementById('tlCanvas');
+  const ts = chart.timeScale();
+  // Sample multiple positions to build a robust px↔time mapping
+  const samples = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9].map(f=>{
+    const sx = f * cvs.width;
+    const st = ts.coordinateToTime(sx);
+    return st ? {x:sx, t:st} : null;
+  }).filter(Boolean);
+  if(samples.length < 2) return null;
+  const s1 = samples[0], s2 = samples[samples.length-1];
+  const pxPerSec = (s2.x - s1.x) / (s2.t - s1.t);
+  return s1.t + (x - s1.x) / pxPerSec;
+}
+function yToPrice(y){
+  return candles.coordinateToPrice(y);
+}
+
+// ── Current projected level ──────────────────────────────
+function tlLevelNow(tl){
+  const now = Date.now() / 1000;
+  const dt  = tl.t2 - tl.t1;
+  if(dt === 0) return tl.p1;
+  return tl.p1 + (tl.p2 - tl.p1) / dt * (now - tl.t1);
+}
+
+// ── Canvas render ─────────────────────────────────────────
+function renderTlCanvas(){
+  if(!tlCtx) return;
+  const cvs = document.getElementById('tlCanvas');
+  tlCtx.clearRect(0, 0, cvs.width, cvs.height);
+  if(!trendlines.length) return;
+
+  // Use two known pixel↔time anchors from the chart to build transforms
+  // Sample at 25% and 75% of canvas width to get a robust pxPerSec
+  const ts = chart.timeScale();
+  let pxPerSec = null, tOrigin = null, xOrigin = null;
+
+  // Try multiple x positions to find two that return valid times
+  const samples = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9].map(f => {
+    const sx = f * cvs.width;
+    const st = ts.coordinateToTime(sx);
+    return st ? { x: sx, t: st } : null;
+  }).filter(Boolean);
+
+  if(samples.length >= 2){
+    const s1 = samples[0], s2 = samples[samples.length-1];
+    pxPerSec = (s2.x - s1.x) / (s2.t - s1.t);
+    tOrigin  = s1.t;
+    xOrigin  = s1.x;
+  } else { return; }
+
+  function tToX(t){ return xOrigin + (t - tOrigin) * pxPerSec; }
+
+  // Calibrate y: sample price at top/bottom of canvas
+  const priceTop    = candles.coordinateToPrice(0);
+  const priceBottom = candles.coordinateToPrice(cvs.height);
+  if(!priceTop || !priceBottom) return;
+  const pxPerPrice  = cvs.height / (priceBottom - priceTop);
+  function pToY(p){ return (p - priceTop) * pxPerPrice; }
+
+  trendlines.filter(tl => tl.visible).forEach(tl => {
+    const dt = tl.t2 - tl.t1;
+    const slope = dt === 0 ? 0 : (tl.p2 - tl.p1) / dt;
+
+    // Project to canvas edges
+    const tLeft  = tOrigin + (0          - xOrigin) / pxPerSec;
+    const tRight = tOrigin + (cvs.width  - xOrigin) / pxPerSec;
+    const ly = pToY(tl.p1 + slope * (tLeft  - tl.t1));
+    const ry = pToY(tl.p1 + slope * (tRight - tl.t1));
+    if(isNaN(ly) || isNaN(ry)) return;
+
+    const ax1 = tToX(tl.t1), ay1 = pToY(tl.p1);
+    const ax2 = tToX(tl.t2), ay2 = pToY(tl.p2);
+
+    tlCtx.save();
+    tlCtx.setLineDash([6,4]);
+    tlCtx.strokeStyle = tl.color; tlCtx.lineWidth = 1.5; tlCtx.globalAlpha = 0.9;
+    tlCtx.beginPath(); tlCtx.moveTo(0, ly); tlCtx.lineTo(cvs.width, ry); tlCtx.stroke();
+
+    [[ax1,ay1],[ax2,ay2]].forEach(([dx,dy])=>{
+      if(dx < -10 || dx > cvs.width+10) return;
+      tlCtx.setLineDash([]); tlCtx.fillStyle = tl.color; tlCtx.globalAlpha = 0.85;
+      tlCtx.beginPath(); tlCtx.arc(dx, dy, 4, 0, Math.PI*2); tlCtx.fill();
+    });
+
+    const lx = cvs.width - 90;
+    const labelY = ly + (lx / cvs.width) * (ry - ly);
+    const txt = `${tl.label}  $${Math.round(tlLevelNow(tl)).toLocaleString()}`;
+    tlCtx.setLineDash([]); tlCtx.globalAlpha = 1;
+    tlCtx.font = '9px "Space Mono",monospace';
+    const tw = tlCtx.measureText(txt).width;
+    tlCtx.fillStyle = tl.color+'33'; tlCtx.strokeStyle = tl.color; tlCtx.lineWidth = 0.5;
+    tlCtx.beginPath(); tlCtx.roundRect(lx-4, labelY-9, tw+10, 14, 2); tlCtx.fill(); tlCtx.stroke();
+    tlCtx.fillStyle = tl.color; tlCtx.fillText(txt, lx, labelY+1);
+    tlCtx.restore();
+  });
+}
+
+
+
+// ── Draw mode ────────────────────────────────────────────
+function toggleDrawMode(){
+  drawMode = !drawMode;
+  const btn  = document.getElementById('drawModeBtn');
+  const hint = document.getElementById('drawHint');
+  const cvs  = document.getElementById('tlCanvas');
+
+  if(drawMode){
+    document.body.classList.add('draw-mode');
+    cvs.style.pointerEvents = 'all';
+    cvs.style.cursor = 'crosshair';
+    btn.textContent = '✕ Cancel';
+    btn.className   = 'cbtn on-r';
+    hint.style.display = 'block';
+    // Remove first to avoid duplicate listeners
+    cvs.removeEventListener('pointerdown', onDrawStart);
+    cvs.removeEventListener('pointermove', onDrawMove);
+    cvs.removeEventListener('pointerup',   onDrawEnd);
+    document.removeEventListener('keydown', onDrawKey);
+    // Pointer events — setPointerCapture in onDrawStart keeps tracking outside canvas
+    cvs.addEventListener('pointerdown', onDrawStart);
+    cvs.addEventListener('pointermove', onDrawMove);
+    cvs.addEventListener('pointerup',   onDrawEnd);
+    document.addEventListener('keydown', onDrawKey);
+  } else {
+    exitDrawMode();
+  }
+}
+
+function exitDrawMode(){
+  drawMode = false; drawing = false; drawStart = null;
+  const cvs = document.getElementById('tlCanvas');
+  cvs.style.pointerEvents = 'none';
+  cvs.style.cursor = '';
+  document.body.classList.remove('draw-mode');
+  const btn = document.getElementById('drawModeBtn');
+  btn.textContent = '+ Draw'; btn.className = 'cbtn on-b';
+  document.getElementById('drawHint').style.display = 'none';
+  cvs.removeEventListener('pointerdown', onDrawStart);
+  cvs.removeEventListener('pointermove', onDrawMove);
+  cvs.removeEventListener('pointerup',   onDrawEnd);
+  document.removeEventListener('keydown', onDrawKey);
+  renderTlCanvas();
+}
+
+// ── Mouse handlers ───────────────────────────────────────
+function canvasXY(e){
+  const r = document.getElementById('tlCanvas').getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+// Use pointerdown/pointermove/pointerup on the canvas element directly.
+// setPointerCapture ensures we receive pointermove/pointerup even when
+// the pointer leaves the canvas mid-drag.
+function onDrawStart(e){
+  if(e.button !== 0) return;
+  e.preventDefault();
+  drawing = false; drawStart = null;
+
+  const cvs = document.getElementById('tlCanvas');
+  const {x, y} = canvasXY(e);
+  let t = xToTime(x);
+  let p = yToPrice(y);
+  if(!t){ t = xToTime(cvs.width / 2); }
+  if(!p){ p = yToPrice(cvs.height / 2); }
+  if(!t || !p){ console.error('[TL] chart not ready'); return; }
+
+  cvs.setPointerCapture(e.pointerId);   // capture so move/up fire on canvas
+  drawing   = true;
+  drawStart = { x, y, t, p };
+  document.getElementById('drawHint').style.display = 'none';
+}
+
+function onDrawMove(e){
+  if(!drawing || !drawStart) return;
+  const {x, y} = canvasXY(e);
+  _lastMoveX = x; _lastMoveY = y;  // track for onDrawEnd fallback
+  renderTlCanvas();
+  if(!tlCtx) return;
+  tlCtx.save();
+  tlCtx.setLineDash([5, 3]);
+  tlCtx.strokeStyle = '#00d4ff';
+  tlCtx.lineWidth   = 1.5;
+  tlCtx.globalAlpha = 0.75;
+  tlCtx.beginPath();
+  tlCtx.moveTo(drawStart.x, drawStart.y);
+  tlCtx.lineTo(x, y);
+  tlCtx.stroke();
+  tlCtx.setLineDash([]);
+  tlCtx.fillStyle = '#00d4ff'; tlCtx.globalAlpha = 0.9;
+  tlCtx.beginPath(); tlCtx.arc(drawStart.x, drawStart.y, 4, 0, Math.PI*2); tlCtx.fill();
+  tlCtx.beginPath(); tlCtx.arc(x, y, 4, 0, Math.PI*2); tlCtx.fill();
+  tlCtx.restore();
+}
+
+// Track last valid move position so pointerup can use it if released off-chart
+let _lastMoveX = null, _lastMoveY = null;
+
+function onDrawEnd(e){
+  if(!drawing || !drawStart) return;
+  drawing = false;
+
+  const raw = canvasXY(e);
+  const x = (_lastMoveX !== null) ? _lastMoveX : raw.x;
+  const y = (_lastMoveY !== null) ? _lastMoveY : raw.y;
+  _lastMoveX = null; _lastMoveY = null;
+
+  const dist = Math.hypot(x - drawStart.x, y - drawStart.y);
+  if(dist < 5){ exitDrawMode(); return; }
+
+  const t1 = drawStart.t;
+  const p1 = drawStart.p;
+
+  // Compute t2 directly from xToTime — now uses anchor-based pxPerSec
+  let t2 = xToTime(x);
+  let p2 = yToPrice(y) || drawStart.p;
+
+
+  if(!t2) t2 = t1 + 3600; // last resort fallback
+
+  const { x: px1, y: py1 } = drawStart;
+  exitDrawMode();
+  showTlPicker(t1, p1, t2, p2, px1, py1, x, y);
+}
+
+function onDrawKey(e){
+  if(e.key === 'Escape') exitDrawMode();
+}
+
+// ── Label / colour picker ────────────────────────────────
+let _pendingTl = null;   // holds {t1,p1,t2,p2,px1,py1,px2,py2} safely between picker open and confirm
+
+function showTlPicker(t1, p1, t2, p2, px1=0, py1=0, px2=100, py2=100){
+  _pendingTl = { t1, p1, t2, p2, px1, py1, px2, py2 };   // store safely — no float-in-HTML injection
+
+  const old = document.getElementById('tlPicker');
+  if(old) old.remove();
+
+  const div = document.createElement('div');
+  div.id = 'tlPicker';
+  div.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0d1117;border:1px solid #243044;border-radius:8px;padding:20px 24px;
+    z-index:9999;min-width:260px;font-family:'Space Mono',monospace;
+    box-shadow:0 8px 48px rgba(0,0,0,.9);`;
+
+  div.innerHTML = `
+    <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:#c9d4e0;
+      margin-bottom:14px;letter-spacing:.05em;">NAME TRENDLINE</div>
+    <select id="tlPickerLabel" class="tl-label-select">
+      ${TL_LABELS.map(l => `<option value="${l}">${l}</option>`).join('')}
+    </select>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;" id="tlColorPicker">
+      ${TL_COLORS.map((c,i) => `
+        <div onclick="selectTlColor('${c}')" data-color="${c}"
+          style="width:22px;height:22px;border-radius:50%;background:${c};cursor:pointer;
+          border:2px solid ${i===0?'#fff':'transparent'};transition:border .15s;"></div>
+      `).join('')}
+    </div>
+    <div style="display:flex;gap:6px;">
+      <button onclick="confirmTl()"
+        style="flex:1;background:rgba(0,212,255,.12);border:1px solid #00d4ff;color:#00d4ff;
+        font-family:'Space Mono',monospace;font-size:10px;padding:7px;border-radius:4px;cursor:pointer;">
+        Add Trendline
+      </button>
+      <button onclick="document.getElementById('tlPicker').remove()"
+        style="flex:1;background:rgba(255,255,255,.04);border:1px solid #1c2433;color:#4a5a72;
+        font-family:'Space Mono',monospace;font-size:10px;padding:7px;border-radius:4px;cursor:pointer;">
+        Cancel
+      </button>
+    </div>`;
+
+  document.body.appendChild(div);
+  pickerColor = TL_COLORS[0];
+}
+
+function selectTlColor(c){
+  pickerColor = c;
+  document.querySelectorAll('#tlColorPicker [data-color]').forEach(el => {
+    el.style.border = `2px solid ${el.dataset.color === c ? '#fff' : 'transparent'}`;
+  });
+}
+
+function confirmTl(){
+  if(!_pendingTl){ toast('No trendline data — try drawing again', 'err'); return; }
+  const { t1, p1, t2, p2, px1, py1, px2, py2 } = _pendingTl;
+  const label = document.getElementById('tlPickerLabel').value;
+  const tl = { id: Date.now(), label, color: pickerColor, t1, p1, t2, p2, px1, py1, px2, py2, visible: true };
+  trendlines.push(tl);
+  _pendingTl = null;
+  document.getElementById('tlPicker').remove();
+  saveTrendlines();
+  renderTlCanvas();
+  renderTlSidebar();
+  toast(`Trendline "${label}" added`, 'ok');
+}
+
+// ── Sidebar list ─────────────────────────────────────────
+function renderTlSidebar(){
+  const cont = document.getElementById('tlList');
+  if(!trendlines.length){
+    cont.innerHTML = '<div style="color:var(--muted);font-size:10px;">No trendlines — click Draw to start</div>';
+    return;
+  }
+  cont.innerHTML = trendlines.map(tl => {
+    const level  = tlLevelNow(tl);
+    const slopeH = (tl.p2 - tl.p1) / ((tl.t2 - tl.t1) / 3600);
+    const slopeStr = slopeH >= 0 ? `+$${slopeH.toFixed(1)}/h` : `-$${Math.abs(slopeH).toFixed(1)}/h`;
+    return `
+      <div class="tl-card" id="tlcard-${tl.id}" style="border-left:3px solid ${tl.color};">
+        <div class="tl-hdr">
+          <span class="tl-name" style="color:${tl.color}">${tl.label}</span>
+          <span class="tl-level" id="tl-level-${tl.id}" style="color:${tl.color}">
+            $${Math.round(level).toLocaleString()}
+          </span>
+        </div>
+        <div class="tl-meta">slope ${slopeStr} · ${tl.visible ? 'visible' : 'hidden'}</div>
+        <div class="tl-btns">
+          <button class="tl-btn engine ${tl.active ? 'active-tl' : ''}" 
+            onclick="setActiveTl(${tl.id})"
+            style="${tl.active ? 'background:rgba(0,212,255,.2);border-color:var(--accent);color:var(--accent);' : ''}">
+            ${tl.active ? '★ Active' : '☆ Set Active'}
+          </button>
+          <button class="tl-btn" onclick="toggleTlVisible(${tl.id})">${tl.visible ? 'Hide' : 'Show'}</button>
+          <button class="tl-btn del" onclick="deleteTl(${tl.id})">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function deleteTl(id){
+  trendlines = trendlines.filter(t => t.id !== id);
+  saveTrendlines(); renderTlCanvas(); renderTlSidebar();
+}
+function toggleTlVisible(id){
+  const tl = trendlines.find(t => t.id === id);
+  if(tl){ tl.visible = !tl.visible; saveTrendlines(); renderTlCanvas(); renderTlSidebar(); }
+}
+function setActiveTl(id){
+  // Only one trendline can be active at a time
+  trendlines.forEach(tl => tl.active = (tl.id === id));
+  saveTrendlines();
+  renderTlSidebar();
+  const tl = trendlines.find(t => t.id === id);
+  const level = tl ? Math.round(tlLevelNow(tl)) : 0;
+  toast(`"${tl.label}" set as active trendline ($${level.toLocaleString()})`, 'ok');
+  // Update sidebar status row immediately
+  document.getElementById('sTL').textContent = '$' + level.toLocaleString();
+}
+
+// ── Persist ──────────────────────────────────────────────
+async function saveTrendlines(){
+  try{
+    await fetch(`${API}/trendlines/save`, { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(trendlines) });
+  } catch(e){ console.warn('save trendlines:', e); }
+}
+async function loadTrendlines(){
+  try{
+    const r = await fetch(`${API}/trendlines/load`);
+    if(!r.ok) return;
+    const data = await r.json();
+    if(Array.isArray(data)) trendlines = data;
+    renderTlCanvas(); renderTlSidebar();
+  } catch(e){ console.warn('load trendlines:', e); }
+}
+
+// ── Tick — level updates + cross detection ───────────────
+function tickTrendlines(){
+  if(!trendlines.length || !status.price) return;
+  trendlines.forEach(tl => {
+    const level = tlLevelNow(tl);
+    const el    = document.getElementById(`tl-level-${tl.id}`);
+    if(el) el.textContent = `$${Math.round(level).toLocaleString()}`;
+    // Keep engine status row in sync with active trendline
+    if(tl.active){
+      document.getElementById('sTL').textContent = '$' + Math.round(level).toLocaleString();
+    }
+
+    const side = status.price > level ? 'above' : 'below';
+    const prev = crossStates[tl.id];
+    if(prev && prev !== side){
+      const dir = side === 'below' ? 'BROKEN DOWN through' : 'BROKEN UP through';
+      showCrossAlert(`Price ${dir} "${tl.label}" @ $${Math.round(level).toLocaleString()}`);
+    }
+    crossStates[tl.id] = side;
+  });
+  renderTlCanvas();
+}
+
+let crossAlertTimer;
+function showCrossAlert(msg){
+  const el = document.getElementById('crossAlert');
+  document.getElementById('crossAlertMsg').textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(crossAlertTimer);
+  crossAlertTimer = setTimeout(() => { el.style.display = 'none'; }, 15000);
+  toast(`⚠ ${msg}`, 'err');
+}
+
+// ── LOGGING CONTROL ──────────────────────────────────────
+async function pollLogStatus(){
+  try{
+    const r = await fetch(`${API}/log/entries?limit=9999`);
+    const entries = await r.json();
+    document.getElementById('logCount').textContent = entries.length;
+  } catch(e){}
+}
+
+async function clearLog(){
+  if(!confirm('Clear all log entries?')) return;
+  try{
+    await fetch(`${API}/log/clear`,{method:'POST'});
+    document.getElementById('logCount').textContent = '0';
+    toast('Log cleared','ok');
+  } catch(e){ toast('Clear failed: '+e.message,'err'); }
+}
+
+async function downloadLog(){
+  try{
+    const r = await fetch(`${API}/log/entries?limit=9999`);
+    const entries = await r.json();
+    if(!entries.length){ toast('No log entries yet','err'); return; }
+    const blob = new Blob([JSON.stringify(entries, null, 2)], {type:'application/json'});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `grid-engine-log-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Downloaded ${entries.length} entries`, 'ok');
+  } catch(e){ toast('Download failed: '+e.message,'err'); }
+}
+
+// ── ENGINE PROCESS CONTROL ───────────────────────────────
+async function engineStart(){
+  try{
+    const r = await fetch(`${API}/engine/start`, {method:'POST'});
+    const d = await r.json();
+    toast(d.msg, d.ok ? 'ok' : 'err');
+    pollEngineProc();
+pollLogStatus();
+  } catch(e){ toast('Could not start engine: '+e.message,'err'); }
+}
+
+async function engineStop(){
+  try{
+    const r = await fetch(`${API}/engine/stop`, {method:'POST'});
+    const d = await r.json();
+    toast(d.msg, d.ok ? 'ok' : 'err');
+    pollEngineProc();
+  } catch(e){ toast('Could not stop engine: '+e.message,'err'); }
+}
+
+async function pollEngineProc(){
+  try{
+    const r = await fetch(`${API}/engine/status`);
+    const d = await r.json();
+    const el = document.getElementById('engProcStatus');
+    const startBtn = document.getElementById('engStartBtn');
+    const stopBtn  = document.getElementById('engStopBtn');
+    if(d.running){
+      el.textContent = '● RUNNING';
+      el.style.color = 'var(--green)';
+      startBtn.style.opacity = '0.4';
+      stopBtn.style.opacity  = '1';
+    } else {
+      el.textContent = '○ STOPPED';
+      el.style.color = 'var(--muted)';
+      startBtn.style.opacity = '1';
+      stopBtn.style.opacity  = '0.4';
+    }
+  } catch(e){}
+}
+
+// ── LOAD OVERRIDE STATE ON BOOT ──────────────────────────
+// Reads the override file from the server so the UI stays
+// correct after a page refresh
+async function loadOverrideState(){
+  try {
+    const r = await fetch(`${API}/inventory/override/state`);
+    if(!r.ok) return;
+    const d = await r.json();
+    if(d.manual){
+      invOverrideActive = true;
+      const pct = Math.round(d.btc_ratio * 100);
+      document.getElementById('btcSlider').value = pct;
+      document.getElementById('btcSliderVal').textContent = pct + '%';
+      const skewPct = Math.round(d.skew * 100);
+      document.getElementById('skewSlider').value = skewPct;
+      document.getElementById('skewSliderVal').textContent = (skewPct/100).toFixed(2);
+      document.getElementById('ibarFill').style.width = pct + '%';
+      document.getElementById('ibarPct').textContent  = pct + '%';
+      document.getElementById('iBtcR').textContent    = pct + '%';
+      document.getElementById('iSkew').textContent    = (d.skew >= 0 ? '+' : '') + d.skew.toFixed(4);
+      document.getElementById('invOverrideBadge').style.display = 'inline-flex';
+      document.getElementById('clearInvBtn').style.display = 'block';
+    }
+  } catch(e){ console.warn('Could not load override state:', e); }
+}
+
+// ── BOOT ─────────────────────────────────────────────────
+initChart();
+initTlCanvas();
+
+loadCandles(currentTf);
+pollStatus();
+loadBots();
+loadOverrideState();
+pollEngineProc();
+loadTrendlines();
+setInterval(pollStatus, 5000);
+setInterval(pollEngineProc, 5000);
+setInterval(pollLogStatus, 10000);
+setInterval(()=>loadCandles(currentTf), 60000);
+setInterval(loadBots, 30000);
+setInterval(tickTrendlines, 1000);   // live level + cross detection every second
+
+// ── SIDEBAR TABS ─────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.aside-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.aside-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+  document.getElementById('panel' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+}
+
+// ── P&L SIMULATION ───────────────────────────────────────────
+const FEE_RT = 0.0040;
+const REGIME_COLORS_PNL = { RANGE:'#22d3ee', TREND_UP:'#4ade80', TREND_DOWN:'#f87171', COMPRESSION:'#a78bfa' };
+
+let _pnlTfHours = 1; // default: last 1h — 0 = All, -1 = manual range
+
+function setPnlTf(btn) {
+  document.querySelectorAll('.pnl-tf').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _pnlTfHours = parseFloat(btn.dataset.tf);
+  // Clear manual range inputs when a preset is chosen
+  document.getElementById('pnlFrom').value = '';
+  document.getElementById('pnlTo').value   = '';
+  const labels = { 1:'Last 1 hour', 6:'Last 6 hours', 24:'Last 24 hours', 168:'Last 7 days', 0:'All log data' };
+  document.getElementById('pnlTfNote').textContent = labels[_pnlTfHours] ?? 'Custom range';
+}
+
+function onPnlRangeInput() {
+  const from = document.getElementById('pnlFrom').value;
+  const to   = document.getElementById('pnlTo').value;
+  if (from || to) {
+    // Deactivate preset buttons when user types a manual range
+    document.querySelectorAll('.pnl-tf').forEach(b => b.classList.remove('active'));
+    _pnlTfHours = -1;
+    const fromStr = from ? new Date(from).toLocaleString('en-GB',{dateStyle:'short',timeStyle:'short'}) : '…';
+    const toStr   = to   ? new Date(to).toLocaleString('en-GB',{dateStyle:'short',timeStyle:'short'})   : 'now';
+    document.getElementById('pnlTfNote').textContent = `Custom: ${fromStr} → ${toStr}`;
+  }
+}
+
+// Live update total capital display
+// Restore saved capital values on load
+(function(){
+  const saved = JSON.parse(localStorage.getItem('pnlCaps') || '{}');
+  ['pnlCapInner','pnlCapMid','pnlCapOuter'].forEach(id => {
+    if (saved[id] !== undefined) document.getElementById(id).value = saved[id];
+  });
+  const total = ['pnlCapInner','pnlCapMid','pnlCapOuter']
+    .map(id => parseFloat(document.getElementById(id).value)||0).reduce((a,b)=>a+b,0);
+  document.getElementById('pnlTotalCap').textContent = total.toLocaleString('en-GB',{maximumFractionDigits:0});
+})();
+
+['pnlCapInner','pnlCapMid','pnlCapOuter'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    const total = ['pnlCapInner','pnlCapMid','pnlCapOuter']
+      .map(i => parseFloat(document.getElementById(i).value)||0).reduce((a,b)=>a+b,0);
+    document.getElementById('pnlTotalCap').textContent = total.toLocaleString('en-GB',{maximumFractionDigits:0});
+    // Persist to localStorage
+    const caps = {};
+    ['pnlCapInner','pnlCapMid','pnlCapOuter'].forEach(i => caps[i] = document.getElementById(i).value);
+    localStorage.setItem('pnlCaps', JSON.stringify(caps));
+  });
+});
+
+function botsRunning(entry) {
+  const regime = entry.regime || 'RANGE';
+  const td = entry.trending_down || false;
+  const tu = entry.trending_up || false;
+  const comp = entry.compression || false;
+  if (comp)                            return [false, false, false];
+  if (td || regime === 'TREND_DOWN')   return [false, false, true];
+  if (tu)                              return [false, true,  true];
+  return                                      [true,  true,  true];
+}
+
+async function runPnlSim() {
+  const capInner = parseFloat(document.getElementById('pnlCapInner').value) || 0;
+  const capMid   = parseFloat(document.getElementById('pnlCapMid').value)   || 0;
+  const capOuter = parseFloat(document.getElementById('pnlCapOuter').value) || 0;
+  const caps = [capInner, capMid, capOuter];
+
+  if (caps.every(c => c === 0)) { toast('Enter capital for at least one bot', 'err'); return; }
+
+  document.getElementById('pnlLoading').style.display = 'block';
+  document.getElementById('pnlError').style.display   = 'none';
+  document.getElementById('pnlResults').style.display = 'none';
+  document.getElementById('pnlRunBtn').disabled = true;
+
+  try {
+    const r = await fetch(`${API}/log/entries?limit=9999`);
+    if (!r.ok) throw new Error(`Server ${r.status}`);
+    const entries = await r.json();
+    if (!entries.length) throw new Error('No log entries found — start logging first');
+
+    // Apply timeframe filter
+    let filtered = entries;
+    if (_pnlTfHours === -1) {
+      // Manual date range
+      const fromVal = document.getElementById('pnlFrom').value;
+      const toVal   = document.getElementById('pnlTo').value;
+      const fromTs  = fromVal ? new Date(fromVal).getTime() / 1000 : 0;
+      const toTs    = toVal   ? new Date(toVal).getTime()   / 1000 : Infinity;
+      if (!fromVal && !toVal) throw new Error('Enter at least a From or To date for custom range');
+      filtered = entries.filter(e => (e.ts||0) >= fromTs && (e.ts||0) <= toTs);
+      if (!filtered.length) throw new Error('No entries in the selected date range');
+    } else if (_pnlTfHours > 0) {
+      const cutoff = (Date.now() / 1000) - (_pnlTfHours * 3600);
+      filtered = entries.filter(e => (e.ts || 0) >= cutoff);
+      if (!filtered.length) {
+        throw new Error(`No entries in the last ${_pnlTfHours}h — try a wider timeframe or "All"`);
+      }
+    }
+
+    // Filter to entries that have tier data
+    const valid = filtered.filter(e => e.tiers && e.tiers.length >= 3);
+    if (valid.length < 2) throw new Error('Not enough log entries with tier data yet');
+
+    // ── Simulate ──────────────────────────────────────────
+    let totalNet = 0, totalGross = 0, totalFees = 0, totalFills = 0;
+    let botFills = [0,0,0], botNet = [0,0,0];
+    const cumSeries = [];
+    const regimeStats = {};
+
+    for (let i = 1; i < valid.length; i++) {
+      const prev = valid[i-1], curr = valid[i];
+      const priceMove = Math.abs(curr.price - prev.price);
+      const running   = botsRunning(curr);
+      let cycleNet = 0, cycleGross = 0, cycleFees = 0;
+
+      curr.tiers.slice(0, 3).forEach((tier, j) => {
+        if (!running[j] || caps[j] === 0) return;
+        const step   = tier.step;
+        const levels = tier.levels;
+        const unit   = caps[j] / levels;
+        const fills  = Math.min(Math.floor(priceMove / step), levels - 1);
+        const gross  = (step / curr.price) * unit * fills;
+        const fees   = unit * FEE_RT * fills;
+        const net    = gross - fees;
+        cycleNet   += net;
+        cycleGross += gross;
+        cycleFees  += fees;
+        botFills[j] += fills;
+        botNet[j]   += net;
+        totalFills  += fills;
+      });
+
+      totalNet   += cycleNet;
+      totalGross += cycleGross;
+      totalFees  += cycleFees;
+
+      // Cumulative series — only record when something changes or hourly
+      const hour = (curr.dt||'').slice(0,13);
+      const last = cumSeries[cumSeries.length-1];
+      if (!last || last.hour !== hour || cycleNet !== 0) {
+        cumSeries.push({ dt: (curr.dt||'').slice(5,16), cum: totalNet, hour });
+      }
+
+      // Regime tally
+      const rk = curr.regime || 'RANGE';
+      if (!regimeStats[rk]) regimeStats[rk] = { count:0, net:0 };
+      regimeStats[rk].count++;
+      regimeStats[rk].net += cycleNet;
+    }
+
+    // ── Duration ─────────────────────────────────────────
+    const t0 = valid[0].ts, t1 = valid[valid.length-1].ts;
+    const hours = (t1 - t0) / 3600;
+    const totalCap = caps.reduce((a,b)=>a+b,0);
+    const apy = totalCap > 0 ? (totalNet / totalCap) * (8760 / Math.max(hours, 0.1)) * 100 : 0;
+
+    // ── Update DOM ────────────────────────────────────────
+    const fmtMoney = v => {
+      const sign = v >= 0 ? '+' : '-';
+      return `${sign}$${Math.abs(v).toFixed(2)}`;
+    };
+    const col = v => v >= 0 ? 'var(--green)' : 'var(--red)';
+
+    document.getElementById('pnlNet').textContent  = fmtMoney(totalNet);
+    document.getElementById('pnlNet').style.color  = col(totalNet);
+    document.getElementById('pnlApy').textContent  = `${apy.toFixed(1)}%`;
+    document.getElementById('pnlApy').style.color  = col(totalNet);
+    document.getElementById('pnlGross').textContent = fmtMoney(totalGross);
+    document.getElementById('pnlGross').style.color = col(totalGross);
+    document.getElementById('pnlFees').textContent  = `-$${totalFees.toFixed(2)}`;
+    document.getElementById('pnlFees').style.color  = 'var(--red)';
+    document.getElementById('pnlMeta').textContent  =
+      `${valid[0].dt?.slice(0,16)||'—'} → ${valid[valid.length-1].dt?.slice(0,16)||'—'} · ${hours.toFixed(1)}h · ${valid.length} cycles`;
+    document.getElementById('pnlTotalFills').textContent = totalFills;
+
+    // Per-bot rows
+    const botColors = ['var(--accent)','#ff6b35','#b388ff'];
+    ['pnlInner','pnlMid','pnlOuter'].forEach((prefix, j) => {
+      document.getElementById(prefix+'Fills').innerHTML =
+        `<span class="pnl-fill-badge">${botFills[j]} fills</span>`;
+      document.getElementById(prefix+'Net').textContent = fmtMoney(botNet[j]);
+      document.getElementById(prefix+'Net').style.color = col(botNet[j]);
+    });
+
+    // Regime breakdown
+    const regimeHtml = Object.entries(regimeStats)
+      .sort((a,b) => b[1].net - a[1].net)
+      .map(([k,v]) => `
+        <div class="pnl-bot-row">
+          <span style="color:${REGIME_COLORS_PNL[k]||'var(--muted)'};font-size:9px;">${k}</span>
+          <span style="font-size:9px;color:var(--muted);">${v.count} cycles</span>
+          <span style="font-size:11px;font-weight:700;color:${col(v.net)}">${fmtMoney(v.net)}</span>
+        </div>`).join('');
+    document.getElementById('pnlRegimeRows').innerHTML = regimeHtml;
+
+    document.getElementById('pnlNote').textContent =
+      `Fills estimated from close-to-close Δprice. Actual may differ.`;
+
+    // ── Mini chart ────────────────────────────────────────
+    const canvas = document.getElementById('pnlChart');
+    const ctx    = canvas.getContext('2d');
+    const W = canvas.offsetWidth, H = canvas.offsetHeight;
+    canvas.width = W * devicePixelRatio; canvas.height = H * devicePixelRatio;
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+
+    const vals = cumSeries.map(p => p.cum);
+    const minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
+    const range = maxV - minV || 1;
+    const padX = 4, padY = 6;
+    const chartW = W - padX*2, chartH = H - padY*2;
+
+    const toX = i => padX + (i / (cumSeries.length - 1)) * chartW;
+    const toY = v => padY + chartH - ((v - minV) / range) * chartH;
+    const zeroY = toY(0);
+
+    // Zero line
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(padX, zeroY); ctx.lineTo(W-padX, zeroY); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Gradient fill
+    const grad = ctx.createLinearGradient(0, padY, 0, H-padY);
+    const lineCol = totalNet >= 0 ? '#3fb950' : '#f85149';
+    grad.addColorStop(0, lineCol + '40');
+    grad.addColorStop(1, lineCol + '00');
+    ctx.beginPath();
+    cumSeries.forEach((p,i) => i===0 ? ctx.moveTo(toX(i), toY(p.cum)) : ctx.lineTo(toX(i), toY(p.cum)));
+    ctx.lineTo(toX(cumSeries.length-1), zeroY);
+    ctx.lineTo(toX(0), zeroY);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line
+    ctx.strokeStyle = lineCol;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    cumSeries.forEach((p,i) => i===0 ? ctx.moveTo(toX(i), toY(p.cum)) : ctx.lineTo(toX(i), toY(p.cum)));
+    ctx.stroke();
+
+    document.getElementById('pnlResults').style.display = 'block';
+    toast(`Sim complete — ${totalFills} fills, ${fmtMoney(totalNet)} net`, totalNet >= 0 ? 'ok' : 'warn');
+
+  } catch(e) {
+    document.getElementById('pnlError').style.display = 'block';
+    document.getElementById('pnlError').textContent   = `Error: ${e.message}`;
+    toast('P&L sim failed: '+e.message, 'err');
+  } finally {
+    document.getElementById('pnlLoading').style.display = 'none';
+    document.getElementById('pnlRunBtn').disabled = false;
+  }
+}
+
+</script>
+</body>
+</html>
