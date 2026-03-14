@@ -306,11 +306,14 @@ def engine_start():
         python_bin = sys.executable
         with _engine_lock:
             _engine_output.clear()
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
         _engine_proc = subprocess.Popen(
-            [python_bin, os.path.join(script_dir, "engine.py")],
+            [python_bin, "-u", os.path.join(script_dir, "engine.py")],
             cwd=script_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            env=env,
         )
         __import__("threading").Thread(
             target=_drain_output, args=(_engine_proc,), daemon=True
