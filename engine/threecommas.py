@@ -153,6 +153,49 @@ def redeploy_bot(bot_id, tier):
     return True
 
 
+def set_bot_capital(bot_id: str, total_usd: float) -> dict:
+    """
+    Update a grid bot's capital by setting quantity_per_grid = total_usd / grids_quantity.
+    If the bot is running, stops it first, applies the change, then restarts.
+    """
+    current = get_bot(bot_id)
+    levels = int(current.get("grids_quantity") or 10)
+    if levels <= 0:
+        raise ValueError(f"Invalid grids_quantity: {levels}")
+
+    qty_per_grid = round(total_usd / levels, 2)
+    was_enabled  = bool(current.get("is_enabled", False))
+
+    if was_enabled:
+        stop_bot(bot_id)
+        time.sleep(2)
+
+    patch_body = {
+        "name":             current.get("name", f"Grid Bot {bot_id}"),
+        "upper_price":      float(current.get("upper_price", 0)),
+        "lower_price":      float(current.get("lower_price", 0)),
+        "grids_quantity":   levels,
+        "quantity_per_grid": qty_per_grid,
+        "grid_type":        current.get("grid_type", "arithmetic"),
+        "ignore_warnings":  True,
+    }
+    r = _signed_request("PATCH", f"/ver1/grid_bots/{bot_id}/manual", body=patch_body)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"PATCH failed {r.status_code}: {r.text[:300]}")
+
+    if was_enabled:
+        time.sleep(1)
+        start_bot(bot_id)
+
+    return {
+        "ok":           True,
+        "qty_per_grid": qty_per_grid,
+        "total_usd":    total_usd,
+        "levels":       levels,
+        "restarted":    was_enabled,
+    }
+
+
 def redeploy_all_bots(bot_ids, tiers):
     """
     Redeploy all bots with their respective tier parameters.

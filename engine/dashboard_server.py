@@ -210,6 +210,54 @@ def stop_bot(bot_id):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Grid bot capital allocation ───────────────────────────
+@app.route("/bots/<bot_id>/capital", methods=["POST"])
+def set_grid_bot_capital(bot_id):
+    ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
+    if bot_id not in ids:
+        return jsonify({"ok": False, "error": "Bot not managed by this engine"}), 403
+    try:
+        body      = request.get_json(force=True, silent=True) or {}
+        total_usd = float(body.get("total_usd", 0))
+        if total_usd <= 0:
+            return jsonify({"ok": False, "error": "total_usd must be > 0"}), 400
+
+        # Fetch current config
+        r = signed_request("GET", f"/ver1/grid_bots/{bot_id}")
+        if r.status_code != 200:
+            return jsonify({"ok": False, "error": f"3Commas {r.status_code}: {r.text[:200]}"}), 502
+        current   = r.json()
+        levels    = int(current.get("grids_quantity") or 10)
+        qty       = round(total_usd / levels, 2)
+        was_on    = bool(current.get("is_enabled", False))
+
+        if was_on:
+            signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
+            time.sleep(2)
+
+        patch = {
+            "name":             current.get("name", f"Grid Bot {bot_id}"),
+            "upper_price":      float(current.get("upper_price", 0)),
+            "lower_price":      float(current.get("lower_price", 0)),
+            "grids_quantity":   levels,
+            "quantity_per_grid": qty,
+            "grid_type":        current.get("grid_type", "arithmetic"),
+            "ignore_warnings":  True,
+        }
+        rp = signed_request("PATCH", f"/ver1/grid_bots/{bot_id}/manual", body=patch)
+        if rp.status_code not in (200, 201):
+            return jsonify({"ok": False, "error": f"PATCH {rp.status_code}: {rp.text[:300]}"}), 502
+
+        if was_on:
+            time.sleep(1)
+            signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
+
+        return jsonify({"ok": True, "qty_per_grid": qty, "total_usd": total_usd,
+                        "levels": levels, "restarted": was_on})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── Account balance + capital allocation ─────────────────
 _balance_cache = {"data": None, "ts": 0.0}
 
