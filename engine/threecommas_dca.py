@@ -114,14 +114,14 @@ def create_dca_bot(
     safety_order_volume_mult (martingale): each SO is this × larger than previous.
     """
     body = {
-        "account_id":                      ACCOUNT_ID,
-        "pairs":                           pair,
+        "account_id":                      int(ACCOUNT_ID),
+        "pairs":                           [pair],
         "base_order_volume":               str(round(base_order_usd, 2)),
         "base_order_volume_type":          "quote_currency",
         "safety_order_volume":             str(round(safety_order_usd, 2)),
         "safety_order_volume_type":        "quote_currency",
         "take_profit_type":                "total",
-        "take_profit":                     round(take_profit_pct, 2),
+        "take_profit":                     str(round(take_profit_pct, 2)),
         "safety_order_step_percentage":    str(round(safety_order_step_pct, 2)),
         "martingale_volume_coefficient":   str(round(safety_order_volume_mult, 2)),
         "martingale_step_coefficient":     "1.0",
@@ -134,7 +134,8 @@ def create_dca_bot(
     if take_profit_steps:
         body["take_profit_steps"] = take_profit_steps
     r = _signed_request("POST", "/ver1/bots/create_bot", body=body)
-    r.raise_for_status()
+    if not r.ok:
+        raise ValueError(f"3Commas {r.status_code}: {r.text[:500]}")
     return r.json()
 
 
@@ -199,14 +200,14 @@ def update_dca_bot(
     pair = pairs[0] if isinstance(pairs, list) else pairs
     so_count = safety_order_count if safety_order_count is not None else int(current.get("max_safety_orders", 5))
     body = {
-        "account_id":                    ACCOUNT_ID,
-        "pairs":                         pair,
+        "account_id":                    int(ACCOUNT_ID),
+        "pairs":                         [pair],
         "base_order_volume":             str(round(base_order_usd          if base_order_usd          is not None else float(current.get("base_order_volume",             500)),  2)),
         "base_order_volume_type":        "quote_currency",
         "safety_order_volume":           str(round(safety_order_usd        if safety_order_usd        is not None else float(current.get("safety_order_volume",           100)),  2)),
         "safety_order_volume_type":      "quote_currency",
         "take_profit_type":              "total",
-        "take_profit":                   round(take_profit_pct if take_profit_pct is not None else float(current.get("take_profit", 2.0)), 2),
+        "take_profit":                   str(round(take_profit_pct if take_profit_pct is not None else float(current.get("take_profit", 2.0)), 2)),
         "safety_order_step_percentage":  str(round(safety_order_step_pct   if safety_order_step_pct   is not None else float(current.get("safety_order_step_percentage",  1.5)),  2)),
         "martingale_volume_coefficient": str(round(safety_order_volume_mult if safety_order_volume_mult is not None else float(current.get("martingale_volume_coefficient", 1.2)), 2)),
         "martingale_step_coefficient":   "1.0",
@@ -219,7 +220,8 @@ def update_dca_bot(
     if take_profit_steps is not None:
         body["take_profit_steps"] = take_profit_steps
     r = _signed_request("PATCH", f"/ver1/bots/{bot_id}/update", body=body)
-    r.raise_for_status()
+    if not r.ok:
+        raise ValueError(f"3Commas {r.status_code}: {r.text[:500]}")
     return r.json()
 
 
