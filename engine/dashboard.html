@@ -778,6 +778,58 @@ const API = '';   // empty = same origin (http://localhost:5050)
 // patched window.fetch so the auth token header is always included.
 const apiFetch = (url, opts) => fetch(url, opts);
 
+// Replaces window.confirm/alert — both are silently blocked in proxy/iframe envs.
+function showConfirmModal(message, onConfirm, danger){
+  const old = document.getElementById('_confirmModal');
+  if(old) old.remove();
+  const d = document.createElement('div');
+  d.id = '_confirmModal';
+  d.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0d1117;border:1px solid ${danger?'#5a2020':'#243044'};border-radius:8px;
+    padding:22px 26px;z-index:99999;width:360px;max-width:95vw;
+    font-family:'Space Mono',monospace;box-shadow:0 8px 48px rgba(0,0,0,.95);`;
+  d.innerHTML = `
+    <div style="font-size:11px;color:#c9d4e0;line-height:1.6;margin-bottom:18px;white-space:pre-wrap;">${message}</div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;">
+      <button id="_confirmCancel"
+        style="background:rgba(255,255,255,.04);border:1px solid #1c2433;color:#4a5a72;
+        font-family:'Space Mono',monospace;font-size:10px;padding:7px 14px;border-radius:4px;cursor:pointer;">
+        Cancel
+      </button>
+      <button id="_confirmOk"
+        style="background:${danger?'rgba(255,61,90,.15)':'rgba(0,212,255,.12)'};
+        border:1px solid ${danger?'var(--red)':'var(--accent)'};
+        color:${danger?'var(--red)':'var(--accent)'};
+        font-family:'Space Mono',monospace;font-size:10px;padding:7px 16px;border-radius:4px;cursor:pointer;font-weight:700;">
+        Confirm
+      </button>
+    </div>`;
+  document.body.appendChild(d);
+  document.getElementById('_confirmCancel').onclick = () => d.remove();
+  document.getElementById('_confirmOk').onclick = () => { d.remove(); onConfirm(); };
+}
+
+function showAlertModal(message, danger){
+  const old = document.getElementById('_alertModal');
+  if(old) old.remove();
+  const d = document.createElement('div');
+  d.id = '_alertModal';
+  d.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0d1117;border:1px solid ${danger?'#5a2020':'#243044'};border-radius:8px;
+    padding:22px 26px;z-index:99999;width:360px;max-width:95vw;
+    font-family:'Space Mono',monospace;box-shadow:0 8px 48px rgba(0,0,0,.95);`;
+  d.innerHTML = `
+    <div style="font-size:11px;color:${danger?'var(--red)':'#c9d4e0'};line-height:1.6;margin-bottom:18px;white-space:pre-wrap;">${message}</div>
+    <div style="display:flex;justify-content:flex-end;">
+      <button onclick="document.getElementById('_alertModal').remove()"
+        style="background:rgba(255,255,255,.04);border:1px solid #1c2433;color:#4a5a72;
+        font-family:'Space Mono',monospace;font-size:10px;padding:7px 14px;border-radius:4px;cursor:pointer;">
+        OK
+      </button>
+    </div>`;
+  document.body.appendChild(d);
+}
+
 const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
 
 let chart, candles, gridLines=[], targetLines=[];
@@ -1282,20 +1334,24 @@ async function setGridCapital(id){
   const btcPrice = (status && status.price) ? status.price : 0;
   if(!btcPrice){ toast('Price not loaded yet — wait for status update','err'); return; }
   const qtyBtc = (total / btcPrice).toFixed(6);
-  if(!confirm(`Set capital for bot ${id} to ≈ $${total.toFixed(0)} USDC (${qtyBtc} BTC/level × levels)?\n\nIf the bot is running it will be stopped, updated, then restarted.`)) return;
-  try{
-    const r = await apiFetch(`${API}/bots/${id}/capital`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({total_usd: total, btc_price: btcPrice}),
-    });
-    const j = await r.json();
-    if(!j.ok){ toast('Capital update failed: '+(j.error||'unknown'),'err'); return; }
-    const msg = `Capital set: $${j.total_usd} · $${j.qty_per_grid}/level · ${j.levels} lvls`
-              + (j.restarted ? ' · restarted' : '');
-    toast(msg,'ok');
-    setTimeout(loadBots, 1500);
-  } catch(e){ toast('Error: '+e.message,'err'); }
+  showConfirmModal(
+    `Set capital for bot ${id} to ≈ $${total.toFixed(0)} USDC (${qtyBtc} BTC/level × levels)?\n\nIf the bot is running it will be stopped, updated, then restarted.`,
+    async () => {
+      try{
+        const r = await apiFetch(`${API}/bots/${id}/capital`, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({total_usd: total, btc_price: btcPrice}),
+        });
+        const j = await r.json();
+        if(!j.ok){ toast('Capital update failed: '+(j.error||'unknown'),'err'); return; }
+        const msg = `Capital set: $${j.total_usd} · $${j.qty_per_grid}/level · ${j.levels} lvls`
+                  + (j.restarted ? ' · restarted' : '');
+        toast(msg,'ok');
+        setTimeout(loadBots, 1500);
+      } catch(e){ toast('Error: '+e.message,'err'); }
+    }
+  );
 }
 
 // ── INVENTORY OVERRIDE ───────────────────────────────────
@@ -2249,13 +2305,14 @@ async function pollLogStatus(){
   } catch(e){}
 }
 
-async function clearLog(){
-  if(!confirm('Clear all log entries?')) return;
-  try{
-    await fetch(`${API}/log/clear`,{method:'POST'});
-    document.getElementById('logCount').textContent = '0';
-    toast('Log cleared','ok');
-  } catch(e){ toast('Clear failed: '+e.message,'err'); }
+function clearLog(){
+  showConfirmModal('Clear all log entries?', async () => {
+    try{
+      await fetch(`${API}/log/clear`,{method:'POST'});
+      document.getElementById('logCount').textContent = '0';
+      toast('Log cleared','ok');
+    } catch(e){ toast('Clear failed: '+e.message,'err'); }
+  });
 }
 
 async function downloadLog(){
@@ -2459,39 +2516,48 @@ async function dcaBotAct(id, action){
   } catch(e){ toast('Error: '+e.message,'err'); }
 }
 
-async function dcaBotPanic(id, name){
-  if(!confirm(`⚡ PANIC SELL — market-exit all deals for "${name}"?\n\nThis cannot be undone.`)) return;
-  try{
-    const r = await apiFetch(`${API}/dca/bots/${id}/panic_sell`, {method:'POST'});
-    const j = await r.json();
-    toast(j.ok ? 'Panic sell triggered' : (j.error||'Failed'), j.ok ? 'ok' : 'err');
-    setTimeout(loadDcaBots, 2000);
-  } catch(e){ toast('Error: '+e.message,'err'); }
+function dcaBotPanic(id, name){
+  showConfirmModal(
+    `⚡ PANIC SELL — market-exit all deals for "${name}"?\n\nThis cannot be undone.`,
+    async () => {
+      try{
+        const r = await apiFetch(`${API}/dca/bots/${id}/panic_sell`, {method:'POST'});
+        const j = await r.json();
+        toast(j.ok ? 'Panic sell triggered' : (j.error||'Failed'), j.ok ? 'ok' : 'err');
+        setTimeout(loadDcaBots, 2000);
+      } catch(e){ toast('Error: '+e.message,'err'); }
+    },
+    true  // danger styling
+  );
 }
 
-async function dcaBotDelete(id, name, enabled){
+function dcaBotDelete(id, name, enabled){
   if(enabled){
     toast('Pause the bot first, then delete','err'); return;
   }
-  if(!confirm(`Delete DCA bot "${name}"?\n\nThis is permanent and cannot be undone.`)) return;
-  console.log('[dcaBotDelete] Deleting bot', id, name);
-  try{
-    const r = await apiFetch(`${API}/dca/bots/${id}`, {method:'DELETE'});
-    console.log('[dcaBotDelete] Status:', r.status, r.ok);
-    if(r.ok || r.status === 204){
-      toast('Bot deleted','ok');
-      setTimeout(loadDcaBots, 1000);
-      return;
-    }
-    // Server returned an error — extract the message
-    let msg = `HTTP ${r.status}`;
-    try{ const j = await r.json(); msg = j.error || j.message || msg; }catch(_){}
-    console.error('[dcaBotDelete] Error:', msg);
-    alert('Delete failed:\n\n' + msg);
-  } catch(e){
-    console.error('[dcaBotDelete] Exception:', e);
-    alert('Delete network error:\n\n' + e.message);
-  }
+  showConfirmModal(
+    `Delete DCA bot "${name}"?\n\nThis is permanent and cannot be undone.`,
+    async () => {
+      console.log('[dcaBotDelete] Deleting bot', id, name);
+      try{
+        const r = await apiFetch(`${API}/dca/bots/${id}`, {method:'DELETE'});
+        console.log('[dcaBotDelete] Status:', r.status, r.ok);
+        if(r.ok || r.status === 204){
+          toast('Bot deleted','ok');
+          setTimeout(loadDcaBots, 1000);
+          return;
+        }
+        let msg = `HTTP ${r.status}`;
+        try{ const j = await r.json(); msg = j.error || j.message || msg; }catch(_){}
+        console.error('[dcaBotDelete] Error:', msg);
+        showAlertModal('Delete failed:\n\n' + msg, true);
+      } catch(e){
+        console.error('[dcaBotDelete] Exception:', e);
+        showAlertModal('Delete network error:\n\n' + e.message, true);
+      }
+    },
+    true  // danger styling
+  );
 }
 
 // ── DCA Create / Edit modal ───────────────────────────────────
