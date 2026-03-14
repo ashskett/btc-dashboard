@@ -110,6 +110,10 @@ def ping():
             except Exception as e:
                 result[fname] = {"error": str(e)}
         return jsonify(result)
+    # Debug: /ping?debug=log&limit=N returns last N engine log entries
+    if request.args.get("debug") == "log":
+        limit = int(request.args.get("limit", 30))
+        return jsonify(read_log(limit))
     # Debug: /ping?debug=dcabots returns raw DCA bot list from 3Commas
     if request.args.get("debug") == "dcabots":
         try:
