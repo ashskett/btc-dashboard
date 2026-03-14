@@ -256,7 +256,28 @@ def log_clear():
 
 
 # ── Engine process management ────────────────────────────
-_engine_proc = None
+_engine_proc   = None
+_engine_output = []   # rolling buffer of last 200 lines
+_engine_lock   = __import__("threading").Lock()
+
+
+def _drain_output(proc):
+    """Background thread: drain engine stdout into _engine_output buffer."""
+    for raw in iter(proc.stdout.readline, b""):
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        with _engine_lock:
+            _engine_output.append(line)
+            if len(_engine_output) > 200:
+                _engine_output.pop(0)
+    # process has exited — read any remaining bytes
+    rest = proc.stdout.read()
+    if rest:
+        for line in rest.decode("utf-8", errors="replace").splitlines():
+            with _engine_lock:
+                _engine_output.append(line)
+                if len(_engine_output) > 200:
+                    _engine_output.pop(0)
+
 
 def _engine_running():
     global _engine_proc
@@ -270,6 +291,11 @@ def _engine_running():
 def engine_status():
     return jsonify({"running": _engine_running()})
 
+@app.route("/engine/output")
+def engine_output():
+    with _engine_lock:
+        return jsonify({"lines": list(_engine_output)})
+
 @app.route("/engine/start", methods=["POST"])
 def engine_start():
     global _engine_proc
@@ -278,15 +304,22 @@ def engine_start():
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         python_bin = sys.executable
+        with _engine_lock:
+            _engine_output.clear()
         _engine_proc = subprocess.Popen(
             [python_bin, os.path.join(script_dir, "engine.py")],
             cwd=script_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        time.sleep(0.5)
+        __import__("threading").Thread(
+            target=_drain_output, args=(_engine_proc,), daemon=True
+        ).start()
+        time.sleep(1.5)
         if _engine_proc.poll() is not None:
-            return jsonify({"ok": False, "msg": "Engine exited immediately — check logs"}), 500
+            with _engine_lock:
+                tail = "\n".join(_engine_output[-20:])
+            return jsonify({"ok": False, "msg": f"Engine exited — output:\n{tail}"}), 500
         return jsonify({"ok": True, "msg": f"Engine started (pid {_engine_proc.pid})"})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
