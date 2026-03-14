@@ -262,6 +262,7 @@ def run():
                     clear_breakout_state()
                 else:
                     print(f"Rate limit reached — skipping exhaustion redeploy")
+                return   # redeploy done (or skipped) — don't fall through to bot-stop logic
 
             # During active UP breakout: inner+mid off, outer stays running
             # During active DOWN breakout: all bots off (already stopped at fire)
