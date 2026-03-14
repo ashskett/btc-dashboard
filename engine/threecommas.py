@@ -11,24 +11,15 @@ from cryptography.hazmat.backends import default_backend
 load_dotenv()
 
 API_KEY    = os.getenv("THREECOMMAS_API_KEY")
-API_SECRET = os.getenv("THREECOMMAS_API_SECRET")  # full PEM private key content
-BASE_URL   = "https://api.3commas.io"
+API_SECRET = os.getenv("THREECOMMAS_API_SECRET")  # path to RSA private key PEM file
+BASE_URL   = "https://api.3commas.io/public/api"
 
 
 def _load_private_key():
-    path = "/root/grid-engine/3commas_private.pem"
-    print(f"DEBUG: loading key from {path}")
-
+    path = API_SECRET.strip() if API_SECRET else "/root/grid-engine/3commas_private.pem"
     with open(path, "rb") as f:
         pem = f.read()
-
-    print("DEBUG: key length:", len(pem))
-    print("DEBUG: first bytes:", pem[:60])
-
-    return serialization.load_pem_private_key(
-        pem,
-        password=None
-    )
+    return serialization.load_pem_private_key(pem, password=None)
 
 
 def _signed_request(method, path, body=None):
@@ -38,7 +29,7 @@ def _signed_request(method, path, body=None):
     Signature is Base64-encoded (RFC 2045).
     """
     payload     = json.dumps(body) if body else ""
-    sign_target = (path + payload).encode()
+    sign_target = ("/public/api" + path + payload).encode()
 
     private_key = _load_private_key()
     signature_bytes = private_key.sign(sign_target, padding.PKCS1v15(), hashes.SHA256())
