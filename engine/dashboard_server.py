@@ -98,6 +98,35 @@ def ping():
     # Debug: /ping?debug=version returns PUBLIC_PATHS to confirm code version
     if request.args.get("debug") == "version":
         return jsonify({"public_paths": list(_PUBLIC_PATHS), "pid": os.getpid()})
+    # Debug: /ping?debug=state returns engine state files for diagnosis
+    if request.args.get("debug") == "state":
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        result = {}
+        for fname in ["inventory_override.json", "breakout_state.json",
+                      "regime_state.json", "grid_state.json", "engine_status.json"]:
+            fpath = os.path.join(script_dir, fname)
+            try:
+                result[fname] = json.load(open(fpath)) if os.path.exists(fpath) else None
+            except Exception as e:
+                result[fname] = {"error": str(e)}
+        return jsonify(result)
+    # Debug: /ping?debug=dcabots returns raw DCA bot list from 3Commas
+    if request.args.get("debug") == "dcabots":
+        try:
+            from threecommas_dca import get_dca_bots
+            bots = get_dca_bots()
+            # Return only fields useful for status diagnosis
+            slim = [{
+                "id": b.get("id"),
+                "name": b.get("name"),
+                "is_enabled": b.get("is_enabled"),
+                "enabled": b.get("enabled"),
+                "active_deals_count": b.get("active_deals_count"),
+                "pairs": b.get("pairs"),
+            } for b in bots]
+            return jsonify({"count": len(slim), "bots": slim})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True})
 
 
@@ -847,6 +876,12 @@ _DEPLOY_FILES = [
     "threecommas_dca.py",
     "grid_logic.py",
     "session.py",
+    "engine.py",
+    "regime.py",
+    "market_data.py",
+    "breakout.py",
+    "inventory.py",
+    "indicators.py",
 ]
 _DEPLOY_BRANCH = "claude/grid-engine-chat-review-hEEGu"
 _DEPLOY_BASE   = f"https://raw.githubusercontent.com/ashskett/btc-dashboard/{_DEPLOY_BRANCH}/engine"
