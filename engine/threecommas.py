@@ -60,6 +60,7 @@ def stop_bot(bot_id):
     """Disable a grid bot (cancels open orders, keeps config intact)."""
     print(f"  Stopping bot {bot_id}...")
     r = _signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
+    time.sleep(0.5)  # avoid 3Commas rate limit when stopping multiple bots in sequence
 
     if r.status_code in (200, 201, 204):
         print(f"  ✓ Bot {bot_id} stopped ({r.status_code})")
@@ -73,6 +74,7 @@ def start_bot(bot_id):
     """Enable a grid bot."""
     print(f"  Starting bot {bot_id}...")
     r = _signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
+    time.sleep(0.5)  # avoid 3Commas rate limit when starting multiple bots in sequence
 
     if r.status_code in (200, 201, 204):
         print(f"  ✓ Bot {bot_id} started ({r.status_code})")
