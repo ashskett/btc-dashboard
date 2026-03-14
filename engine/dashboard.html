@@ -125,9 +125,8 @@
                  background:rgba(255,171,0,.12); letter-spacing:.05em; }
   /* breakout alert bar */
   #breakoutAlert { display:none; padding:7px 14px; font-family:var(--mono); font-size:11px;
-                   text-align:center; letter-spacing:.06em; border-bottom:2px solid;
-                   display:flex; align-items:center; justify-content:center; gap:10px; }
-  #breakoutAlert.show { display:flex; }
+                   text-align:center; letter-spacing:.06em; border-bottom:2px solid; }
+  #breakoutAlert.show { display:flex; align-items:center; justify-content:center; gap:10px; }
   #breakoutAlert .bo-clear { font-size:9px; padding:2px 8px; border-radius:3px; cursor:pointer;
                               background:rgba(255,255,255,.08); border:1px solid currentColor;
                               color:inherit; font-family:var(--mono); }
@@ -665,6 +664,7 @@ const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
 let chart, candles, gridLines=[];
 let showGrid=true, showTL=true;
 let currentTf='1h';
+let fillsData=[];
 let status={};
 let bots=[];
 let dryRun=false;   // synced from engine status on first poll; default false (live)
@@ -734,6 +734,7 @@ async function loadCandles(tf){
     }
 
     redrawLines();
+    applyFillMarkers();
     document.getElementById('chartErr').style.display = 'none';
     setConnected(true);
   } catch(e){
@@ -1009,7 +1010,8 @@ async function loadBots(){
     }).join('');
 
     // legend
-    document.getElementById('botLegendLines').innerHTML = bots.map((b,i)=>`
+    const legEl = document.getElementById('botLegendLines');
+    if(legEl) legEl.innerHTML = bots.map((b,i)=>`
       <div class="leg-row" style="margin-top:3px;">
         <div class="leg-line" style="background:${BOT_COLORS[i]}"></div>
         ${b.name||'Bot '+b.id}
@@ -1020,6 +1022,38 @@ async function loadBots(){
     document.getElementById('botCards').innerHTML =
       '<div style="color:var(--muted);font-size:10px">Bot data unavailable — check server</div>';
   }
+}
+
+// ── FILLS / MARKERS ───────────────────────────────────────
+async function loadFills(){
+  try {
+    const r = await fetch(`${API}/bots/fills`);
+    if(!r.ok) return;
+    const data = await r.json();
+    if(!Array.isArray(data)) return;
+    fillsData = data;
+    applyFillMarkers();
+  } catch(e){}
+}
+
+function applyFillMarkers(){
+  if(!candles || !fillsData.length) return;
+  const gran = {'5m':300,'1h':3600,'4h':21600,'6h':21600,'1d':86400}[currentTf] || 3600;
+  const markers = fillsData
+    .filter(f => f.price > 0 && f.time)
+    .map(f => {
+      const snapped = Math.floor(new Date(f.time).getTime() / 1000 / gran) * gran;
+      const col = BOT_COLORS[f.bot_index] || '#888';
+      return {
+        time:     snapped,
+        position: 'aboveBar',
+        color:    col,
+        shape:    'circle',
+        text:     f.profit_usd > 0 ? `+$${f.profit_usd.toFixed(2)}` : '',
+      };
+    })
+    .sort((a,b) => a.time - b.time);
+  try { candles.setMarkers(markers); } catch(e){}
 }
 
 // ── ACTIONS ───────────────────────────────────────────────
@@ -1764,6 +1798,7 @@ initTlCanvas();
 loadCandles(currentTf);
 pollStatus();
 loadBots();
+loadFills();
 loadOverrideState();
 loadBotIds();
 pollEngineProc();
@@ -1773,6 +1808,7 @@ setInterval(pollEngineProc, 5000);
 setInterval(pollLogStatus, 10000);
 setInterval(()=>loadCandles(currentTf), 60000);
 setInterval(loadBots, 30000);
+setInterval(loadFills, 300000);
 setInterval(tickTrendlines, 1000);   // live level + cross detection every second
 
 // ── SIDEBAR TABS ─────────────────────────────────────────────

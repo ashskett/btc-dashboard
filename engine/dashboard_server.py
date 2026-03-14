@@ -29,7 +29,7 @@ def _load_private_key():
     return serialization.load_pem_private_key(pem, password=None)
 
 
-def signed_request(method, path, body=None):
+def signed_request(method, path, body=None, params=None):
     payload     = json.dumps(body) if body else ""
     sign_target = ("/public/api" + path + payload).encode()
     private_key = _load_private_key()
@@ -37,7 +37,7 @@ def signed_request(method, path, body=None):
         private_key.sign(sign_target, padding.PKCS1v15(), hashes.SHA256())
     ).decode()
     headers = {"Apikey": API_KEY, "Signature": sig, "Content-Type": "application/json"}
-    return req.request(method, BASE_3C + path, headers=headers, data=payload, timeout=10)
+    return req.request(method, BASE_3C + path, headers=headers, data=payload, params=params, timeout=10)
 
 
 # ── Serve dashboard HTML ──────────────────────────────────
@@ -123,6 +123,52 @@ def stop_bot(bot_id):
     try:
         r = signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
         return jsonify({"ok": True, "code": r.status_code})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Bot fills (completed grid cycles) ─────────────────────
+_fills_cache = {"data": None, "ts": 0.0}
+
+@app.route("/bots/fills")
+def bot_fills():
+    global _fills_cache
+    now = time.time()
+    if _fills_cache["data"] is not None and now - _fills_cache["ts"] < 300:
+        return jsonify(_fills_cache["data"])
+    try:
+        ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
+        fills = []
+        for i, bid in enumerate(ids[:3]):
+            r = signed_request("GET", f"/ver1/grid_bots/{bid}/profits", params={"limit": 100})
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            if not isinstance(data, list):
+                continue
+            for item in data:
+                # Pick a representative price from the grid_lines (prefer the sell side)
+                price = 0.0
+                gls = item.get("grid_lines") or []
+                for gl in gls:
+                    if (gl.get("side") or "").lower() == "sell":
+                        price = float(gl.get("price") or 0)
+                        break
+                if not price:
+                    for gl in gls:
+                        price = float(gl.get("price") or 0)
+                        if price:
+                            break
+                fills.append({
+                    "bot_id":     bid,
+                    "bot_index":  i,
+                    "time":       item.get("created_at"),
+                    "price":      price,
+                    "profit_usd": float(item.get("profit_usd") or item.get("usd_profit") or 0),
+                })
+        fills.sort(key=lambda x: x["time"] or "")
+        _fills_cache = {"data": fills, "ts": now}
+        return jsonify(fills)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
