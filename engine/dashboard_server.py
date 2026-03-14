@@ -222,13 +222,16 @@ def account_balance():
         usdc_usd = 0.0
         for item in pie:
             code = (item.get("code") or item.get("currency_code") or "").upper()
-            val  = float(item.get("current_value_usd") or item.get("current_value") or 0)
+            # API returns "usd_value" (string)
+            val  = float(item.get("usd_value") or item.get("current_value_usd") or 0)
             if code == "BTC":
                 btc_usd = val
             elif code in ("USDC", "USDT", "USD"):
                 usdc_usd += val
 
         # Get bot configs to calculate deployed capital
+        # investment_quote_currency = USDC held inside the bot
+        # investment_base_currency  = BTC held inside the bot (not converted here)
         ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
         bots_capital = []
         total_deployed = 0.0
@@ -236,17 +239,13 @@ def account_balance():
             rb = signed_request("GET", f"/ver1/grid_bots/{bid}")
             if rb.status_code == 200:
                 b = rb.json()
-                qpg      = float(b.get("quantity_per_grid") or b.get("investment_quote_currency") or 0)
-                grids    = int(b.get("grids_quantity") or b.get("grid_quantity") or 0)
-                deployed = qpg * grids
+                deployed = float(b.get("investment_quote_currency") or 0)
                 total_deployed += deployed
                 bots_capital.append({
-                    "id":         bid,
-                    "name":       b.get("name", f"Bot {bid}"),
-                    "enabled":    b.get("is_enabled", False),
-                    "deployed":   deployed,
-                    "qpg":        qpg,
-                    "grids":      grids,
+                    "id":      bid,
+                    "name":    b.get("name", f"Bot {bid}"),
+                    "enabled": b.get("is_enabled", False),
+                    "deployed": deployed,
                 })
             else:
                 bots_capital.append({"id": bid, "name": f"Bot {bid}", "deployed": 0.0, "error": rb.status_code})
