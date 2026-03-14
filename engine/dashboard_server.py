@@ -476,6 +476,7 @@ def dca_bots_create():
             safety_order_step_pct=float(body.get("safety_order_step_pct", 1.5)),
             safety_order_volume_mult=float(body.get("safety_order_volume_mult", 1.2)),
             pair=body.get("pair", "USDC_BTC"),
+            take_profit_steps=body.get("take_profit_steps") or None,
         )
         if body.get("start"):
             enable_dca_bot(str(bot["id"]))
@@ -532,6 +533,7 @@ def dca_bot_update(bot_id):
             safety_order_count=int(body["safety_order_count"]) if body.get("safety_order_count") else None,
             safety_order_step_pct=float(body["safety_order_step_pct"]) if body.get("safety_order_step_pct") else None,
             safety_order_volume_mult=float(body["safety_order_volume_mult"]) if body.get("safety_order_volume_mult") else None,
+            take_profit_steps=body.get("take_profit_steps") or None,
         )
         return jsonify({"ok": True, "bot": bot})
     except Exception as e:

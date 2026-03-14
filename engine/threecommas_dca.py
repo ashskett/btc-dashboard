@@ -97,37 +97,42 @@ def create_dca_bot(
     safety_order_step_pct: float = 1.5,
     safety_order_volume_mult: float = 1.2,
     pair: str = "USDC_BTC",
+    take_profit_steps: list = None,
 ) -> dict:
     """
     Create a new DCA bot and return the API response dict (contains 'id').
 
     Does NOT enable the bot — call enable_dca_bot() after to start trading.
 
-    take_profit_pct: % above average cost to close all deals.
-        e.g. if you want to exit at $82k and triggered at $73k → ~12.3%
+    take_profit_pct: % above average cost to close all deals (used when no steps).
+    take_profit_steps: optional list of up to 4 partial-close targets, e.g.:
+        [{"amount_percentage": 50, "profit_percentage": 3},
+         {"amount_percentage": 50, "profit_percentage": 6}]
+        amount_percentage values must sum to 100.
 
     safety_order_step_pct: % drop between each safety order.
-        e.g. 1.5 → safety orders at entry-1.5%, entry-3.0%, entry-4.5%, ...
-
-    safety_order_volume_mult (martingale): each safety order is this × larger than previous.
-        e.g. 1.2 → SO1=$250, SO2=$300, SO3=$360, ...
+    safety_order_volume_mult (martingale): each SO is this × larger than previous.
     """
     body = {
         "account_id":                      ACCOUNT_ID,
-        "pair":                            pair,
+        "pairs":                           pair,
         "base_order_volume":               str(round(base_order_usd, 2)),
         "base_order_volume_type":          "quote_currency",
         "safety_order_volume":             str(round(safety_order_usd, 2)),
         "safety_order_volume_type":        "quote_currency",
-        "take_profit":                     str(round(take_profit_pct, 2)),
+        "take_profit_type":                "total",
+        "take_profit":                     round(take_profit_pct, 2),
         "safety_order_step_percentage":    str(round(safety_order_step_pct, 2)),
         "martingale_volume_coefficient":   str(round(safety_order_volume_mult, 2)),
         "martingale_step_coefficient":     "1.0",
         "max_safety_orders":               safety_order_count,
         "active_safety_orders_count":      min(safety_order_count, 3),
         "name":                            label,
-        "strategy_list":                   [{"strategy": "manual"}],
+        "strategy_list":                   [{"strategy": "manual", "options": {}}],
+        "leverage_type":                   "not_specified",
     }
+    if take_profit_steps:
+        body["take_profit_steps"] = take_profit_steps
     r = _signed_request("POST", "/ver1/bots/create_bot", body=body)
     r.raise_for_status()
     return r.json()
@@ -183,30 +188,36 @@ def update_dca_bot(
     safety_order_count: int = None,
     safety_order_step_pct: float = None,
     safety_order_volume_mult: float = None,
+    take_profit_steps: list = None,
 ) -> dict:
     """
     Update DCA bot parameters. Fetches current config and merges in any
     provided overrides — omitted args keep their existing values.
     """
     current = get_dca_bot(bot_id)
-    pair = (current.get("pairs") or ["USDC_BTC"])[0]
+    pairs = current.get("pairs") or ["USDC_BTC"]
+    pair = pairs[0] if isinstance(pairs, list) else pairs
     so_count = safety_order_count if safety_order_count is not None else int(current.get("max_safety_orders", 5))
     body = {
         "account_id":                    ACCOUNT_ID,
-        "pair":                          pair,
+        "pairs":                         pair,
         "base_order_volume":             str(round(base_order_usd          if base_order_usd          is not None else float(current.get("base_order_volume",             500)),  2)),
         "base_order_volume_type":        "quote_currency",
         "safety_order_volume":           str(round(safety_order_usd        if safety_order_usd        is not None else float(current.get("safety_order_volume",           100)),  2)),
         "safety_order_volume_type":      "quote_currency",
-        "take_profit":                   str(round(take_profit_pct          if take_profit_pct          is not None else float(current.get("take_profit",                   2.0)),  2)),
+        "take_profit_type":              "total",
+        "take_profit":                   round(take_profit_pct if take_profit_pct is not None else float(current.get("take_profit", 2.0)), 2),
         "safety_order_step_percentage":  str(round(safety_order_step_pct   if safety_order_step_pct   is not None else float(current.get("safety_order_step_percentage",  1.5)),  2)),
         "martingale_volume_coefficient": str(round(safety_order_volume_mult if safety_order_volume_mult is not None else float(current.get("martingale_volume_coefficient", 1.2)), 2)),
         "martingale_step_coefficient":   "1.0",
         "max_safety_orders":             so_count,
         "active_safety_orders_count":    min(so_count, 3),
         "name":                          current.get("name", "DCA Bot"),
-        "strategy_list":                 [{"strategy": "manual"}],
+        "strategy_list":                 [{"strategy": "manual", "options": {}}],
+        "leverage_type":                 "not_specified",
     }
+    if take_profit_steps is not None:
+        body["take_profit_steps"] = take_profit_steps
     r = _signed_request("PATCH", f"/ver1/bots/{bot_id}/update", body=body)
     r.raise_for_status()
     return r.json()

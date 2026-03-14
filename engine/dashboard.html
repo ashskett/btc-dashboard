@@ -2494,10 +2494,18 @@ function _dcaModalHtml(title, bot){
     padding:8px;margin-bottom:12px;font-size:9px;font-family:'Space Mono',monospace;"></div>
 
   <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;
-    margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #1c2433;">Take Profit</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+    margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #1c2433;display:flex;align-items:center;justify-content:space-between;">
+    <span>Take Profit</span>
+    <button onclick="_dcaAddTpStep()" id="dcaAddTpBtn"
+      style="background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);color:var(--green);
+      font-family:'Space Mono',monospace;font-size:9px;padding:2px 8px;border-radius:3px;cursor:pointer;">
+      + Add Step
+    </button>
+  </div>
+  <!-- single TP (shown when no steps) -->
+  <div id="dcaTpSingle" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
     <div>
-      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TP %</div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TP % <span style="color:#4a5a72;">(single close)</span></div>
       <input id="dca_tp" type="number" value="${v('take_profit',2.0)}" min="0.1" step="0.1"
         style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
         font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:6px 8px;border-radius:4px;"/>
@@ -2507,6 +2515,17 @@ function _dcaModalHtml(title, bot){
       <div id="dcaExposure" style="font-size:11px;font-weight:700;color:var(--amber);padding:6px 8px;
         background:#080c10;border:1px solid #243044;border-radius:4px;">—</div>
     </div>
+  </div>
+  <!-- TP steps (shown when steps added) -->
+  <div id="dcaTpSteps" style="display:none;margin-bottom:8px;">
+    <div style="display:grid;grid-template-columns:auto 1fr 1fr auto;gap:4px;margin-bottom:4px;">
+      <span style="font-size:9px;color:var(--muted);">#</span>
+      <span style="font-size:9px;color:var(--muted);">Close %</span>
+      <span style="font-size:9px;color:var(--muted);">Profit %</span>
+      <span></span>
+    </div>
+    <div id="dcaTpStepRows"></div>
+    <div id="dcaTpStepAlloc" style="font-size:9px;margin-top:4px;color:var(--muted);">Allocated: 0%</div>
   </div>`;
 }
 
@@ -2547,6 +2566,78 @@ function _dcaUpdateExposure(){
   _dcaUpdateLadder();
 }
 
+// ── DCA TP STEPS ──────────────────────────────────────────────
+let _dcaTpSteps = [];  // [{amount_percentage, profit_percentage}]
+
+function _dcaAddTpStep(){
+  if(_dcaTpSteps.length >= 4){ toast('Max 4 TP steps','err'); return; }
+  const used = _dcaTpSteps.reduce((s,r) => s + r.amount_percentage, 0);
+  _dcaTpSteps.push({ amount_percentage: Math.min(100 - used, 50), profit_percentage: 2.0 });
+  _dcaRenderTpSteps();
+}
+
+function _dcaRemoveTpStep(i){
+  _dcaTpSteps.splice(i, 1);
+  _dcaRenderTpSteps();
+}
+
+function _dcaRenderTpSteps(){
+  const single = document.getElementById('dcaTpSingle');
+  const steps  = document.getElementById('dcaTpSteps');
+  const rows   = document.getElementById('dcaTpStepRows');
+  const alloc  = document.getElementById('dcaTpStepAlloc');
+  const btn    = document.getElementById('dcaAddTpBtn');
+  if(!rows) return;
+  if(_dcaTpSteps.length === 0){
+    single.style.display = 'grid';
+    steps.style.display  = 'none';
+    return;
+  }
+  single.style.display = 'none';
+  steps.style.display  = 'block';
+  rows.innerHTML = _dcaTpSteps.map((s, i) => `
+    <div style="display:grid;grid-template-columns:auto 1fr 1fr auto;gap:4px;align-items:center;margin-bottom:4px;">
+      <span style="font-size:9px;color:var(--purple);width:12px;">${i+1}</span>
+      <input type="number" value="${s.amount_percentage}" min="1" max="100" step="1"
+        style="background:#080c10;border:1px solid #243044;color:var(--amber);font-family:'Space Mono',monospace;
+        font-size:10px;padding:4px 6px;border-radius:3px;width:100%;"
+        oninput="_dcaStepChange(${i},'amount_percentage',this.value)"/>
+      <input type="number" value="${s.profit_percentage}" min="0.1" step="0.1"
+        style="background:#080c10;border:1px solid #243044;color:var(--green);font-family:'Space Mono',monospace;
+        font-size:10px;padding:4px 6px;border-radius:3px;width:100%;"
+        oninput="_dcaStepChange(${i},'profit_percentage',this.value)"/>
+      <button onclick="_dcaRemoveTpStep(${i})"
+        style="background:rgba(255,61,90,.1);border:1px solid rgba(255,61,90,.3);color:var(--red);
+        font-size:9px;padding:3px 7px;border-radius:3px;cursor:pointer;">×</button>
+    </div>`).join('');
+  const total = _dcaTpSteps.reduce((s,r) => s + r.amount_percentage, 0);
+  const ok = Math.abs(total - 100) < 0.1;
+  alloc.textContent = `Allocated: ${total}%`;
+  alloc.style.color = ok ? 'var(--green)' : 'var(--amber)';
+  if(btn) btn.style.display = _dcaTpSteps.length >= 4 ? 'none' : '';
+}
+
+function _dcaStepChange(i, field, val){
+  _dcaTpSteps[i][field] = parseFloat(val) || 0;
+  const total = _dcaTpSteps.reduce((s,r) => s + r.amount_percentage, 0);
+  const alloc = document.getElementById('dcaTpStepAlloc');
+  if(alloc){
+    const ok = Math.abs(total - 100) < 0.1;
+    alloc.textContent = `Allocated: ${total}%`;
+    alloc.style.color = ok ? 'var(--green)' : 'var(--amber)';
+  }
+}
+
+function _dcaGetTpSteps(){
+  if(_dcaTpSteps.length === 0) return null;
+  const total = _dcaTpSteps.reduce((s,r) => s + r.amount_percentage, 0);
+  if(Math.abs(total - 100) > 0.5){ toast(`TP steps must total 100% (currently ${total}%)`,'err'); return false; }
+  return _dcaTpSteps.map(s => ({
+    amount_percentage: Math.round(s.amount_percentage),
+    profit_percentage: parseFloat(s.profit_percentage.toFixed(2)),
+  }));
+}
+
 function showCreateDcaModal(){
   const old = document.getElementById('dcaModal');
   if(old) old.remove();
@@ -2575,7 +2666,8 @@ function showCreateDcaModal(){
       </button>
     </div>`;
   document.body.appendChild(div);
-  setTimeout(_dcaUpdateLadder, 0);
+  _dcaTpSteps = [];
+  setTimeout(() => { _dcaUpdateLadder(); _dcaRenderTpSteps(); }, 0);
 }
 
 function showEditDcaModal(botId){
@@ -2604,7 +2696,12 @@ function showEditDcaModal(botId){
       </button>
     </div>`;
   document.body.appendChild(div);
-  setTimeout(_dcaUpdateLadder, 0);
+  // Load existing TP steps from bot if present
+  _dcaTpSteps = Array.isArray(bot.take_profit_steps) ? bot.take_profit_steps.map(s => ({
+    amount_percentage: parseFloat(s.amount_percentage) || 50,
+    profit_percentage: parseFloat(s.profit_percentage) || 2.0,
+  })) : [];
+  setTimeout(() => { _dcaUpdateLadder(); _dcaRenderTpSteps(); }, 0);
 }
 
 async function confirmCreateDca(start){
@@ -2615,15 +2712,19 @@ async function confirmCreateDca(start){
   const count = parseInt  (document.getElementById('dca_count').value);
   const step  = parseFloat(document.getElementById('dca_step').value);
   const mult  = parseFloat(document.getElementById('dca_mult').value);
-  const tp    = parseFloat(document.getElementById('dca_tp').value);
-  if(isNaN(base)||isNaN(so)||isNaN(tp)){ toast('Fill in all fields','err'); return; }
+  const tp    = parseFloat(document.getElementById('dca_tp')?.value);
+  const tpSteps = _dcaGetTpSteps();
+  if(tpSteps === false) return;  // validation failed
+  if(!tpSteps && isNaN(tp)){ toast('Fill in TP %','err'); return; }
+  if(isNaN(base)||isNaN(so)){ toast('Fill in all fields','err'); return; }
   try{
     const r = await apiFetch(`${API}/dca/bots`, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({label:name, pair, base_order_usd:base, safety_order_usd:so,
         safety_order_count:count, safety_order_step_pct:step, safety_order_volume_mult:mult,
-        take_profit_pct:tp, start}),
+        take_profit_pct: tpSteps ? (tpSteps[tpSteps.length-1]?.profit_percentage ?? tp) : tp,
+        take_profit_steps: tpSteps || undefined, start}),
     });
     const j = await r.json();
     if(!j.ok){ toast(j.msg||'Failed','err'); return; }
@@ -2642,15 +2743,20 @@ async function confirmEditDca(){
   const count = parseInt  (document.getElementById('dca_count').value);
   const step  = parseFloat(document.getElementById('dca_step').value);
   const mult  = parseFloat(document.getElementById('dca_mult').value);
-  const tp    = parseFloat(document.getElementById('dca_tp').value);
-  if(isNaN(base)||isNaN(so)||isNaN(tp)){ toast('Fill in all fields','err'); return; }
+  const tp      = parseFloat(document.getElementById('dca_tp')?.value);
+  const tpSteps = _dcaGetTpSteps();
+  if(tpSteps === false) return;
+  if(!tpSteps && isNaN(tp)){ toast('Fill in TP %','err'); return; }
+  if(isNaN(base)||isNaN(so)){ toast('Fill in all fields','err'); return; }
   try{
     const r = await apiFetch(`${API}/dca/bots/${botId}`, {
       method:'PUT',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({base_order_usd:base, safety_order_usd:so,
         safety_order_count:count, safety_order_step_pct:step,
-        safety_order_volume_mult:mult, take_profit_pct:tp}),
+        safety_order_volume_mult:mult,
+        take_profit_pct: tpSteps ? (tpSteps[tpSteps.length-1]?.profit_percentage ?? tp) : tp,
+        take_profit_steps: tpSteps || undefined}),
     });
     const j = await r.json();
     if(!j.ok){ toast(j.msg||'Failed','err'); return; }

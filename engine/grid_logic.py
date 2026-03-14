@@ -56,9 +56,9 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
     levels = base_levels
     if compression:
         levels = int(levels * 1.5)   # denser grids when vol is squeezed
-    if session == "ASIA":
+    if session in ("ASIA", "WKD_ASIA"):
         levels += 2
-    elif session == "US":
+    elif session in ("US", "WKD_US"):
         levels -= 2
     levels = max(levels, 6)
 
