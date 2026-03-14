@@ -51,11 +51,11 @@ _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "breakout
 
 # ── Tuning constants ───────────────────────────────────────────────────────────
 MOMENTUM_STREAK     = 4      # consecutive same-direction closes required
-MOMENTUM_ATR_MULT   = 1.0    # total move over those N bars must exceed ATR × this
+MOMENTUM_ATR_MULT   = 1.5    # total move over those N bars must exceed ATR × this (was 1.0 — too sensitive on weekends)
 VOLATILITY_MULT     = 1.7    # ATR spike multiplier (was 1.8, tested 1.5)
 BB_MULT             = 2.0    # BB width spike multiplier (unchanged)
 PROXIMITY_ATR_MULT  = 1.0    # proximity alert when within ATR × this of grid edge
-EXHAUSTION_AVG_MULT = 0.05   # 5-candle avg move < ATR×this → momentum stalling
+EXHAUSTION_AVG_MULT = 0.20   # 5-candle avg move < ATR×this → momentum stalling (was 0.05 — never triggered)
 EXHAUSTION_WINDOW   = 5      # candles to average for exhaustion check
 
 
@@ -167,6 +167,9 @@ def breakout_exhausting(df) -> bool:
     Returns True when an active breakout's momentum is stalling —
     5-candle average move drops below ATR × EXHAUSTION_AVG_MULT.
 
+    Also returns True if price has recovered back past the fire price
+    (false positive detection — the "breakout" reversed immediately).
+
     Engine should use this to trigger grid redeployment at the new price level.
     Automatically clears active breakout state when exhaustion is confirmed.
     """
@@ -176,6 +179,26 @@ def breakout_exhausting(df) -> bool:
 
     if len(df) < EXHAUSTION_WINDOW + 1:
         return False
+
+    price     = df.close.iloc[-1]
+    fire      = s.get("fire_price")
+    direction = s.get("active")
+
+    # Price recovery check — if price has moved back past the fire price,
+    # the breakout was a false positive and we should redeploy immediately.
+    if fire:
+        if direction == "DOWN" and price > fire:
+            print(f"Breakout DOWN cancelled — price ${price:,.0f} recovered above fire ${fire:,.0f}")
+            s["active"] = None; s["fire_price"] = None
+            s["consec_up"] = 0; s["consec_down"] = 0
+            _save_state(s)
+            return True
+        if direction == "UP" and price < fire:
+            print(f"Breakout UP cancelled — price ${price:,.0f} fell back below fire ${fire:,.0f}")
+            s["active"] = None; s["fire_price"] = None
+            s["consec_up"] = 0; s["consec_down"] = 0
+            _save_state(s)
+            return True
 
     moves = [
         abs(df.close.iloc[-i] - df.close.iloc[-i - 1])

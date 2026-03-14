@@ -34,3 +34,6 @@ class EngineState:
         self.trending_up   = False
         self.trending_down = False
         self.gap_ratio     = 0.0
+
+        # tiers (populated by calculate_grid_parameters)
+        self.tiers = []

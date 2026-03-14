@@ -21,12 +21,15 @@ BASE_3C      = "https://api.3commas.io/public/api"
 
 def _load_private_key():
     path = API_SECRET.strip() if API_SECRET else "/root/grid-engine/3commas_private.pem"
+    if not os.path.exists(path):
+        # Fall back to server default if configured path doesn't exist (e.g. stale Mac path in .env)
+        path = "/root/grid-engine/3commas_private.pem"
     with open(path, "rb") as f:
         pem = f.read()
     return serialization.load_pem_private_key(pem, password=None)
 
 
-def signed_request(method, path, body=None):
+def signed_request(method, path, body=None, params=None):
     payload     = json.dumps(body) if body else ""
     sign_target = ("/public/api" + path + payload).encode()
     private_key = _load_private_key()
@@ -34,7 +37,7 @@ def signed_request(method, path, body=None):
         private_key.sign(sign_target, padding.PKCS1v15(), hashes.SHA256())
     ).decode()
     headers = {"Apikey": API_KEY, "Signature": sig, "Content-Type": "application/json"}
-    return req.request(method, BASE_3C + path, headers=headers, data=payload, timeout=10)
+    return req.request(method, BASE_3C + path, headers=headers, data=payload, params=params, timeout=10)
 
 
 # ── Serve dashboard HTML ──────────────────────────────────
@@ -46,11 +49,13 @@ def index():
 # ── Engine status ─────────────────────────────────────────
 @app.route("/status")
 def status():
+    if not os.path.exists(STATUS_FILE):
+        return jsonify({"engine_running": False, "no_status_file": True})
     try:
         with open(STATUS_FILE) as f:
             return jsonify(json.load(f))
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"engine_running": False, "parse_error": str(e)})
 
 
 # ── Live BTC price via Coinbase ───────────────────────────
@@ -118,6 +123,52 @@ def stop_bot(bot_id):
     try:
         r = signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
         return jsonify({"ok": True, "code": r.status_code})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Bot fills (completed grid cycles) ─────────────────────
+_fills_cache = {"data": None, "ts": 0.0}
+
+@app.route("/bots/fills")
+def bot_fills():
+    global _fills_cache
+    now = time.time()
+    if _fills_cache["data"] is not None and now - _fills_cache["ts"] < 300:
+        return jsonify(_fills_cache["data"])
+    try:
+        ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
+        fills = []
+        for i, bid in enumerate(ids[:3]):
+            r = signed_request("GET", f"/ver1/grid_bots/{bid}/profits", params={"limit": 100})
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            if not isinstance(data, list):
+                continue
+            for item in data:
+                # Pick a representative price from the grid_lines (prefer the sell side)
+                price = 0.0
+                gls = item.get("grid_lines") or []
+                for gl in gls:
+                    if (gl.get("side") or "").lower() == "sell":
+                        price = float(gl.get("price") or 0)
+                        break
+                if not price:
+                    for gl in gls:
+                        price = float(gl.get("price") or 0)
+                        if price:
+                            break
+                fills.append({
+                    "bot_id":     bid,
+                    "bot_index":  i,
+                    "time":       item.get("created_at"),
+                    "price":      price,
+                    "profit_usd": float(item.get("profit_usd") or item.get("usd_profit") or 0),
+                })
+        fills.sort(key=lambda x: x["time"] or "")
+        _fills_cache = {"data": fills, "ts": now}
+        return jsonify(fills)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -227,6 +278,49 @@ def set_trendline():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Bot ID config ────────────────────────────────────────
+@app.route("/config/bots", methods=["GET", "POST"])
+def config_bots():
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if request.method == "GET":
+        return jsonify({"bot_ids": os.getenv("GRID_BOT_IDS", "")})
+    body    = request.get_json(force=True, silent=True) or {}
+    new_ids = body.get("bot_ids", "").strip()
+    if not new_ids:
+        return jsonify({"ok": False, "msg": "bot_ids required"}), 400
+    try:
+        lines   = open(env_path).readlines() if os.path.exists(env_path) else []
+        updated = False
+        for i, line in enumerate(lines):
+            if line.startswith("GRID_BOT_IDS="):
+                lines[i] = f"GRID_BOT_IDS={new_ids}\n"
+                updated = True
+                break
+        if not updated:
+            lines.append(f"GRID_BOT_IDS={new_ids}\n")
+        with open(env_path, "w") as f:
+            f.writelines(lines)
+        os.environ["GRID_BOT_IDS"] = new_ids
+        return jsonify({"ok": True, "msg": "Bot IDs saved — restart engine to apply"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+# ── Breakout state management ─────────────────────────────
+@app.route("/breakout/clear", methods=["POST"])
+def breakout_clear():
+    state_file = os.path.join(os.path.dirname(__file__), "breakout_state.json")
+    try:
+        import json as _json
+        _json.dump(
+            {"consec_up": 0, "consec_down": 0, "active": None, "fire_price": None},
+            open(state_file, "w")
+        )
+        return jsonify({"ok": True, "msg": "Breakout state cleared"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 # ── Logging endpoints ────────────────────────────────────
 @app.route("/log/status")
 def log_status():
@@ -251,7 +345,28 @@ def log_clear():
 
 
 # ── Engine process management ────────────────────────────
-_engine_proc = None
+_engine_proc   = None
+_engine_output = []   # rolling buffer of last 200 lines
+_engine_lock   = __import__("threading").Lock()
+
+
+def _drain_output(proc):
+    """Background thread: drain engine stdout into _engine_output buffer."""
+    for raw in iter(proc.stdout.readline, b""):
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        with _engine_lock:
+            _engine_output.append(line)
+            if len(_engine_output) > 200:
+                _engine_output.pop(0)
+    # process has exited — read any remaining bytes
+    rest = proc.stdout.read()
+    if rest:
+        for line in rest.decode("utf-8", errors="replace").splitlines():
+            with _engine_lock:
+                _engine_output.append(line)
+                if len(_engine_output) > 200:
+                    _engine_output.pop(0)
+
 
 def _engine_running():
     global _engine_proc
@@ -265,6 +380,11 @@ def _engine_running():
 def engine_status():
     return jsonify({"running": _engine_running()})
 
+@app.route("/engine/output")
+def engine_output():
+    with _engine_lock:
+        return jsonify({"lines": list(_engine_output)})
+
 @app.route("/engine/start", methods=["POST"])
 def engine_start():
     global _engine_proc
@@ -273,15 +393,25 @@ def engine_start():
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         python_bin = sys.executable
+        with _engine_lock:
+            _engine_output.clear()
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
         _engine_proc = subprocess.Popen(
-            [python_bin, os.path.join(script_dir, "engine.py")],
+            [python_bin, "-u", os.path.join(script_dir, "engine.py")],
             cwd=script_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            env=env,
         )
-        time.sleep(0.5)
+        __import__("threading").Thread(
+            target=_drain_output, args=(_engine_proc,), daemon=True
+        ).start()
+        time.sleep(1.5)
         if _engine_proc.poll() is not None:
-            return jsonify({"ok": False, "msg": "Engine exited immediately — check logs"}), 500
+            with _engine_lock:
+                tail = "\n".join(_engine_output[-20:])
+            return jsonify({"ok": False, "msg": f"Engine exited — output:\n{tail}"}), 500
         return jsonify({"ok": True, "msg": f"Engine started (pid {_engine_proc.pid})"})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500

@@ -120,6 +120,16 @@
   .TREND_UP    { background:rgba(0,230,118,.15); color:var(--green); }
   .TREND_DOWN  { background:rgba(255,61,90,.15);  color:var(--red); }
   .COMPRESSION { background:rgba(255,171,0,.15);  color:var(--amber); }
+  /* weekend session badge */
+  .session-wkd { color:var(--amber); font-size:9px; padding:1px 5px; border-radius:3px;
+                 background:rgba(255,171,0,.12); letter-spacing:.05em; }
+  /* breakout alert bar */
+  #breakoutAlert { display:none; padding:7px 14px; font-family:var(--mono); font-size:11px;
+                   text-align:center; letter-spacing:.06em; border-bottom:2px solid; }
+  #breakoutAlert.show { display:flex; align-items:center; justify-content:center; gap:10px; }
+  #breakoutAlert .bo-clear { font-size:9px; padding:2px 8px; border-radius:3px; cursor:pointer;
+                              background:rgba(255,255,255,.08); border:1px solid currentColor;
+                              color:inherit; font-family:var(--mono); }
 
   /* controls */
   .ctl-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:5px; display:block; }
@@ -317,6 +327,10 @@
   animation:flashRed 1s ease-in-out infinite;">
   ⚠ PRICE CROSSED TRENDLINE — <span id="crossAlertMsg"></span>
 </div>
+<div id="breakoutAlert" style="position:fixed;top:48px;left:0;right:300px;z-index:59;">
+  <span id="breakoutAlertMsg"></span>
+  <button class="bo-clear" onclick="clearBreakout()">Clear ✕</button>
+</div>
 
 <main>
   <!-- Canvas overlay — sits on top of LightweightCharts canvas -->
@@ -365,6 +379,10 @@
     <div class="row"><span class="rk">Compression</span><span class="rv" id="sComp">—</span></div>
     <div class="row"><span class="rk">Active TL</span><span class="rv a" id="sTL">—</span></div>
     <div class="row"><span class="rk">Inv. Mode</span><span class="rv" id="sInvMode">—</span></div>
+    <div class="row" id="boRow" style="display:none">
+      <span class="rk">Breakout</span>
+      <span class="rv" id="sBreakout">—</span>
+    </div>
     <div class="hr"></div>
     <div class="sec-title">Grid Tiers</div>
     <div id="tierRows">
@@ -427,7 +445,7 @@
   <div class="sec">
     <div class="sec-title">Inventory Mode</div>
     <div class="btn-row">
-      <button class="cbtn on-b" id="mNormal" onclick="setMode('NORMAL')">NORMAL</button>
+      <button class="cbtn" id="mNormal" onclick="setMode('NORMAL')">NORMAL</button>
       <button class="cbtn" id="mBuy"    onclick="setMode('BUY_ONLY')">BUY ONLY</button>
       <button class="cbtn" id="mSell"   onclick="setMode('SELL_ONLY')">SELL ONLY</button>
     </div>
@@ -456,8 +474,8 @@
     <div class="hr"></div>
     <span class="ctl-lbl">Dry Run Mode</span>
     <div class="btn-row">
-      <button class="cbtn on-a" id="dryOn"  onclick="setDry(true)">ON — safe</button>
-      <button class="cbtn"      id="dryOff" onclick="setDry(false)">OFF — live</button>
+      <button class="cbtn" id="dryOn"  onclick="setDry(true)">ON — safe</button>
+      <button class="cbtn" id="dryOff" onclick="setDry(false)">OFF — live</button>
     </div>
     <div class="hr"></div>
     <span class="ctl-lbl">Engine Log</span>
@@ -469,6 +487,20 @@
       <button class="cbtn" onclick="downloadLog()" style="flex:1;">↓ Download</button>
       <button class="cbtn" onclick="clearLog()"    style="flex:1;border-color:var(--red);color:var(--red);">✕ Clear</button>
     </div>
+  </div>
+
+  <!-- BOT IDS -->
+  <div class="sec">
+    <div class="sec-title">Bot IDs</div>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:center;margin-bottom:8px;">
+      <span class="ctl-lbl" style="margin:0">Inner</span>
+      <input class="cinput" id="botId0" type="text" placeholder="e.g. 2743334" style="font-size:10px;padding:4px 7px;">
+      <span class="ctl-lbl" style="margin:0">Mid</span>
+      <input class="cinput" id="botId1" type="text" placeholder="e.g. 2743332" style="font-size:10px;padding:4px 7px;">
+      <span class="ctl-lbl" style="margin:0">Outer</span>
+      <input class="cinput" id="botId2" type="text" placeholder="e.g. 2743331" style="font-size:10px;padding:4px 7px;">
+    </div>
+    <button class="cbtn" onclick="saveBotIds()" style="width:100%;border-color:var(--accent);color:var(--accent);">Save IDs (restart to apply)</button>
   </div>
 
   <!-- TRENDLINES -->
@@ -632,9 +664,10 @@ const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
 let chart, candles, gridLines=[];
 let showGrid=true, showTL=true;
 let currentTf='1h';
+let fillsData=[];
 let status={};
 let bots=[];
-let dryRun=true;
+let dryRun=false;   // synced from engine status on first poll; default false (live)
 let prevPrice=null;
 let connected=false;
 
@@ -701,6 +734,7 @@ async function loadCandles(tf){
     }
 
     redrawLines();
+    applyFillMarkers();
     document.getElementById('chartErr').style.display = 'none';
     setConnected(true);
   } catch(e){
@@ -781,9 +815,10 @@ async function pollStatus(){
     const r = await fetch(`${API}/status`);
     if(!r.ok) throw new Error(r.status);
     const d = await r.json();
-    if(d.error) throw new Error(d.error);
-    status = d;
+    // d.error means the engine had an error — server IS reachable, don't disconnect
     setConnected(true);
+    if(d.error || d.no_status_file || d.parse_error) return;
+    status = d;
 
     const f = v => `$${Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
     const n = v => Number(v).toFixed(2);
@@ -798,8 +833,11 @@ async function pollStatus(){
     }
     prevPrice = d.price;
 
+    // Sync dry-run button state to what the engine actually reports
+    if(d.dry_run !== undefined) setDry(d.dry_run, /*silent=*/true);
+
     document.getElementById('pRegime').textContent  = d.regime||'—';
-    document.getElementById('pSession').textContent = d.session||'—';
+    // pSession updated below with weekend styling
     document.getElementById('pAtr').textContent     = n(d.atr);
     // Tier pills in header
     if(d.tiers && d.tiers.length){
@@ -817,7 +855,7 @@ async function pollStatus(){
     }
     if(d.tiers) status.tiers = d.tiers;
     document.getElementById('pInv').textContent     = `${(d.btc_ratio*100).toFixed(1)}%`;
-    const sk = d.skew;
+    const sk = d.skew ?? 0;
     document.getElementById('pSkew').textContent    = `${sk>=0?'+':''}${sk.toFixed(4)}`;
 
     // sidebar
@@ -876,6 +914,41 @@ async function pollStatus(){
     });
 
     document.getElementById('lastSync').textContent = new Date(d.timestamp).toLocaleTimeString();
+
+    // Session badge — highlight weekend sessions
+    const sesEl = document.getElementById('sSession');
+    if(d.session && d.session.startsWith('WKD_')){
+      sesEl.innerHTML = `<span class="session-wkd">⚑ ${d.session}</span>`;
+    } else {
+      sesEl.textContent = d.session || '—';
+    }
+    const pSesEl = document.getElementById('pSession');
+    if(pSesEl) pSesEl.textContent = d.session || '—';
+
+    // Breakout alert banner
+    const boAlert = document.getElementById('breakoutAlert');
+    const boRow   = document.getElementById('boRow');
+    if(d.breakout_active){
+      const dir   = d.breakout_active;
+      const fire  = d.breakout_fire_price;
+      const move  = d.price - fire;
+      const isDown = dir === 'DOWN';
+      const col   = isDown ? 'var(--red)' : 'var(--green)';
+      const bg    = isDown ? 'rgba(255,61,90,.15)' : 'rgba(0,230,118,.12)';
+      boAlert.style.background    = bg;
+      boAlert.style.borderColor   = isDown ? 'var(--red)' : 'var(--green)';
+      boAlert.style.color         = col;
+      boAlert.classList.add('show');
+      document.getElementById('breakoutAlertMsg').textContent =
+        `🚨 BREAKOUT ${dir} — fire: ${f(fire)} | Δ ${move>=0?'+':''}$${Math.round(move).toLocaleString()} | ${isDown?'all bots halted':'inner+mid paused'}`;
+      boRow.style.display = '';
+      document.getElementById('sBreakout').innerHTML =
+        `<span style="color:${col};font-weight:700">${dir}</span> @ ${f(fire)}`;
+    } else {
+      boAlert.classList.remove('show');
+      boRow.style.display = 'none';
+    }
+
     redrawLines();
 
   } catch(e){
@@ -937,7 +1010,8 @@ async function loadBots(){
     }).join('');
 
     // legend
-    document.getElementById('botLegendLines').innerHTML = bots.map((b,i)=>`
+    const legEl = document.getElementById('botLegendLines');
+    if(legEl) legEl.innerHTML = bots.map((b,i)=>`
       <div class="leg-row" style="margin-top:3px;">
         <div class="leg-line" style="background:${BOT_COLORS[i]}"></div>
         ${b.name||'Bot '+b.id}
@@ -948,6 +1022,38 @@ async function loadBots(){
     document.getElementById('botCards').innerHTML =
       '<div style="color:var(--muted);font-size:10px">Bot data unavailable — check server</div>';
   }
+}
+
+// ── FILLS / MARKERS ───────────────────────────────────────
+async function loadFills(){
+  try {
+    const r = await fetch(`${API}/bots/fills`);
+    if(!r.ok) return;
+    const data = await r.json();
+    if(!Array.isArray(data)) return;
+    fillsData = data;
+    applyFillMarkers();
+  } catch(e){}
+}
+
+function applyFillMarkers(){
+  if(!candles || !fillsData.length) return;
+  const gran = {'5m':300,'1h':3600,'4h':21600,'6h':21600,'1d':86400}[currentTf] || 3600;
+  const markers = fillsData
+    .filter(f => f.price > 0 && f.time)
+    .map(f => {
+      const snapped = Math.floor(new Date(f.time).getTime() / 1000 / gran) * gran;
+      const col = BOT_COLORS[f.bot_index] || '#888';
+      return {
+        time:     snapped,
+        position: 'aboveBar',
+        color:    col,
+        shape:    'circle',
+        text:     f.profit_usd > 0 ? `+$${f.profit_usd.toFixed(2)}` : '',
+      };
+    })
+    .sort((a,b) => a.time - b.time);
+  try { candles.setMarkers(markers); } catch(e){}
 }
 
 // ── ACTIONS ───────────────────────────────────────────────
@@ -1037,11 +1143,49 @@ async function setMode(mode){
 
 
 
-function setDry(v){
+// ── BREAKOUT CLEAR ───────────────────────────────────────
+async function clearBreakout(){
+  try{
+    const r = await fetch(`${API}/breakout/clear`, {method:'POST'});
+    const d = await r.json();
+    toast(d.msg, d.ok ? 'ok' : 'err');
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+// ── BOT ID CONFIG ────────────────────────────────────────
+async function loadBotIds(){
+  try{
+    const r = await fetch(`${API}/config/bots`);
+    const d = await r.json();
+    const ids = (d.bot_ids || '').split(',').map(x => x.trim());
+    ['botId0','botId1','botId2'].forEach((elId, i) => {
+      const el = document.getElementById(elId);
+      if(el && ids[i]) el.value = ids[i];
+    });
+  } catch(e){}
+}
+
+async function saveBotIds(){
+  const ids = ['botId0','botId1','botId2']
+    .map(id => document.getElementById(id).value.trim())
+    .filter(Boolean)
+    .join(',');
+  if(!ids){ toast('Enter at least one bot ID','err'); return; }
+  try{
+    const r = await fetch(`${API}/config/bots`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({bot_ids: ids})
+    });
+    const d = await r.json();
+    toast(d.msg, d.ok ? 'ok' : 'err');
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+function setDry(v, silent=false){
   dryRun=v;
   document.getElementById('dryOn').className  = `cbtn ${v?'on-a':''}`;
   document.getElementById('dryOff').className = `cbtn ${!v?'on-r':''}`;
-  toast(v?'DRY RUN on — no real actions':'⚠ LIVE MODE — real orders will fire', v?'ok':'err');
+  if(!silent) toast(v?'DRY RUN on — no real actions':'⚠ LIVE MODE — real orders will fire', v?'ok':'err');
 }
 
 function toggleGrid(v){
@@ -1654,7 +1798,9 @@ initTlCanvas();
 loadCandles(currentTf);
 pollStatus();
 loadBots();
+loadFills();
 loadOverrideState();
+loadBotIds();
 pollEngineProc();
 loadTrendlines();
 setInterval(pollStatus, 5000);
@@ -1662,6 +1808,7 @@ setInterval(pollEngineProc, 5000);
 setInterval(pollLogStatus, 10000);
 setInterval(()=>loadCandles(currentTf), 60000);
 setInterval(loadBots, 30000);
+setInterval(loadFills, 300000);
 setInterval(tickTrendlines, 1000);   // live level + cross detection every second
 
 // ── SIDEBAR TABS ─────────────────────────────────────────────
