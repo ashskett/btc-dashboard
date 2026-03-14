@@ -258,7 +258,7 @@
   }
 
   /* SIDEBAR TABS */
-  .aside-tabs { display:grid; grid-template-columns:repeat(4,1fr); border-bottom:1px solid var(--border); flex-shrink:0; }
+  .aside-tabs { display:grid; grid-template-columns:repeat(5,1fr); border-bottom:1px solid var(--border); flex-shrink:0; }
   .aside-tab {
     padding:9px 2px; font-family:var(--ui); font-size:9.5px; font-weight:600;
     letter-spacing:.06em; text-transform:uppercase; color:var(--muted);
@@ -376,6 +376,7 @@
   <!-- SIDEBAR TAB BAR -->
   <div class="aside-tabs">
     <button class="aside-tab active" id="tabControls" onclick="switchTab('controls')">Controls</button>
+    <button class="aside-tab"        id="tabGrid"     onclick="switchTab('grid');loadBots()">Grid</button>
     <button class="aside-tab"        id="tabPnl"      onclick="switchTab('pnl')">P&amp;L</button>
     <button class="aside-tab"        id="tabDca"      onclick="switchTab('dca')">DCA</button>
     <button class="aside-tab"        id="tabBalance"  onclick="switchTab('balance');loadBalance()">Balance</button>
@@ -447,12 +448,6 @@
       <button class="cbtn" onclick="applyInvOverride()">Apply Override</button>
       <button class="cbtn on-r" id="clearInvBtn" style="display:none;" onclick="clearInvOverride()">Clear</button>
     </div>
-  </div>
-
-  <!-- BOTS -->
-  <div class="sec">
-    <div class="sec-title">Bots <span id="botCountLbl" style="color:var(--muted)"></span></div>
-    <div id="botCards"><div style="color:var(--muted);font-size:10px;">Loading bots…</div></div>
   </div>
 
   <!-- INVENTORY MODE -->
@@ -684,6 +679,21 @@
     </div><!-- end #pnlResults -->
 
   </div><!-- end #panelPnl -->
+
+  <!-- ── GRID PANEL ── -->
+  <div class="aside-panel" id="panelGrid">
+    <div class="sec">
+      <div class="sec-title">
+        Grid Bots <span id="gridBotCountLbl" style="color:var(--muted)"></span>
+        <div style="display:flex;gap:4px;">
+          <button class="cbtn on-b" onclick="loadBots()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
+          <button class="cbtn" onclick="allBots('start')" style="font-size:9px;padding:3px 8px;flex:none;border-color:var(--green);color:var(--green);">▶ All</button>
+          <button class="cbtn" onclick="allBots('stop')"  style="font-size:9px;padding:3px 8px;flex:none;border-color:var(--red);color:var(--red);">■ All</button>
+        </div>
+      </div>
+      <div id="gridBotCards"><div style="color:var(--muted);font-size:10px;">Loading bots…</div></div>
+    </div>
+  </div><!-- end #panelGrid -->
 
   <!-- ── DCA PANEL ── -->
   <div class="aside-panel" id="panelDca">
@@ -1144,9 +1154,9 @@ async function loadBots(){
     const data = await r.json();
     if(!Array.isArray(data)) throw new Error('bad');
     bots = data;
-    document.getElementById('botCountLbl').textContent = `(${bots.length})`;
+    document.getElementById('gridBotCountLbl').textContent = `(${bots.length})`;
 
-    const cont = document.getElementById('botCards');
+    const cont = document.getElementById('gridBotCards');
     if(!bots.length){ cont.innerHTML='<div style="color:var(--muted);font-size:10px">No bots in GRID_BOT_IDS</div>'; return; }
 
     const TIER_META = [
@@ -1154,6 +1164,8 @@ async function loadBots(){
       {name:'Mid',   desc:'swing range'},
       {name:'Outer', desc:'wide catch'},
     ];
+    const btcPrice = (status && status.price) ? status.price : 0;
+
     cont.innerHTML = bots.map((b,i)=>{
       const on     = b.is_enabled;
       const name   = b.name || `Bot ${b.id}`;
@@ -1162,7 +1174,16 @@ async function loadBots(){
       const tier   = (status.tiers && status.tiers[i]) || null;
       const tm     = TIER_META[i] || {name:'—', desc:'—'};
       const col    = BOT_COLORS[i % BOT_COLORS.length];
-      const feeOk = tier ? tier.fee_ok !== false : true;
+      const feeOk  = tier ? tier.fee_ok !== false : true;
+
+      // Capital in USDC: qty_per_grid (BTC) × levels × btcPrice
+      const qpg    = parseFloat(b.quantity_per_grid || 0);
+      const lvls   = parseInt(b.grids_quantity || 0);
+      const capUsdc = qpg && lvls && btcPrice ? Math.round(qpg * lvls * btcPrice) : 0;
+      const perLvl  = qpg && btcPrice ? Math.round(qpg * btcPrice) : 0;
+      const capStr  = capUsdc ? `≈ $${capUsdc.toLocaleString()}` : '—';
+      const lvlStr  = perLvl  ? `≈ $${perLvl.toLocaleString()}/lvl` : qpg ? `${qpg} BTC/lvl` : '—';
+
       const tierLine = tier
         ? `<div class="bot-tier" style="color:${col}">
              ${tm.name} — ${tm.desc} &nbsp;·&nbsp;
@@ -1183,20 +1204,14 @@ async function loadBots(){
           <div class="bm">ID<span>#${b.id}</span></div>
         </div>
         <div class="bot-meta" style="margin-top:4px;">
-          <div class="bm">Capital<span style="color:var(--accent);">$${
-            b.quantity_per_grid && b.grids_quantity
-              ? Math.round(b.quantity_per_grid * b.grids_quantity).toLocaleString()
-              : '—'
-          }</span></div>
-          <div class="bm">$/level<span>${
-            b.quantity_per_grid ? '$'+Number(b.quantity_per_grid).toFixed(2) : '—'
-          }</span></div>
-          <div class="bm">Levels<span>${b.grids_quantity||'—'}</span></div>
+          <div class="bm" title="${qpg} BTC × ${lvls} lvls × $${btcPrice.toLocaleString()}">Capital<span style="color:var(--accent);">${capStr}</span></div>
+          <div class="bm">Per level<span style="color:var(--muted);">${lvlStr}</span></div>
+          <div class="bm">Qty/grid<span style="color:var(--muted);font-size:9px;">${qpg ? qpg+' BTC' : '—'}</span></div>
         </div>
         <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
-          <input id="cap_${b.id}" type="number" min="100" step="50"
-            placeholder="Total USDC"
-            value="${b.quantity_per_grid && b.grids_quantity ? Math.round(b.quantity_per_grid * b.grids_quantity) : ''}"
+          <input id="cap_${b.id}" type="number" min="100" step="100"
+            placeholder="Total USDC to allocate"
+            value="${capUsdc || ''}"
             style="flex:1;background:#080c10;border:1px solid #1c2433;color:#c9d4e0;
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
           <button class="bot-btn" onclick="setGridCapital('${b.id}')"
@@ -1278,12 +1293,15 @@ async function setGridCapital(id){
   if(!inp) return;
   const total = parseFloat(inp.value);
   if(!total || total < 50){ toast('Enter a valid USDC amount (min $50)','err'); return; }
-  if(!confirm(`Set capital for bot ${id} to $${total.toFixed(0)} USDC?\n\nIf the bot is running it will be stopped, updated, then restarted.`)) return;
+  const btcPrice = (status && status.price) ? status.price : 0;
+  if(!btcPrice){ toast('Price not loaded yet — wait for status update','err'); return; }
+  const qtyBtc = (total / btcPrice).toFixed(6);
+  if(!confirm(`Set capital for bot ${id} to ≈ $${total.toFixed(0)} USDC (${qtyBtc} BTC/level × levels)?\n\nIf the bot is running it will be stopped, updated, then restarted.`)) return;
   try{
     const r = await apiFetch(`${API}/bots/${id}/capital`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({total_usd: total}),
+      body: JSON.stringify({total_usd: total, btc_price: btcPrice}),
     });
     const j = await r.json();
     if(!j.ok){ toast('Capital update failed: '+(j.error||'unknown'),'err'); return; }
@@ -2383,7 +2401,7 @@ function renderDcaBots(){
   // Calculate total max exposure across all bots
   let totalExposure = 0;
   const cards = _dcaBots.map(bot => {
-    const enabled  = bot.is_enabled;
+    const enabled  = bot.is_enabled || bot.enabled || false;
     const deals    = bot.active_deals_count || 0;
     const finished = bot.finished_deals_count || 0;
     const profit   = parseFloat(bot.active_deals_usd_profit || 0);
@@ -2470,8 +2488,10 @@ async function dcaBotDelete(id, name, enabled){
     toast('Pause the bot first, then delete','err'); return;
   }
   if(!confirm(`Delete DCA bot "${name}"?\n\nThis is permanent and cannot be undone.`)) return;
+  console.log('[dcaBotDelete] Deleting bot', id, name);
   try{
     const r = await apiFetch(`${API}/dca/bots/${id}`, {method:'DELETE'});
+    console.log('[dcaBotDelete] Status:', r.status, r.ok);
     if(r.ok || r.status === 204){
       toast('Bot deleted','ok');
       setTimeout(loadDcaBots, 1000);
@@ -2480,8 +2500,12 @@ async function dcaBotDelete(id, name, enabled){
     // Server returned an error — extract the message
     let msg = `HTTP ${r.status}`;
     try{ const j = await r.json(); msg = j.error || j.message || msg; }catch(_){}
-    toast('Delete failed: '+msg, 'err');
-  } catch(e){ toast('Network error: '+e.message,'err'); }
+    console.error('[dcaBotDelete] Error:', msg);
+    alert('Delete failed:\n\n' + msg);
+  } catch(e){
+    console.error('[dcaBotDelete] Exception:', e);
+    alert('Delete network error:\n\n' + e.message);
+  }
 }
 
 // ── DCA Create / Edit modal ───────────────────────────────────

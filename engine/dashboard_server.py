@@ -219,6 +219,7 @@ def set_grid_bot_capital(bot_id):
     try:
         body      = request.get_json(force=True, silent=True) or {}
         total_usd = float(body.get("total_usd", 0))
+        btc_price = float(body.get("btc_price", 0))
         if total_usd <= 0:
             return jsonify({"ok": False, "error": "total_usd must be > 0"}), 400
 
@@ -228,7 +229,11 @@ def set_grid_bot_capital(bot_id):
             return jsonify({"ok": False, "error": f"3Commas {r.status_code}: {r.text[:200]}"}), 502
         current   = r.json()
         levels    = int(current.get("grids_quantity") or 10)
-        qty       = round(total_usd / levels, 2)
+        # quantity_per_grid is in BTC for BTC/USDC bots — convert from USDC total
+        if btc_price > 0:
+            qty = round(total_usd / (levels * btc_price), 6)  # BTC per grid level
+        else:
+            qty = round(total_usd / levels, 2)  # fallback: treat as quote currency
         was_on    = bool(current.get("is_enabled", False))
 
         if was_on:
