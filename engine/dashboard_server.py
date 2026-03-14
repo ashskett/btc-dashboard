@@ -485,6 +485,7 @@ def dca_exposure():
 
 
 # ── Price targets ─────────────────────────────────────────
+from price_targets import (
     load_targets, add_target, update_target, delete_target, clear_target
 )
 
