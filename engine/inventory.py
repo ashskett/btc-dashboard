@@ -130,18 +130,29 @@ def calculate_inventory():
         _signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
     except Exception as e:
         print(f"Warning: load_balances failed ({e}) — proceeding with cached data")
-    time.sleep(2)  # reduced from 3s — 2s is sufficient for 3Commas to update
+    time.sleep(3)  # give 3Commas time to refresh its balance cache
 
-    # Step 2: fetch per-currency breakdown
-    r = _signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
+    # Step 2: fetch per-currency breakdown.
+    # 3Commas occasionally returns 204/empty immediately after load_balances
+    # before its internal cache has updated — retry up to 3× with backoff.
+    assets = None
+    for attempt in range(1, 4):
+        r = _signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
+        if r.status_code == 204 or not r.text.strip():
+            if attempt < 3:
+                wait = attempt * 3
+                print(f"Warning: 3Commas returned empty balance data "
+                      f"(attempt {attempt}/3) — retrying in {wait}s")
+                time.sleep(wait)
+            else:
+                print("Warning: 3Commas returned empty balance data after 3 attempts "
+                      "— using neutral inventory (50/50)")
+                return 0.5, 0.0
+        else:
+            assets = r.json()
+            break
 
-    if r.status_code == 204 or not r.text.strip():
-        print("Warning: 3Commas returned empty balance data — using neutral inventory (50/50)")
-        return 0.5, 0.0
-
-    assets = r.json()
-
-    if not isinstance(assets, list):
+    if assets is None or not isinstance(assets, list):
         raise ValueError(f"Unexpected pie_chart_data response: {str(assets)[:300]}")
 
     btc = 0.0

@@ -243,6 +243,17 @@ def run():
             print(f"BREAKOUT ACTIVE ({_active_dir}) — fire=${_fire_price:,.0f}  "
                   f"current=${state.price:,.0f}  Δ=${_price_change:+,.0f}")
 
+            # Track grid centre drift during active breakout.
+            # Bots are NOT redeployed here (breakout still active), but keeping
+            # the centre current means the eventual exhaustion/recovery redeploy
+            # fires at the right level rather than one that may be several ATRs stale.
+            if drift_detected(state.price, state.center, state.grid_width, tilt=state.tilt or 0):
+                print(f"  Centre drift during {_active_dir} breakout — "
+                      f"advancing centre ${state.center:,.0f} → ${state.price:,.0f} "
+                      f"(bots held; no redeploy until breakout clears)")
+                update_grid_center(state.price)
+                state.center = state.price
+
             if breakout_exhausting(df):
                 print(f"BREAKOUT EXHAUSTING — momentum stalling at ${state.price:,.0f}  "
                       f"(moved ${_price_change:+,.0f} from fire price)")
@@ -452,8 +463,8 @@ def run():
                 "center":         state.center,
                 "trendline":      TRENDLINE if _trendline_active else None,
                 "trendline_gap":  round(state.price - TRENDLINE, 2) if _trendline_active else None,
-                "btc_ratio":      round(state.btc_ratio, 4) if state.btc_ratio else None,
-                "skew":           round(state.skew, 4) if state.skew else None,
+                "btc_ratio":      round(state.btc_ratio, 4) if state.btc_ratio is not None else None,
+                "skew":           round(state.skew, 4) if state.skew is not None else None,
                 "inventory_mode": state.inventory_mode,
                 "compression":    bool(state.compression),
                 "trending_up":    bool(getattr(state, "trending_up",   False)),
