@@ -16,7 +16,6 @@ BASE_URL   = "https://api.3commas.io/public/api"
 
 
 def _load_private_key():
-    # API_SECRET is a file path to the PEM file
     path = API_SECRET.strip() if API_SECRET else "/root/grid-engine/3commas_private.pem"
     with open(path, "rb") as f:
         pem = f.read()
