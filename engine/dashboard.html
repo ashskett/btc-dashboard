@@ -2539,12 +2539,15 @@ function dcaBotDelete(id, name, enabled){
     `Delete DCA bot "${name}"?\n\nThis is permanent and cannot be undone.`,
     async () => {
       console.log('[dcaBotDelete] Deleting bot', id, name);
+      // Optimistic update — remove from local list immediately so UI clears at once
+      _dcaBots = _dcaBots.filter(b => String(b.id) !== String(id));
+      renderDcaBots();
       try{
         const r = await apiFetch(`${API}/dca/bots/${id}`, {method:'DELETE'});
         console.log('[dcaBotDelete] Status:', r.status, r.ok);
         if(r.ok || r.status === 204){
           toast('Bot deleted','ok');
-          setTimeout(loadDcaBots, 1000);
+          setTimeout(loadDcaBots, 2000);
           return;
         }
         let msg = `HTTP ${r.status}`;

@@ -37,13 +37,19 @@ def detect_regime(df, trendline):
     # ─────────────────────────────────────────────────────────────────────────
 
     # Require 3 consecutive candles below the 10th percentile to confirm
-    # compression — prevents a single noisy candle triggering a regime flip
+    # compression — prevents a single noisy candle triggering a regime flip.
+    #
+    # MOMENTUM OVERRIDE (1H): if price has moved >1.5×ATR over the last 3 closes,
+    # force-exit compression even if BB/ATR haven't caught up yet.
     bb_threshold = df.bb_width.quantile(0.1)
     atr_mean = df.atr.mean()
 
+    price_change_3h = abs(df.close.iloc[-1] - df.close.iloc[-4]) if len(df) >= 4 else 0
+    momentum_exit = (atr > 0) and (price_change_3h > atr * 1.5)
+
     last_3_bb = df.bb_width.iloc[-3:]
     compression_confirmed = (
-        (last_3_bb < bb_threshold).all() and atr < atr_mean
+        (last_3_bb < bb_threshold).all() and atr < atr_mean and not momentum_exit
     )
 
     if compression_confirmed:
@@ -87,3 +93,44 @@ def trend_strength(price, trendline, atr):
         "trending_up":   bool(gap_ratio >  3.0),
         "trending_down": bool(gap_ratio < -1.5),
     }
+
+
+def compression_exit_fast(df_5m, atr_1h):
+    """Fast compression-exit check using 5m candles.
+
+    Called every engine cycle when the 1H regime is COMPRESSION.
+    Returns True if the 5m data shows momentum strong enough to
+    justify exiting compression immediately — without waiting for the
+    1H BB/ATR to catch up (which takes 1-3 hours).
+
+    Triggers on either:
+      (a) ATR expansion: 5m ATR > 1.5× its own rolling mean
+          (volatility picked up on short timeframe)
+      (b) Price run: abs move over last 6 5m-candles (30 min) > 0.5× 1H ATR
+          (price already travelled half a normal 1H range in under 30 min)
+
+    Both thresholds are deliberately conservative so we don't false-exit
+    on normal noise, only genuine directional moves.
+    """
+    if df_5m is None or len(df_5m) < 14:
+        return False
+
+    import ta as _ta
+    atr_5m = _ta.volatility.average_true_range(
+        df_5m["high"], df_5m["low"], df_5m["close"], window=14
+    ).iloc[-1]
+    atr_5m_mean = _ta.volatility.average_true_range(
+        df_5m["high"], df_5m["low"], df_5m["close"], window=14
+    ).mean()
+
+    # (a) Short-term ATR expansion
+    if atr_5m_mean > 0 and atr_5m > atr_5m_mean * 1.5:
+        return True
+
+    # (b) Significant price run in last 30 minutes (6 × 5m candles)
+    if len(df_5m) >= 6 and atr_1h and atr_1h > 0:
+        move_30m = abs(df_5m["close"].iloc[-1] - df_5m["close"].iloc[-6])
+        if move_30m > atr_1h * 0.5:
+            return True
+
+    return False

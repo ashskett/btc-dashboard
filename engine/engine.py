@@ -23,9 +23,9 @@ from grid_logic import (
     calculate_grid_parameters,
 )
 from dashboard import show_dashboard
-from market_data import get_btc_data
+from market_data import get_btc_data, get_btc_data_short
 from indicators import add_indicators
-from regime import detect_regime, trend_strength
+from regime import detect_regime, trend_strength, compression_exit_fast
 from threecommas import stop_bot, start_bot, redeploy_all_bots
 from price_targets import check_targets, update_target
 from threecommas_dca import (
@@ -154,6 +154,18 @@ def run():
         state.center = get_grid_center()
         state.regime = detect_regime(df, TRENDLINE)
         state.session = get_session()
+
+        # Fast compression exit — if the 1H regime is COMPRESSION, fetch 5m candles
+        # and check for momentum that the 1H indicators haven't yet detected.
+        # BB width and ATR lag by 1-3 hours; 5m data catches the move in <5 minutes.
+        if state.regime == "COMPRESSION":
+            try:
+                df_5m = get_btc_data_short(timeframe='5m', limit=30)
+                if compression_exit_fast(df_5m, state.atr):
+                    print("COMPRESSION fast-exit triggered by 5m momentum — overriding to RANGE")
+                    state.regime = "RANGE"
+            except Exception as _e:
+                print(f"Warning: 5m fast-exit check failed: {_e} — staying in COMPRESSION")
 
         # Trend strength — directional, asymmetric thresholds
         # trending_up (3×ATR) and trending_down (1.5×ATR) drive tiered bot decisions
