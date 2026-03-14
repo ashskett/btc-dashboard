@@ -807,12 +807,21 @@ def deploy_endpoint():
             results[fname] = f"error: {e}"
 
     def _restart():
-        time.sleep(0.8)
+        time.sleep(1.0)
         global _engine_proc
         if _engine_proc and _engine_proc.poll() is None:
             _engine_proc.terminate()
             time.sleep(0.5)
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        # Spawn new server with close_fds so it doesn't inherit the bound socket,
+        # then hard-exit current process so the OS releases port 5050.
+        script = os.path.abspath(__file__)
+        subprocess.Popen(
+            [sys.executable, script],
+            cwd=os.path.dirname(script),
+            close_fds=True,
+            start_new_session=True,
+        )
+        os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
     return jsonify({"status": "deploying", "branch": _DEPLOY_BRANCH, "files": results})
