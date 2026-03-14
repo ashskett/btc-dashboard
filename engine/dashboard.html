@@ -365,6 +365,7 @@
   <div class="aside-tabs">
     <button class="aside-tab active" id="tabControls" onclick="switchTab('controls')">Controls</button>
     <button class="aside-tab"        id="tabPnl"      onclick="switchTab('pnl')">P&amp;L</button>
+    <button class="aside-tab"        id="tabDca"      onclick="switchTab('dca')">DCA</button>
   </div>
 
   <!-- ── CONTROLS PANEL (existing content) ── -->
@@ -662,6 +663,24 @@
     </div><!-- end #pnlResults -->
 
   </div><!-- end #panelPnl -->
+
+  <!-- ── DCA PANEL ── -->
+  <div class="aside-panel" id="panelDca">
+
+    <div class="sec">
+      <div class="sec-title">
+        DCA Bots
+        <div style="display:flex;gap:4px;">
+          <button class="cbtn on-b" onclick="loadDcaBots()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
+          <button class="cbtn on-b" onclick="showCreateDcaModal()" style="font-size:9px;padding:3px 8px;flex:none;">+ Create</button>
+        </div>
+      </div>
+      <div id="dcaBotCards">
+        <div style="color:var(--muted);font-size:10px;">Loading DCA bots…</div>
+      </div>
+    </div>
+
+  </div><!-- end #panelDca -->
 
 </aside>
 
@@ -1529,6 +1548,68 @@ function showAddTargetModal(){
       </div>
     </div>
 
+    <!-- DCA toggle -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px;
+      background:#060a0e;border:1px solid #1c2433;border-radius:4px;">
+      <input type="checkbox" id="pt_dca_on" onchange="_ptToggleDca(this.checked)"
+        style="accent-color:var(--purple);width:14px;height:14px;cursor:pointer;"/>
+      <span style="font-size:9px;color:var(--purple);text-transform:uppercase;
+        letter-spacing:.08em;font-weight:700;">Launch DCA bot on trigger</span>
+    </div>
+    <div id="ptDcaFields" style="display:none;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">BASE ORDER $</div>
+          <input id="pt_dca_base" type="number" value="500" min="10" step="10"
+            style="width:100%;background:#080c10;border:1px solid #243044;color:#ffab00;
+            font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SAFETY ORDER $</div>
+          <input id="pt_dca_so" type="number" value="100" min="10" step="10"
+            style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+            font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">MAX SOs</div>
+          <input id="pt_dca_count" type="number" value="5" min="1" max="25"
+            style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+            font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">STEP %</div>
+          <input id="pt_dca_step" type="number" value="1.5" min="0.1" step="0.1"
+            style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+            font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">VOL MULT ×</div>
+          <input id="pt_dca_mult" type="number" value="1.2" min="1" step="0.05"
+            style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+            font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TAKE PROFIT %</div>
+          <input id="pt_dca_tp" type="number" value="2.0" min="0.1" step="0.1"
+            style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
+            font-family:'Space Mono',monospace;font-size:10px;font-weight:700;padding:5px 7px;border-radius:4px;"/>
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">PAIR</div>
+          <select id="pt_dca_pair" style="width:100%;background:#080c10;border:1px solid #243044;
+            color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;">
+            <option value="USDC_BTC">USDC_BTC</option>
+            <option value="USDT_BTC">USDT_BTC</option>
+            <option value="USD_BTC">USD_BTC</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <div style="display:flex;gap:6px;">
       <button onclick="confirmAddTarget()"
         style="flex:1;background:rgba(255,171,0,.12);border:1px solid #ffab00;color:#ffab00;
@@ -1546,23 +1627,39 @@ function showAddTargetModal(){
   document.getElementById('pt_label').focus();
 }
 
+function _ptToggleDca(on){
+  document.getElementById('ptDcaFields').style.display = on ? 'block' : 'none';
+}
+
 async function confirmAddTarget(){
   const label   = document.getElementById('pt_label').value.trim();
   const trigger = parseFloat(document.getElementById('pt_trigger').value);
   const tp      = document.getElementById('pt_tp').value ? parseFloat(document.getElementById('pt_tp').value) : null;
   const dir     = document.getElementById('pt_dir').value;
-  const confirm_closes   = parseInt(document.getElementById('pt_confirm').value) || 2;
+  const confirm_closes    = parseInt(document.getElementById('pt_confirm').value) || 2;
   const reversal_atr_mult = parseFloat(document.getElementById('pt_rev').value) || 2.0;
   const rearm_cooldown_h  = parseFloat(document.getElementById('pt_cool').value) || 4;
+  const dca_enabled       = document.getElementById('pt_dca_on').checked;
 
   if(!label){ toast('Label required','err'); return; }
   if(!trigger || isNaN(trigger)){ toast('Trigger price required','err'); return; }
 
+  const body = { label, trigger_price: trigger, direction: dir,
+    price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h, dca_enabled };
+
+  if(dca_enabled){
+    body.dca_base_order_usd      = parseFloat(document.getElementById('pt_dca_base').value) || 500;
+    body.dca_safety_count        = parseInt  (document.getElementById('pt_dca_count').value) || 5;
+    body.dca_safety_step_pct     = parseFloat(document.getElementById('pt_dca_step').value) || 1.5;
+    body.dca_safety_volume_mult  = parseFloat(document.getElementById('pt_dca_mult').value) || 1.2;
+    body.dca_tp_pct              = parseFloat(document.getElementById('pt_dca_tp').value)   || 2.0;
+    body.dca_pair                = document.getElementById('pt_dca_pair').value || 'USDC_BTC';
+  }
+
   try{
     const r = await apiFetch(`${API}/targets`, {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ label, trigger_price: trigger, direction: dir,
-        price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h })});
+      body: JSON.stringify(body)});
     const data = await r.json();
     if(!data.ok) throw new Error(data.msg);
     document.getElementById('ptModal').remove();
@@ -2145,6 +2242,351 @@ setInterval(()=>loadCandles(currentTf), 60000);
 setInterval(loadBots, 30000);
 setInterval(loadFills, 300000);
 setInterval(tickTrendlines, 1000);   // live level + cross detection every second
+loadDcaBots();
+setInterval(loadDcaBots, 60000);
+
+// ── DCA BOTS ─────────────────────────────────────────────────
+let _dcaBots = [];
+
+async function loadDcaBots(){
+  try{
+    const r = await apiFetch(`${API}/dca/bots`);
+    if(!r.ok) return;
+    _dcaBots = await r.json();
+    renderDcaBots();
+  } catch(e){ console.warn('loadDcaBots error:', e); }
+}
+
+function renderDcaBots(){
+  const el = document.getElementById('dcaBotCards');
+  if(!el) return;
+  if(!Array.isArray(_dcaBots) || _dcaBots.length === 0){
+    el.innerHTML = `<div style="color:var(--muted);font-size:10px;">No DCA bots yet — click Create to set one up.</div>`;
+    return;
+  }
+  el.innerHTML = _dcaBots.map(bot => {
+    const enabled  = bot.is_enabled;
+    const deals    = bot.active_deals_count || 0;
+    const finished = bot.finished_deals_count || 0;
+    const profit   = parseFloat(bot.active_deals_usd_profit || 0);
+    const pair     = (bot.pairs || ['USDC_BTC'])[0].replace('_','\/');
+    const base     = parseFloat(bot.base_order_volume  || 0).toFixed(0);
+    const so       = parseFloat(bot.safety_order_volume|| 0).toFixed(0);
+    const tp       = parseFloat(bot.take_profit        || 0).toFixed(2);
+    const step     = parseFloat(bot.safety_order_step_percentage || 0).toFixed(2);
+    const mult     = parseFloat(bot.martingale_volume_coefficient|| 1).toFixed(2);
+    const maxSo    = bot.max_safety_orders || 0;
+    const pCol     = profit >= 0 ? 'var(--green)' : 'var(--red)';
+    const stBg     = enabled ? 'rgba(0,230,118,.15)' : 'rgba(255,61,90,.1)';
+    const stCol    = enabled ? 'var(--green)'         : 'var(--red)';
+    const stTxt    = enabled ? 'ENABLED'              : 'DISABLED';
+    return `
+    <div class="bot-card" style="border-left-color:var(--purple);margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-family:var(--ui);font-size:10px;font-weight:700;color:var(--purple);">${bot.name||'DCA Bot'}</span>
+        <span style="background:${stBg};color:${stCol};font-size:8px;padding:2px 6px;border-radius:3px;font-weight:700;">${stTxt}</span>
+      </div>
+      <div class="row"><span class="rk">Pair</span><span class="rv" style="font-size:10px;">${pair}</span></div>
+      <div class="row"><span class="rk">Active deals</span><span class="rv c">${deals}</span></div>
+      <div class="row"><span class="rk">Finished</span><span class="rv" style="font-size:10px;">${finished}</span></div>
+      <div class="row"><span class="rk">Active P&L</span><span class="rv" style="color:${pCol}">${profit>=0?'+':''}$${profit.toFixed(2)}</span></div>
+      <div class="hr" style="margin:6px 0;"></div>
+      <div class="row"><span class="rk">Base / SO</span><span class="rv" style="font-size:10px;">$${base} / $${so}</span></div>
+      <div class="row"><span class="rk">Max SOs</span><span class="rv" style="font-size:10px;">${maxSo} × ${mult}× @ -${step}%</span></div>
+      <div class="row"><span class="rk">Take profit</span><span class="rv g">${tp}%</span></div>
+      <div class="hr" style="margin:6px 0;"></div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;">
+        ${enabled
+          ? `<button class="cbtn" onclick="dcaBotAct('${bot.id}','disable')" style="flex:1;border-color:var(--amber);color:var(--amber);">⏸ Pause</button>`
+          : `<button class="cbtn on-g" onclick="dcaBotAct('${bot.id}','enable')" style="flex:1;">▶ Start</button>`
+        }
+        <button class="cbtn" onclick="showEditDcaModal(${bot.id})"
+          style="flex:1;border-color:var(--accent);color:var(--accent);">✎ Edit</button>
+        <button class="cbtn on-r" onclick="dcaBotPanic('${bot.id}','${bot.name||'this bot'}')"
+          style="flex:0 0 auto;padding:6px 8px;" title="Panic sell — market exit">⚡</button>
+        <button class="cbtn" onclick="dcaBotDelete('${bot.id}','${(bot.name||'DCA Bot').replace(/'/g,'')}',${enabled})"
+          style="flex:0 0 auto;padding:6px 8px;border-color:#3a2020;color:#7a3030;" title="Delete bot">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function dcaBotAct(id, action){
+  try{
+    const r = await apiFetch(`${API}/dca/bots/${id}/${action}`, {method:'POST'});
+    const j = await r.json();
+    if(j.ok === false){ toast(j.error || 'Failed','err'); return; }
+    toast(action === 'enable' ? 'DCA bot started' : 'DCA bot paused', 'ok');
+    setTimeout(loadDcaBots, 1500);
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+async function dcaBotPanic(id, name){
+  if(!confirm(`⚡ PANIC SELL — market-exit all deals for "${name}"?\n\nThis cannot be undone.`)) return;
+  try{
+    const r = await apiFetch(`${API}/dca/bots/${id}/panic_sell`, {method:'POST'});
+    const j = await r.json();
+    toast(j.ok ? 'Panic sell triggered' : (j.error||'Failed'), j.ok ? 'ok' : 'err');
+    setTimeout(loadDcaBots, 2000);
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+async function dcaBotDelete(id, name, enabled){
+  if(enabled){
+    toast('Pause the bot before deleting','err'); return;
+  }
+  if(!confirm(`Delete DCA bot "${name}"? This is permanent.`)) return;
+  try{
+    const r = await apiFetch(`${API}/dca/bots/${id}`, {method:'DELETE'});
+    const j = await r.json();
+    toast(j.ok ? 'Bot deleted' : (j.error||'Failed'), j.ok ? 'ok' : 'err');
+    setTimeout(loadDcaBots, 1000);
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+// ── DCA Create / Edit modal ───────────────────────────────────
+function _dcaModalHtml(title, bot){
+  // bot is null for create, or the bot object for edit
+  const v = (field, def) => bot ? (parseFloat(bot[field]||def)||def) : def;
+  const name = bot ? (bot.name||'') : '';
+  const pair = bot ? ((bot.pairs||['USDC_BTC'])[0]) : 'USDC_BTC';
+  return `
+  <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:#c9d4e0;
+    margin-bottom:16px;letter-spacing:.05em;">${title}</div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">BOT NAME</div>
+      <input id="dca_name" type="text" value="${name}" placeholder="My DCA Bot"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+        font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
+    </div>
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">PAIR</div>
+      <select id="dca_pair" style="width:100%;background:#080c10;border:1px solid #243044;
+        color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;">
+        <option value="USDC_BTC" ${pair==='USDC_BTC'?'selected':''}>USDC_BTC</option>
+        <option value="USDT_BTC" ${pair==='USDT_BTC'?'selected':''}>USDT_BTC</option>
+        <option value="USD_BTC"  ${pair==='USD_BTC' ?'selected':''}>USD_BTC</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;
+    margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #1c2433;">Orders</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">BASE ORDER $</div>
+      <input id="dca_base" type="number" value="${v('base_order_volume',500)}" min="10" step="10"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:#ffab00;
+        font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:6px 8px;border-radius:4px;"
+        oninput="_dcaUpdateExposure()"/>
+    </div>
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SAFETY ORDER $</div>
+      <input id="dca_so" type="number" value="${v('safety_order_volume',100)}" min="10" step="10"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+        font-family:'Space Mono',monospace;font-size:11px;padding:6px 8px;border-radius:4px;"
+        oninput="_dcaUpdateExposure()"/>
+    </div>
+  </div>
+
+  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;
+    margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #1c2433;">Safety Order Ladder</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">MAX SOs</div>
+      <input id="dca_count" type="number" value="${v('max_safety_orders',5)}" min="1" max="25"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+        font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"
+        oninput="_dcaUpdateExposure()"/>
+    </div>
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">STEP %</div>
+      <input id="dca_step" type="number" value="${v('safety_order_step_percentage',1.5)}" min="0.1" step="0.1"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+        font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"
+        oninput="_dcaUpdateLadder()"/>
+    </div>
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">VOL MULT ×</div>
+      <input id="dca_mult" type="number" value="${v('martingale_volume_coefficient',1.2)}" min="1" step="0.05"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+        font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"
+        oninput="_dcaUpdateExposure()"/>
+    </div>
+  </div>
+
+  <!-- Safety order ladder preview -->
+  <div id="dcaLadder" style="background:#060a0e;border:1px solid #1c2433;border-radius:4px;
+    padding:8px;margin-bottom:12px;font-size:9px;font-family:'Space Mono',monospace;"></div>
+
+  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;
+    margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #1c2433;">Take Profit</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+    <div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TP %</div>
+      <input id="dca_tp" type="number" value="${v('take_profit',2.0)}" min="0.1" step="0.1"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
+        font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:6px 8px;border-radius:4px;"/>
+    </div>
+    <div style="display:flex;flex-direction:column;justify-content:flex-end;">
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">MAX EXPOSURE</div>
+      <div id="dcaExposure" style="font-size:11px;font-weight:700;color:var(--amber);padding:6px 8px;
+        background:#080c10;border:1px solid #243044;border-radius:4px;">—</div>
+    </div>
+  </div>`;
+}
+
+function _dcaUpdateLadder(){
+  const step  = parseFloat(document.getElementById('dca_step')?.value  || 1.5);
+  const count = parseInt  (document.getElementById('dca_count')?.value || 5);
+  const soUsd = parseFloat(document.getElementById('dca_so')?.value    || 100);
+  const mult  = parseFloat(document.getElementById('dca_mult')?.value  || 1.2);
+  const price = status.price || 84000;
+  const el = document.getElementById('dcaLadder');
+  if(!el) return;
+  let rows = '<div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:3px 10px;color:var(--muted);">'
+           + '<span>SO</span><span>Price drop</span><span>Size $</span>';
+  let cumDrop = 0, soSize = soUsd;
+  for(let i=1; i<=Math.min(count,8); i++){
+    cumDrop += step;
+    const dropPrice = (price * (1 - cumDrop/100)).toFixed(0);
+    rows += `<span style="color:var(--purple);">#${i}</span><span>−${cumDrop.toFixed(1)}% ($${dropPrice})</span><span style="color:var(--amber);">$${soSize.toFixed(0)}</span>`;
+    soSize *= mult;
+  }
+  if(count > 8) rows += `<span style="color:var(--muted);grid-column:1/-1;margin-top:2px;">… +${count-8} more</span>`;
+  rows += '</div>';
+  el.innerHTML = rows;
+  _dcaUpdateExposure();
+}
+
+function _dcaUpdateExposure(){
+  const base  = parseFloat(document.getElementById('dca_base')?.value  || 500);
+  const so    = parseFloat(document.getElementById('dca_so')?.value    || 100);
+  const count = parseInt  (document.getElementById('dca_count')?.value || 5);
+  const mult  = parseFloat(document.getElementById('dca_mult')?.value  || 1.2);
+  const el = document.getElementById('dcaExposure');
+  if(!el) return;
+  let total = base;
+  let cur = so;
+  for(let i=0;i<count;i++){ total += cur; cur *= mult; }
+  el.textContent = `$${total.toFixed(0)}`;
+  _dcaUpdateLadder();
+}
+
+function showCreateDcaModal(){
+  const old = document.getElementById('dcaModal');
+  if(old) old.remove();
+  const div = document.createElement('div');
+  div.id = 'dcaModal';
+  div.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0d1117;border:1px solid #243044;border-radius:8px;padding:22px 26px;
+    z-index:9999;width:420px;max-width:95vw;font-family:'Space Mono',monospace;
+    box-shadow:0 8px 48px rgba(0,0,0,.9);max-height:90vh;overflow-y:auto;`;
+  div.innerHTML = _dcaModalHtml('CREATE DCA BOT', null) + `
+    <div style="display:flex;gap:6px;margin-top:4px;">
+      <button onclick="confirmCreateDca(false)"
+        style="flex:1;background:rgba(179,136,255,.12);border:1px solid var(--purple);color:var(--purple);
+        font-family:'Space Mono',monospace;font-size:10px;padding:8px;border-radius:4px;cursor:pointer;font-weight:700;">
+        Create (paused)
+      </button>
+      <button onclick="confirmCreateDca(true)"
+        style="flex:1;background:rgba(0,230,118,.12);border:1px solid var(--green);color:var(--green);
+        font-family:'Space Mono',monospace;font-size:10px;padding:8px;border-radius:4px;cursor:pointer;font-weight:700;">
+        ▶ Create &amp; Start
+      </button>
+      <button onclick="document.getElementById('dcaModal').remove()"
+        style="background:rgba(255,255,255,.04);border:1px solid #1c2433;color:#4a5a72;
+        font-family:'Space Mono',monospace;font-size:10px;padding:8px 14px;border-radius:4px;cursor:pointer;">
+        Cancel
+      </button>
+    </div>`;
+  document.body.appendChild(div);
+  setTimeout(_dcaUpdateLadder, 0);
+}
+
+function showEditDcaModal(botId){
+  const bot = _dcaBots.find(b => String(b.id) === String(botId));
+  if(!bot){ toast('Bot not found','err'); return; }
+  const old = document.getElementById('dcaModal');
+  if(old) old.remove();
+  const div = document.createElement('div');
+  div.id = 'dcaModal';
+  div.dataset.editId = botId;
+  div.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0d1117;border:1px solid #243044;border-radius:8px;padding:22px 26px;
+    z-index:9999;width:420px;max-width:95vw;font-family:'Space Mono',monospace;
+    box-shadow:0 8px 48px rgba(0,0,0,.9);max-height:90vh;overflow-y:auto;`;
+  div.innerHTML = _dcaModalHtml('EDIT DCA BOT', bot) + `
+    <div style="display:flex;gap:6px;margin-top:4px;">
+      <button onclick="confirmEditDca()"
+        style="flex:1;background:rgba(0,212,255,.12);border:1px solid var(--accent);color:var(--accent);
+        font-family:'Space Mono',monospace;font-size:10px;padding:8px;border-radius:4px;cursor:pointer;font-weight:700;">
+        Save Changes
+      </button>
+      <button onclick="document.getElementById('dcaModal').remove()"
+        style="background:rgba(255,255,255,.04);border:1px solid #1c2433;color:#4a5a72;
+        font-family:'Space Mono',monospace;font-size:10px;padding:8px 14px;border-radius:4px;cursor:pointer;">
+        Cancel
+      </button>
+    </div>`;
+  document.body.appendChild(div);
+  setTimeout(_dcaUpdateLadder, 0);
+}
+
+async function confirmCreateDca(start){
+  const name  = document.getElementById('dca_name').value.trim() || 'DCA Bot';
+  const pair  = document.getElementById('dca_pair').value;
+  const base  = parseFloat(document.getElementById('dca_base').value);
+  const so    = parseFloat(document.getElementById('dca_so').value);
+  const count = parseInt  (document.getElementById('dca_count').value);
+  const step  = parseFloat(document.getElementById('dca_step').value);
+  const mult  = parseFloat(document.getElementById('dca_mult').value);
+  const tp    = parseFloat(document.getElementById('dca_tp').value);
+  if(isNaN(base)||isNaN(so)||isNaN(tp)){ toast('Fill in all fields','err'); return; }
+  try{
+    const r = await apiFetch(`${API}/dca/bots`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({label:name, pair, base_order_usd:base, safety_order_usd:so,
+        safety_order_count:count, safety_order_step_pct:step, safety_order_volume_mult:mult,
+        take_profit_pct:tp, start}),
+    });
+    const j = await r.json();
+    if(!j.ok){ toast(j.msg||'Failed','err'); return; }
+    toast(start ? 'DCA bot created & started' : 'DCA bot created (paused)', 'ok');
+    document.getElementById('dcaModal').remove();
+    setTimeout(loadDcaBots, 1500);
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+async function confirmEditDca(){
+  const div   = document.getElementById('dcaModal');
+  const botId = div?.dataset.editId;
+  if(!botId){ toast('No bot selected','err'); return; }
+  const base  = parseFloat(document.getElementById('dca_base').value);
+  const so    = parseFloat(document.getElementById('dca_so').value);
+  const count = parseInt  (document.getElementById('dca_count').value);
+  const step  = parseFloat(document.getElementById('dca_step').value);
+  const mult  = parseFloat(document.getElementById('dca_mult').value);
+  const tp    = parseFloat(document.getElementById('dca_tp').value);
+  if(isNaN(base)||isNaN(so)||isNaN(tp)){ toast('Fill in all fields','err'); return; }
+  try{
+    const r = await apiFetch(`${API}/dca/bots/${botId}`, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({base_order_usd:base, safety_order_usd:so,
+        safety_order_count:count, safety_order_step_pct:step,
+        safety_order_volume_mult:mult, take_profit_pct:tp}),
+    });
+    const j = await r.json();
+    if(!j.ok){ toast(j.msg||'Failed','err'); return; }
+    toast('Bot updated', 'ok');
+    document.getElementById('dcaModal').remove();
+    setTimeout(loadDcaBots, 1500);
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
 
 // ── SIDEBAR TABS ─────────────────────────────────────────────
 function switchTab(tab) {

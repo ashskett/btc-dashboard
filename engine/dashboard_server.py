@@ -368,8 +368,123 @@ def config_bots():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+# ── DCA bots ──────────────────────────────────────────────
+from threecommas_dca import (
+    get_dca_bots, get_dca_bot, create_dca_bot, enable_dca_bot,
+    disable_dca_bot, panic_sell_dca_bot, get_dca_deals,
+    update_dca_bot, delete_dca_bot, estimate_max_exposure,
+)
+
+@app.route("/dca/bots")
+def dca_bots_list():
+    try:
+        bots = get_dca_bots()
+        return jsonify(bots)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/dca/bots", methods=["POST"])
+def dca_bots_create():
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        bot = create_dca_bot(
+            label=body.get("label", "DCA Bot"),
+            base_order_usd=float(body.get("base_order_usd", 500)),
+            safety_order_usd=float(body.get("safety_order_usd", 100)),
+            take_profit_pct=float(body.get("take_profit_pct", 2.0)),
+            safety_order_count=int(body.get("safety_order_count", 5)),
+            safety_order_step_pct=float(body.get("safety_order_step_pct", 1.5)),
+            safety_order_volume_mult=float(body.get("safety_order_volume_mult", 1.2)),
+            pair=body.get("pair", "USDC_BTC"),
+        )
+        if body.get("start"):
+            enable_dca_bot(str(bot["id"]))
+        return jsonify({"ok": True, "bot": bot})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/dca/bots/<bot_id>/enable", methods=["POST"])
+def dca_bot_enable(bot_id):
+    try:
+        ok = enable_dca_bot(bot_id)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/dca/bots/<bot_id>/disable", methods=["POST"])
+def dca_bot_disable(bot_id):
+    try:
+        ok = disable_dca_bot(bot_id)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/dca/bots/<bot_id>/panic_sell", methods=["POST"])
+def dca_bot_panic(bot_id):
+    try:
+        ok = panic_sell_dca_bot(bot_id)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/dca/bots/<bot_id>/deals")
+def dca_bot_deals(bot_id):
+    try:
+        deals = get_dca_deals(bot_id)
+        return jsonify(deals)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/dca/bots/<bot_id>", methods=["PUT"])
+def dca_bot_update(bot_id):
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        bot = update_dca_bot(
+            bot_id=bot_id,
+            base_order_usd=float(body["base_order_usd"]) if body.get("base_order_usd") else None,
+            safety_order_usd=float(body["safety_order_usd"]) if body.get("safety_order_usd") else None,
+            take_profit_pct=float(body["take_profit_pct"]) if body.get("take_profit_pct") else None,
+            safety_order_count=int(body["safety_order_count"]) if body.get("safety_order_count") else None,
+            safety_order_step_pct=float(body["safety_order_step_pct"]) if body.get("safety_order_step_pct") else None,
+            safety_order_volume_mult=float(body["safety_order_volume_mult"]) if body.get("safety_order_volume_mult") else None,
+        )
+        return jsonify({"ok": True, "bot": bot})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/dca/bots/<bot_id>", methods=["DELETE"])
+def dca_bot_delete(bot_id):
+    try:
+        ok = delete_dca_bot(bot_id)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/dca/exposure", methods=["POST"])
+def dca_exposure():
+    """Estimate max capital exposure for a given DCA config."""
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        exposure = estimate_max_exposure(
+            base_order_usd=float(body.get("base_order_usd", 500)),
+            safety_order_usd=float(body.get("safety_order_usd", 100)),
+            safety_order_count=int(body.get("safety_order_count", 5)),
+            safety_order_volume_mult=float(body.get("safety_order_volume_mult", 1.2)),
+        )
+        return jsonify({"exposure": exposure})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Price targets ─────────────────────────────────────────
-from price_targets import (
     load_targets, add_target, update_target, delete_target, clear_target
 )
 
