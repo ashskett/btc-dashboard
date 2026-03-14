@@ -226,7 +226,7 @@ def account_balance():
 
         # Get pie chart data (per-currency breakdown)
         r = signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
-        pie = r.json() if r.status_code == 200 else []
+        pie = r.json() if r.ok else []
         if not isinstance(pie, list):
             pie = []
 
