@@ -763,6 +763,49 @@ def engine_stop():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+# ── Self-deploy endpoint ────────────────────────────────────────────────────
+_DEPLOY_FILES = [
+    "dashboard.html",
+    "dashboard_server.py",
+    "threecommas_dca.py",
+    "grid_logic.py",
+    "session.py",
+]
+_DEPLOY_BRANCH = "claude/grid-engine-chat-review-hEEGu"
+_DEPLOY_BASE   = f"https://raw.githubusercontent.com/ashskett/btc-dashboard/{_DEPLOY_BRANCH}/engine"
+
+@app.route("/deploy", methods=["POST"])
+def deploy_endpoint():
+    import urllib.request, threading
+    token    = (request.args.get("token") or (request.get_json(silent=True) or {}).get("token", ""))
+    expected = os.environ.get("DEPLOY_TOKEN", "grid-deploy-2026")
+    if token != expected:
+        return jsonify({"error": "unauthorized"}), 403
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    results = {}
+    for fname in _DEPLOY_FILES:
+        url  = f"{_DEPLOY_BASE}/{fname}"
+        dest = os.path.join(script_dir, fname)
+        try:
+            urllib.request.urlretrieve(url, dest + ".new")
+            os.replace(dest + ".new", dest)
+            results[fname] = "ok"
+        except Exception as e:
+            results[fname] = f"error: {e}"
+
+    def _restart():
+        time.sleep(0.8)
+        global _engine_proc
+        if _engine_proc and _engine_proc.poll() is None:
+            _engine_proc.terminate()
+            time.sleep(0.5)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    threading.Thread(target=_restart, daemon=True).start()
+    return jsonify({"status": "deploying", "branch": _DEPLOY_BRANCH, "files": results})
+
+
 if __name__ == "__main__":
     # Auto-start engine on server startup
     if not _engine_running():
