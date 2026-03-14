@@ -267,6 +267,18 @@ def account_balance():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/account/balance/raw")
+def account_balance_raw():
+    """Debug: return raw pie_chart_data from 3Commas so we can see actual field names."""
+    try:
+        signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
+        time.sleep(2)
+        r = signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
+        return jsonify({"status": r.status_code, "data": r.json() if r.status_code == 200 else r.text[:500]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Bot fills (completed grid cycles) ─────────────────────
 _fills_cache = {"data": None, "ts": 0.0}
 
@@ -542,10 +554,10 @@ def dca_bot_update(bot_id):
 @app.route("/dca/bots/<bot_id>", methods=["DELETE"])
 def dca_bot_delete(bot_id):
     try:
-        ok = delete_dca_bot(bot_id)
-        return jsonify({"ok": ok})
+        delete_dca_bot(bot_id)
+        return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/dca/exposure", methods=["POST"])

@@ -2337,22 +2337,28 @@ function renderDcaBots(){
     el.innerHTML = `<div style="color:var(--muted);font-size:10px;">No DCA bots yet — click Create to set one up.</div>`;
     return;
   }
-  el.innerHTML = _dcaBots.map(bot => {
+  // Calculate total max exposure across all bots
+  let totalExposure = 0;
+  const cards = _dcaBots.map(bot => {
     const enabled  = bot.is_enabled;
     const deals    = bot.active_deals_count || 0;
     const finished = bot.finished_deals_count || 0;
     const profit   = parseFloat(bot.active_deals_usd_profit || 0);
     const pair     = (bot.pairs || ['USDC_BTC'])[0].replace('_','\/');
-    const base     = parseFloat(bot.base_order_volume  || 0).toFixed(0);
-    const so       = parseFloat(bot.safety_order_volume|| 0).toFixed(0);
+    const base     = parseFloat(bot.base_order_volume  || 0);
+    const so       = parseFloat(bot.safety_order_volume|| 0);
     const tp       = parseFloat(bot.take_profit        || 0).toFixed(2);
     const step     = parseFloat(bot.safety_order_step_percentage || 0).toFixed(2);
-    const mult     = parseFloat(bot.martingale_volume_coefficient|| 1).toFixed(2);
-    const maxSo    = bot.max_safety_orders || 0;
+    const mult     = parseFloat(bot.martingale_volume_coefficient|| 1);
+    const maxSo    = parseInt(bot.max_safety_orders || 0);
     const pCol     = profit >= 0 ? 'var(--green)' : 'var(--red)';
     const stBg     = enabled ? 'rgba(0,230,118,.15)' : 'rgba(255,61,90,.1)';
     const stCol    = enabled ? 'var(--green)'         : 'var(--red)';
     const stTxt    = enabled ? 'ENABLED'              : 'DISABLED';
+    // Max exposure = base + sum of safety orders with martingale
+    let exp = base, cur = so;
+    for(let i=0;i<maxSo;i++){ exp += cur; cur *= mult; }
+    totalExposure += exp;
     return `
     <div class="bot-card" style="border-left-color:var(--purple);margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -2364,9 +2370,10 @@ function renderDcaBots(){
       <div class="row"><span class="rk">Finished</span><span class="rv" style="font-size:10px;">${finished}</span></div>
       <div class="row"><span class="rk">Active P&L</span><span class="rv" style="color:${pCol}">${profit>=0?'+':''}$${profit.toFixed(2)}</span></div>
       <div class="hr" style="margin:6px 0;"></div>
-      <div class="row"><span class="rk">Base / SO</span><span class="rv" style="font-size:10px;">$${base} / $${so}</span></div>
-      <div class="row"><span class="rk">Max SOs</span><span class="rv" style="font-size:10px;">${maxSo} × ${mult}× @ -${step}%</span></div>
+      <div class="row"><span class="rk">Base / SO</span><span class="rv" style="font-size:10px;">$${base.toFixed(0)} / $${so.toFixed(0)}</span></div>
+      <div class="row"><span class="rk">Max SOs</span><span class="rv" style="font-size:10px;">${maxSo} × ${mult.toFixed(2)}× @ -${step}%</span></div>
       <div class="row"><span class="rk">Take profit</span><span class="rv g">${tp}%</span></div>
+      <div class="row"><span class="rk">Max exposure</span><span class="rv" style="color:var(--amber);">$${exp.toFixed(0)}</span></div>
       <div class="hr" style="margin:6px 0;"></div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;">
         ${enabled
@@ -2381,7 +2388,14 @@ function renderDcaBots(){
           style="flex:0 0 auto;padding:6px 8px;border-color:#3a2020;color:#7a3030;" title="Delete bot">✕</button>
       </div>
     </div>`;
-  }).join('');
+  });
+  el.innerHTML = cards.join('') + `
+    <div style="border-top:1px solid var(--border);margin-top:4px;padding-top:8px;">
+      <div class="row">
+        <span class="rk">Total max exposure</span>
+        <span class="rv" style="color:var(--amber);font-weight:700;">$${totalExposure.toFixed(0)}</span>
+      </div>
+    </div>`;
 }
 
 async function dcaBotAct(id, action){

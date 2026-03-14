@@ -226,9 +226,11 @@ def update_dca_bot(
 
 
 def delete_dca_bot(bot_id: str) -> bool:
-    """Delete a DCA bot (bot must be disabled first)."""
+    """Delete a DCA bot (bot must be disabled first with no active deals)."""
     r = _signed_request("POST", f"/ver1/bots/{bot_id}/delete")
-    return r.status_code in (200, 201, 204)
+    if r.status_code not in (200, 201, 204):
+        raise ValueError(f"3Commas {r.status_code}: {r.text[:300]}")
+    return True
 
 
 def estimate_max_exposure(
