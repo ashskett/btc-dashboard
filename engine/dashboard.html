@@ -515,6 +515,18 @@
     </div>
   </div>
 
+  <!-- PRICE TARGETS -->
+  <div class="sec" id="ptSection">
+    <div class="sec-title">
+      Price Targets
+      <button class="cbtn on-b" id="addTargetBtn" onclick="showAddTargetModal()"
+        style="font-size:9px;padding:3px 8px;flex:none;">+ Add</button>
+    </div>
+    <div id="ptList" style="margin-bottom:6px;">
+      <div style="color:var(--muted);font-size:10px;">No targets — click Add to set a trigger level</div>
+    </div>
+  </div>
+
   <!-- CHART SETTINGS -->
   <div class="sec">
     <div class="sec-title">Chart Settings</div>
@@ -677,8 +689,9 @@ const API = '';   // empty = same origin (http://localhost:5050)
 
 const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
 
-let chart, candles, gridLines=[];
+let chart, candles, gridLines=[], targetLines=[];
 let showGrid=true, showTL=true;
+let priceTargets = [];
 let currentTf='1h';
 let fillsData=[];
 let status={};
@@ -967,6 +980,11 @@ async function pollStatus(){
 
     redrawLines();
 
+    // Refresh target lines + sidebar if engine reports a target just fired/cleared
+    if(d.price_target_active !== undefined){
+      loadTargets();
+    }
+
   } catch(e){
     setConnected(false);
   }
@@ -1252,6 +1270,248 @@ function toast(msg, type='ok'){
   const el=document.getElementById('toast');
   el.textContent=msg; el.className=`show ${type}`;
   clearTimeout(_tt); _tt=setTimeout(()=>el.className='',3200);
+}
+
+// ── PRICE TARGETS ────────────────────────────────────────
+
+function clearTargetLines(){
+  targetLines.forEach(l=>{ try{ candles.removePriceLine(l); }catch(e){} });
+  targetLines=[];
+}
+
+function renderTargetLines(){
+  clearTargetLines();
+  if(!priceTargets.length) return;
+  priceTargets.forEach(pt => {
+    // Color scheme: armed=amber, fired UP=green, fired DOWN=red, disarmed=grey
+    const fired  = pt.fired;
+    const isUp   = pt.direction === 'UP';
+    let trigCol, tpCol;
+    if(!pt.active)      { trigCol='#4a5a72'; tpCol='#4a5a72'; }
+    else if(fired)      { trigCol=isUp?'#00e676':'#ff3d5a'; tpCol=isUp?'#00e676':'#ff3d5a'; }
+    else                { trigCol='#ffab00'; tpCol='#4a5a72'; }
+
+    // Trigger line — solid, labeled
+    const confirmStr = !pt.fired && pt.confirm_closes > 1
+      ? ` (${pt.consec_above||0}/${pt.confirm_closes})` : '';
+    const stateStr = !pt.active ? ' [OFF]' : fired ? ' [ACTIVE]' : ' [ARMED]';
+    targetLines.push(candles.createPriceLine({
+      price: pt.trigger_price,
+      color: trigCol,
+      lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true,
+      title: `▶ ${pt.label}${confirmStr}${stateStr}`,
+    }));
+
+    // Price target line — dashed, dimmer
+    if(pt.price_target){
+      targetLines.push(candles.createPriceLine({
+        price: pt.price_target,
+        color: tpCol,
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `◎ ${pt.label} target`,
+      }));
+    }
+  });
+}
+
+async function loadTargets(){
+  try{
+    const r = await apiFetch(`${API}/targets`);
+    if(!r.ok) return;
+    const data = await r.json();
+    if(Array.isArray(data)){
+      priceTargets = data;
+      renderTargetLines();
+      renderTargetSidebar();
+    }
+  } catch(e){ console.warn('loadTargets:', e); }
+}
+
+function renderTargetSidebar(){
+  const cont = document.getElementById('ptList');
+  if(!cont) return;
+  if(!priceTargets.length){
+    cont.innerHTML = '<div style="color:var(--muted);font-size:10px;">No targets — click Add to set a trigger level</div>';
+    return;
+  }
+  cont.innerHTML = priceTargets.map(pt => {
+    const fired  = pt.fired;
+    const isUp   = pt.direction === 'UP';
+    const active = pt.active;
+    const trigCol = !active ? '#4a5a72' : fired ? (isUp?'#00e676':'#ff3d5a') : '#ffab00';
+
+    let stateLabel, stateBg;
+    if(!active)    { stateLabel='OFF';    stateBg='rgba(74,90,114,.2)'; }
+    else if(fired) { stateLabel=isUp?'ACTIVE ▲':'ACTIVE ▼'; stateBg=isUp?'rgba(0,230,118,.15)':'rgba(255,61,90,.15)'; }
+    else {
+      const n = pt.consec_above||0, need = pt.confirm_closes||2;
+      stateLabel = n > 0 ? `${n}/${need} closes` : 'ARMED';
+      stateBg = 'rgba(255,171,0,.12)';
+    }
+
+    const tpStr  = pt.price_target ? ` → $${pt.price_target.toLocaleString()}` : '';
+    const dirArrow = isUp ? '▲' : '▼';
+
+    return `<div class="tl-card" style="border-left:3px solid ${trigCol};margin-bottom:6px;">
+      <div class="tl-hdr">
+        <span style="color:${trigCol};font-size:10px;font-weight:700;">${dirArrow} $${pt.trigger_price.toLocaleString()}${tpStr}</span>
+        <span style="font-size:9px;padding:2px 5px;border-radius:3px;background:${stateBg};color:${trigCol};">${stateLabel}</span>
+      </div>
+      <div class="tl-meta" style="margin:3px 0;">${pt.label}</div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:5px;">
+        confirm: ${pt.confirm_closes||2} closes · reversal: ${pt.reversal_atr_mult||2}×ATR · cooldown: ${pt.rearm_cooldown_h||4}h
+        ${pt.dca_enabled ? ' · <span style="color:#b388ff">DCA ON</span>' : ''}
+      </div>
+      <div class="tl-btns">
+        <button class="tl-btn" onclick="toggleTargetActive('${pt.id}',${!active})">${active?'Disarm':'Re-arm'}</button>
+        <button class="tl-btn" onclick="clearTargetState('${pt.id}')" ${!fired?'disabled':''} style="${!fired?'opacity:.4;cursor:default;':''}">Clear</button>
+        <button class="tl-btn del" onclick="deleteTarget('${pt.id}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleTargetActive(id, newActive){
+  try{
+    await apiFetch(`${API}/targets/${id}`, {method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({active: newActive})});
+    await loadTargets();
+    toast(`Target ${newActive?'armed':'disarmed'}`, 'ok');
+  } catch(e){ toast('Toggle failed','err'); }
+}
+
+async function clearTargetState(id){
+  try{
+    await apiFetch(`${API}/targets/${id}/clear`, {method:'POST'});
+    await loadTargets();
+    toast('Target re-armed', 'ok');
+  } catch(e){ toast('Clear failed','err'); }
+}
+
+async function deleteTarget(id){
+  try{
+    await apiFetch(`${API}/targets/${id}`, {method:'DELETE'});
+    await loadTargets();
+    toast('Target deleted', 'ok');
+  } catch(e){ toast('Delete failed','err'); }
+}
+
+function showAddTargetModal(){
+  const old = document.getElementById('ptModal');
+  if(old) old.remove();
+
+  const div = document.createElement('div');
+  div.id = 'ptModal';
+  div.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0d1117;border:1px solid #243044;border-radius:8px;padding:22px 26px;
+    z-index:9999;min-width:300px;font-family:'Space Mono',monospace;
+    box-shadow:0 8px 48px rgba(0,0,0,.9);`;
+
+  // Pre-fill trigger price from current price if available
+  const curPrice = status.price ? Math.round(status.price) : '';
+
+  div.innerHTML = `
+    <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:#c9d4e0;
+      margin-bottom:16px;letter-spacing:.05em;">ADD PRICE TARGET</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">LABEL</div>
+        <input id="pt_label" type="text" placeholder="ATH retest → 82k" value=""
+          style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+          font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">DIRECTION</div>
+        <select id="pt_dir" style="width:100%;background:#080c10;border:1px solid #243044;
+          color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;">
+          <option value="UP">▲ UP (breakout above)</option>
+          <option value="DOWN">▼ DOWN (break below)</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TRIGGER PRICE $</div>
+        <input id="pt_trigger" type="number" placeholder="${curPrice}" value="${curPrice}"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:#ffab00;
+          font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:6px 8px;border-radius:4px;"/>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">PRICE TARGET $ <span style="opacity:.5">(optional)</span></div>
+        <input id="pt_tp" type="number" placeholder="e.g. 82000"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+          font-family:'Space Mono',monospace;font-size:11px;padding:6px 8px;border-radius:4px;"/>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">CONFIRM CLOSES</div>
+        <input id="pt_confirm" type="number" value="2" min="1" max="10"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+          font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">REVERSAL ×ATR</div>
+        <input id="pt_rev" type="number" value="2.0" min="0.5" step="0.5"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+          font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">COOLDOWN H</div>
+        <input id="pt_cool" type="number" value="4" min="0" step="1"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+          font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px;">
+      <button onclick="confirmAddTarget()"
+        style="flex:1;background:rgba(255,171,0,.12);border:1px solid #ffab00;color:#ffab00;
+        font-family:'Space Mono',monospace;font-size:10px;padding:8px;border-radius:4px;cursor:pointer;font-weight:700;">
+        Set Target
+      </button>
+      <button onclick="document.getElementById('ptModal').remove()"
+        style="background:rgba(255,255,255,.04);border:1px solid #1c2433;color:#4a5a72;
+        font-family:'Space Mono',monospace;font-size:10px;padding:8px 14px;border-radius:4px;cursor:pointer;">
+        Cancel
+      </button>
+    </div>`;
+
+  document.body.appendChild(div);
+  document.getElementById('pt_label').focus();
+}
+
+async function confirmAddTarget(){
+  const label   = document.getElementById('pt_label').value.trim();
+  const trigger = parseFloat(document.getElementById('pt_trigger').value);
+  const tp      = document.getElementById('pt_tp').value ? parseFloat(document.getElementById('pt_tp').value) : null;
+  const dir     = document.getElementById('pt_dir').value;
+  const confirm_closes   = parseInt(document.getElementById('pt_confirm').value) || 2;
+  const reversal_atr_mult = parseFloat(document.getElementById('pt_rev').value) || 2.0;
+  const rearm_cooldown_h  = parseFloat(document.getElementById('pt_cool').value) || 4;
+
+  if(!label){ toast('Label required','err'); return; }
+  if(!trigger || isNaN(trigger)){ toast('Trigger price required','err'); return; }
+
+  try{
+    const r = await apiFetch(`${API}/targets`, {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ label, trigger_price: trigger, direction: dir,
+        price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h })});
+    const data = await r.json();
+    if(!data.ok) throw new Error(data.msg);
+    document.getElementById('ptModal').remove();
+    await loadTargets();
+    toast(`Target "${label}" added`, 'ok');
+  } catch(e){ toast(`Failed: ${e.message}`,'err'); }
 }
 
 // ── TRENDLINE ENGINE ─────────────────────────────────────
@@ -1819,6 +2079,7 @@ loadOverrideState();
 loadBotIds();
 pollEngineProc();
 loadTrendlines();
+loadTargets();
 setInterval(pollStatus, 5000);
 setInterval(pollEngineProc, 5000);
 setInterval(pollLogStatus, 10000);

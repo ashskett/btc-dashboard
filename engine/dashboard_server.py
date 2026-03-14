@@ -386,6 +386,8 @@ def create_target():
             direction=direction,
             price_target=float(body["price_target"]) if body.get("price_target") else None,
             reversal_atr_mult=float(body.get("reversal_atr_mult", 2.0)),
+            confirm_closes=int(body.get("confirm_closes", 2)),
+            rearm_cooldown_h=float(body.get("rearm_cooldown_h", 4.0)),
             dca_enabled=bool(body.get("dca_enabled", False)),
             dca_base_order_usd=float(body.get("dca_base_order_usd", 500)),
             dca_safety_count=int(body.get("dca_safety_count", 5)),
