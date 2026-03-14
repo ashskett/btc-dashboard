@@ -1,0 +1,35 @@
+# Secrets — NEVER commit these
+.env
+*.pem
+*.key
+
+# Runtime state — lives on droplet only
+engine_state.json
+engine_status.json
+grid_state.json
+regime_state.json
+breakout_state.json
+inventory_override.json
+trendlines.json
+
+# Logs
+*.log
+*.jsonl
+engine_log.jsonl
+bot.log
+engine.log
+deploy.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
