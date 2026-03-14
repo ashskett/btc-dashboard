@@ -687,6 +687,10 @@ const API = '';   // empty = same origin (http://localhost:5050)
   };
 }());
 
+// Alias used by price-targets and other API calls — delegates to the
+// patched window.fetch so the auth token header is always included.
+const apiFetch = (url, opts) => fetch(url, opts);
+
 const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
 
 let chart, candles, gridLines=[], targetLines=[];
