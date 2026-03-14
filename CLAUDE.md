@@ -338,20 +338,24 @@ Since SSH is sandboxed, the workflow is:
 **`/root/grid-engine` is NOT a git repo** — do not `git pull` there. Use curl instead:
 
 ```bash
-# Stop the running server first
-tmux send-keys -t grid C-c Enter
+# ── ONE-COMMAND DEPLOY ──────────────────────────────────────────────────────
+# Run this on the droplet to pull all engine files and restart the server.
+# The server now auto-starts the engine on boot — no separate engine command needed.
 
-# Pull updated engine files from the current branch
+tmux send-keys -t grid C-c Enter && sleep 1
 cd /root/grid-engine && source venv/bin/activate
-branch="claude/grid-engine-chat-review-hEEGu"   # update when branch changes
+
+branch="claude/grid-engine-chat-review-hEEGu"
 base="https://raw.githubusercontent.com/ashskett/btc-dashboard/${branch}/engine"
+
 curl -fsSL "${base}/dashboard.html"        -o dashboard.html
 curl -fsSL "${base}/dashboard_server.py"   -o dashboard_server.py
 curl -fsSL "${base}/threecommas_dca.py"    -o threecommas_dca.py
-# add more files here as needed
+curl -fsSL "${base}/grid_logic.py"         -o grid_logic.py
+curl -fsSL "${base}/session.py"            -o session.py
 
-# Restart
 python dashboard_server.py
+# Engine auto-starts alongside the dashboard server — check logs for "Engine auto-started"
 ```
 
 **Future goal**: webhook auto-deploy so the curl step happens automatically on push.

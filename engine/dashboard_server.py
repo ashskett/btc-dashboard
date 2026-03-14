@@ -764,5 +764,25 @@ def engine_stop():
 
 
 if __name__ == "__main__":
+    # Auto-start engine on server startup
+    if not _engine_running():
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            _engine_proc = subprocess.Popen(
+                [sys.executable, "-u", os.path.join(script_dir, "engine.py")],
+                cwd=script_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+            __import__("threading").Thread(
+                target=_drain_output, args=(_engine_proc,), daemon=True
+            ).start()
+            print(f"Engine auto-started (pid {_engine_proc.pid})")
+        except Exception as e:
+            print(f"Warning: could not auto-start engine: {e}")
+
     print("Dashboard running → open http://localhost:5050 in your browser")
     app.run(host="0.0.0.0", port=5050, debug=False)
