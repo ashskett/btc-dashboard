@@ -175,6 +175,49 @@ def get_dca_deals(bot_id: str) -> list:
     return data if isinstance(data, list) else []
 
 
+def update_dca_bot(
+    bot_id: str,
+    base_order_usd: float = None,
+    safety_order_usd: float = None,
+    take_profit_pct: float = None,
+    safety_order_count: int = None,
+    safety_order_step_pct: float = None,
+    safety_order_volume_mult: float = None,
+) -> dict:
+    """
+    Update DCA bot parameters. Fetches current config and merges in any
+    provided overrides — omitted args keep their existing values.
+    """
+    current = get_dca_bot(bot_id)
+    pair = (current.get("pairs") or ["USDC_BTC"])[0]
+    so_count = safety_order_count if safety_order_count is not None else int(current.get("max_safety_orders", 5))
+    body = {
+        "account_id":                    ACCOUNT_ID,
+        "pair":                          pair,
+        "base_order_volume":             str(round(base_order_usd          if base_order_usd          is not None else float(current.get("base_order_volume",             500)),  2)),
+        "base_order_volume_type":        "quote_currency",
+        "safety_order_volume":           str(round(safety_order_usd        if safety_order_usd        is not None else float(current.get("safety_order_volume",           100)),  2)),
+        "safety_order_volume_type":      "quote_currency",
+        "take_profit":                   str(round(take_profit_pct          if take_profit_pct          is not None else float(current.get("take_profit",                   2.0)),  2)),
+        "safety_order_step_percentage":  str(round(safety_order_step_pct   if safety_order_step_pct   is not None else float(current.get("safety_order_step_percentage",  1.5)),  2)),
+        "martingale_volume_coefficient": str(round(safety_order_volume_mult if safety_order_volume_mult is not None else float(current.get("martingale_volume_coefficient", 1.2)), 2)),
+        "martingale_step_coefficient":   "1.0",
+        "max_safety_orders":             so_count,
+        "active_safety_orders_count":    min(so_count, 3),
+        "name":                          current.get("name", "DCA Bot"),
+        "strategy_list":                 [{"strategy": "manual"}],
+    }
+    r = _signed_request("PATCH", f"/ver1/bots/{bot_id}/update", body=body)
+    r.raise_for_status()
+    return r.json()
+
+
+def delete_dca_bot(bot_id: str) -> bool:
+    """Delete a DCA bot (bot must be disabled first)."""
+    r = _signed_request("DELETE", f"/ver1/bots/{bot_id}/delete")
+    return r.status_code in (200, 201, 204)
+
+
 def estimate_max_exposure(
     base_order_usd: float,
     safety_order_usd: float,
