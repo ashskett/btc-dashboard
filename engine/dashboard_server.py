@@ -46,11 +46,13 @@ def index():
 # ── Engine status ─────────────────────────────────────────
 @app.route("/status")
 def status():
+    if not os.path.exists(STATUS_FILE):
+        return jsonify({"engine_running": False, "no_status_file": True})
     try:
         with open(STATUS_FILE) as f:
             return jsonify(json.load(f))
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"engine_running": False, "parse_error": str(e)})
 
 
 # ── Live BTC price via Coinbase ───────────────────────────
