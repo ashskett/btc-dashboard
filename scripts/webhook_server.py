@@ -42,8 +42,12 @@ def run(cmd, cwd=None):
 def deploy():
     log.info("=== Deploy started ===")
 
-    # 1. Pull latest code
-    rc = run("git pull origin main", cwd=REPO_DIR)
+    # 1. Pull latest code from whichever branch is currently checked out
+    branch = subprocess.run(
+        "git rev-parse --abbrev-ref HEAD", shell=True, cwd=REPO_DIR,
+        capture_output=True, text=True
+    ).stdout.strip() or "main"
+    rc = run(f"git pull origin {branch}", cwd=REPO_DIR)
     if rc != 0:
         log.error("git pull failed — aborting deploy")
         return

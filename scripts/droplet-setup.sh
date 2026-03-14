@@ -16,10 +16,12 @@
 set -e
 
 REPO_URL="https://github.com/ashskett/btc-dashboard.git"
+REPO_BRANCH="main"   # change to feature branch if main not yet merged
 REPO_DIR="/root/btc-dashboard"
 ENGINE_DIR="/root/grid-engine"
 WEBHOOK_PORT=9001
 CLAUDE_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOz0Hy8wY5c/3WHMdxFB3s7g8TkOiNdgPHkp2cllNiR7 claude-code@btc-dashboard"
+RAW_BASE="https://raw.githubusercontent.com/ashskett/btc-dashboard/${REPO_BRANCH}"
 
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
@@ -43,12 +45,14 @@ else
 fi
 
 # 3. Clone or update the repo
-echo "▶ Cloning repo..."
+echo "▶ Cloning repo (branch: $REPO_BRANCH)..."
 if [ -d "$REPO_DIR/.git" ]; then
     echo "  Repo already cloned — pulling latest..."
-    git -C "$REPO_DIR" pull origin main
+    git -C "$REPO_DIR" fetch origin
+    git -C "$REPO_DIR" checkout "$REPO_BRANCH"
+    git -C "$REPO_DIR" pull origin "$REPO_BRANCH"
 else
-    git clone "$REPO_URL" "$REPO_DIR"
+    git clone -b "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR"
 fi
 
 # 4. Copy engine Python files INTO the repo (so Claude can edit them)
@@ -110,7 +114,9 @@ fi
 
 # 6. Install webhook service
 echo "▶ Setting up webhook service..."
-cp "$REPO_DIR/scripts/webhook_server.py" /root/webhook_server.py
+# Download directly from GitHub in case local clone is behind
+curl -fsSL "${RAW_BASE}/scripts/webhook_server.py" -o /root/webhook_server.py || \
+    cp "$REPO_DIR/scripts/webhook_server.py" /root/webhook_server.py
 
 cat > /etc/systemd/system/grid-webhook.service << SERVICE
 [Unit]
