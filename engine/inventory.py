@@ -1,16 +1,25 @@
 import os
-import hmac
-import hashlib
+import json
+import base64
 import time
 import requests
 from dotenv import load_dotenv
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 from config import ACCOUNT_ID, QUOTE_CURRENCIES, MAX_SKEW
 
 load_dotenv()
 
 API_KEY = os.getenv("THREECOMMAS_API_KEY")
-API_SECRET = os.getenv("THREECOMMAS_API_SECRET")
-BASE_URL = "https://api.3commas.io"
+API_SECRET = os.getenv("THREECOMMAS_API_SECRET")  # path to RSA private key PEM file
+BASE_URL = "https://api.3commas.io/public/api"
+
+
+def _load_private_key():
+    path = API_SECRET.strip() if API_SECRET else "/root/grid-engine/3commas_private.pem"
+    with open(path, "rb") as f:
+        pem = f.read()
+    return serialization.load_pem_private_key(pem, password=None)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # INVENTORY TARGET SETTINGS
@@ -39,23 +48,26 @@ UPPER_BAND = 0.72   # above here: grid tilts to sell  ← was 0.75, now staggere
 TAPER_ZONE = 0.03   # ramp width on each side of the band edge
 
 
-def _signed_request(method: str, path: str) -> requests.Response:
+def _signed_request(method: str, path: str, body=None) -> requests.Response:
     """
-    Sign and execute a 3Commas API request.
-    Signature = HMAC-SHA256(secret, path) — no /public/api prefix.
+    Sign and execute a 3Commas API request using RSA (Self-generated key).
+    Sign target: /public/api + path + json_body
     """
-    signature = hmac.new(
-        API_SECRET.encode("utf-8"),
-        path.encode("utf-8"),
-        hashlib.sha256
-    ).hexdigest()
+    payload = json.dumps(body) if body else ""
+    sign_target = ("/public/api" + path + payload).encode()
+
+    private_key = _load_private_key()
+    sig = base64.b64encode(
+        private_key.sign(sign_target, padding.PKCS1v15(), hashes.SHA256())
+    ).decode()
 
     headers = {
         "Apikey": API_KEY,
-        "Signature": signature,
+        "Signature": sig,
+        "Content-Type": "application/json",
     }
 
-    r = requests.request(method, BASE_URL + path, headers=headers)
+    r = requests.request(method, BASE_URL + path, headers=headers, data=payload)
     r.raise_for_status()
     return r
 

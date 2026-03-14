@@ -1,8 +1,10 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import json, os, hmac, hashlib, time, subprocess, signal, sys
+import json, os, base64, time, subprocess, signal, sys
 import requests as req
 from dotenv import load_dotenv
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 from engine_log import is_logging_enabled, set_logging_enabled, read_log, clear_log
 
 load_dotenv()
@@ -12,15 +14,25 @@ CORS(app)
 
 STATUS_FILE  = "engine_status.json"
 API_KEY      = os.getenv("THREECOMMAS_API_KEY")
-API_SECRET   = os.getenv("THREECOMMAS_API_SECRET")
+API_SECRET   = os.getenv("THREECOMMAS_API_SECRET")  # path to RSA private key PEM file
 ACCOUNT_ID   = os.getenv("THREECOMMAS_ACCOUNT_ID")
-BASE_3C      = "https://api.3commas.io"
+BASE_3C      = "https://api.3commas.io/public/api"
+
+
+def _load_private_key():
+    path = API_SECRET.strip() if API_SECRET else "/root/grid-engine/3commas_private.pem"
+    with open(path, "rb") as f:
+        pem = f.read()
+    return serialization.load_pem_private_key(pem, password=None)
 
 
 def signed_request(method, path, body=None):
     payload     = json.dumps(body) if body else ""
-    sign_target = path + payload
-    sig = hmac.new(API_SECRET.encode(), sign_target.encode(), hashlib.sha256).hexdigest()
+    sign_target = ("/public/api" + path + payload).encode()
+    private_key = _load_private_key()
+    sig = base64.b64encode(
+        private_key.sign(sign_target, padding.PKCS1v15(), hashes.SHA256())
+    ).decode()
     headers = {"Apikey": API_KEY, "Signature": sig, "Content-Type": "application/json"}
     return req.request(method, BASE_3C + path, headers=headers, data=payload, timeout=10)
 
@@ -84,7 +96,7 @@ def get_bots():
         ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
         bots = []
         for bid in ids:
-            r = signed_request("GET", f"/ver1/bots/{bid}/show")
+            r = signed_request("GET", f"/ver1/grid_bots/{bid}")
             bots.append(r.json() if r.status_code == 200 else {"id": bid, "error": r.status_code})
         return jsonify(bots)
     except Exception as e:
@@ -95,7 +107,7 @@ def get_bots():
 @app.route("/bots/<bot_id>/start", methods=["POST"])
 def start_bot(bot_id):
     try:
-        r = signed_request("POST", f"/ver1/bots/{bot_id}/enable")
+        r = signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
         return jsonify({"ok": True, "code": r.status_code})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -104,7 +116,7 @@ def start_bot(bot_id):
 @app.route("/bots/<bot_id>/stop", methods=["POST"])
 def stop_bot(bot_id):
     try:
-        r = signed_request("POST", f"/ver1/bots/{bot_id}/disable")
+        r = signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
         return jsonify({"ok": True, "code": r.status_code})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
