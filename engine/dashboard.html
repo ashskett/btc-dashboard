@@ -450,18 +450,6 @@
     </div>
   </div>
 
-  <!-- INVENTORY MODE -->
-  <div class="sec">
-    <div class="sec-title">Inventory Mode</div>
-    <div class="btn-row">
-      <button class="cbtn" id="mNormal" onclick="setMode('NORMAL')">NORMAL</button>
-      <button class="cbtn" id="mBuy"    onclick="setMode('BUY_ONLY')">BUY ONLY</button>
-      <button class="cbtn" id="mSell"   onclick="setMode('SELL_ONLY')">SELL ONLY</button>
-    </div>
-  </div>
-
-
-
   <!-- MASTER CONTROLS -->
   <div class="sec">
     <div class="sec-title">Master Controls</div>
@@ -473,12 +461,6 @@
     <div class="row" style="margin-bottom:6px;">
       <span class="rk">Engine Process</span>
       <span class="rv" id="engProcStatus">—</span>
-    </div>
-    <div class="hr"></div>
-    <span class="ctl-lbl">Grid Bots</span>
-    <div class="btn-row">
-      <button class="cbtn" onclick="allBots('start')">▶ Start All</button>
-      <button class="cbtn" onclick="allBots('stop')">■ Stop All</button>
     </div>
     <div class="hr"></div>
     <span class="ctl-lbl">Dry Run Mode</span>
@@ -496,20 +478,6 @@
       <button class="cbtn" onclick="downloadLog()" style="flex:1;">↓ Download</button>
       <button class="cbtn" onclick="clearLog()"    style="flex:1;border-color:var(--red);color:var(--red);">✕ Clear</button>
     </div>
-  </div>
-
-  <!-- BOT IDS -->
-  <div class="sec">
-    <div class="sec-title">Bot IDs</div>
-    <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:center;margin-bottom:8px;">
-      <span class="ctl-lbl" style="margin:0">Inner</span>
-      <input class="cinput" id="botId0" type="text" placeholder="e.g. 2743334" style="font-size:10px;padding:4px 7px;">
-      <span class="ctl-lbl" style="margin:0">Mid</span>
-      <input class="cinput" id="botId1" type="text" placeholder="e.g. 2743332" style="font-size:10px;padding:4px 7px;">
-      <span class="ctl-lbl" style="margin:0">Outer</span>
-      <input class="cinput" id="botId2" type="text" placeholder="e.g. 2743331" style="font-size:10px;padding:4px 7px;">
-    </div>
-    <button class="cbtn" onclick="saveBotIds()" style="width:100%;border-color:var(--accent);color:var(--accent);">Save IDs (restart to apply)</button>
   </div>
 
   <!-- TRENDLINES -->
@@ -682,14 +650,32 @@
 
   <!-- ── GRID PANEL ── -->
   <div class="aside-panel" id="panelGrid">
+    <!-- INVENTORY MODE -->
+    <div class="sec">
+      <div class="sec-title">Inventory Mode</div>
+      <div class="btn-row">
+        <button class="cbtn" id="mNormal" onclick="setMode('NORMAL')">NORMAL</button>
+        <button class="cbtn" id="mBuy"    onclick="setMode('BUY_ONLY')">BUY ONLY</button>
+        <button class="cbtn" id="mSell"   onclick="setMode('SELL_ONLY')">SELL ONLY</button>
+      </div>
+    </div>
+    <!-- BOT IDS -->
+    <div class="sec">
+      <div class="sec-title">Bot IDs</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:center;margin-bottom:8px;">
+        <span class="ctl-lbl" style="margin:0">Inner</span>
+        <input class="cinput" id="botId0" type="text" placeholder="e.g. 2743334" style="font-size:10px;padding:4px 7px;">
+        <span class="ctl-lbl" style="margin:0">Mid</span>
+        <input class="cinput" id="botId1" type="text" placeholder="e.g. 2743332" style="font-size:10px;padding:4px 7px;">
+        <span class="ctl-lbl" style="margin:0">Outer</span>
+        <input class="cinput" id="botId2" type="text" placeholder="e.g. 2743331" style="font-size:10px;padding:4px 7px;">
+      </div>
+      <button class="cbtn" onclick="saveBotIds()" style="width:100%;border-color:var(--accent);color:var(--accent);">Save IDs (restart to apply)</button>
+    </div>
     <div class="sec">
       <div class="sec-title">
         Grid Bots <span id="gridBotCountLbl" style="color:var(--muted)"></span>
-        <div style="display:flex;gap:4px;">
-          <button class="cbtn on-b" onclick="loadBots()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
-          <button class="cbtn" onclick="allBots('start')" style="font-size:9px;padding:3px 8px;flex:none;border-color:var(--green);color:var(--green);">▶ All</button>
-          <button class="cbtn" onclick="allBots('stop')"  style="font-size:9px;padding:3px 8px;flex:none;border-color:var(--red);color:var(--red);">■ All</button>
-        </div>
+        <button class="cbtn on-b" onclick="loadBots()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
       </div>
       <div id="gridBotCards"><div style="color:var(--muted);font-size:10px;">Loading bots…</div></div>
     </div>
@@ -2643,7 +2629,6 @@ function _dcaUpdateLadder(){
   if(count > 8) rows += `<span style="color:var(--muted);grid-column:1/-1;margin-top:2px;">… +${count-8} more</span>`;
   rows += '</div>';
   el.innerHTML = rows;
-  _dcaUpdateExposure();
 }
 
 function _dcaUpdateExposure(){
