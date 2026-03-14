@@ -55,9 +55,17 @@ def _record_action():
 load_dotenv()
 
 # Trendline is now driven by drawn trendlines — read active one at runtime
-def get_active_trendline():
+_prev_trendline = None   # last accepted trendline value for spike detection
+
+def get_active_trendline(current_price=None):
     """Read the currently active drawn trendline from trendlines.json.
-    Returns the projected price level at the current time, or None if not set."""
+    Returns the projected price level at the current time, or None if not set.
+
+    Validation guards:
+      - Rejects if the level is >20% away from current price (stale/corrupt line)
+      - Rejects if the level jumped >25% vs the previous accepted value (spike)
+    """
+    global _prev_trendline
     try:
         path = os.path.join(os.path.dirname(__file__), "trendlines.json")
         if not os.path.exists(path):
@@ -72,6 +80,20 @@ def get_active_trendline():
         slope = 0 if dt == 0 else (p2 - p1) / dt
         now = time.time()
         level = p1 + slope * (now - t1)
+
+        # Guard 1: reject if >20% from current price (stale trendline from months ago)
+        if current_price and abs(level - current_price) / current_price > 0.20:
+            print(f"Warning: trendline {level:,.0f} is >20% from price {current_price:,.0f} "
+                  f"— ignoring (possible stale/corrupt data)")
+            return None
+
+        # Guard 2: reject if spike vs previous accepted value (transient corrupt read)
+        if _prev_trendline and abs(level - _prev_trendline) / _prev_trendline > 0.25:
+            print(f"Warning: trendline jumped {level:,.0f} vs prev {_prev_trendline:,.0f} "
+                  f"({abs(level-_prev_trendline)/_prev_trendline:.0%}) — ignoring spike")
+            return _prev_trendline   # hold previous value
+
+        _prev_trendline = level
         return round(level, 2)
     except Exception as e:
         print(f"Warning: could not read active trendline: {e}")
@@ -111,7 +133,7 @@ def run():
         state.volatility_ratio = state.atr / state.price
 
         # Get active trendline level (slope-projected to now)
-        TRENDLINE = get_active_trendline()
+        TRENDLINE = get_active_trendline(current_price=state.price)
         _trendline_active = TRENDLINE is not None
         if TRENDLINE is None:
             print("Note: no active trendline set — using price as neutral fallback")
@@ -406,13 +428,13 @@ def run():
         # trending_up    │  OFF  │  ON   │  ON   │ Price running — inner gets burned through
         # TREND_DOWN     │  OFF  │  OFF  │  ON   │ Outer catches the bounce
         # trending_down  │  OFF  │  OFF  │  ON   │ Same — strong dump, wait with outer
-        # COMPRESSION    │  OFF  │  OFF  │  OFF  │ No vol = no profit for any tier
+        # COMPRESSION    │  OFF  │  OFF  │  ON   │ Outer wide enough to catch even low-vol oscillations
 
         if state.regime == "COMPRESSION":
-            print("COMPRESSION — all bots off (no volatility)")
+            print("COMPRESSION — inner+mid off, outer running (wide range catches low-vol oscillations)")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
-                _act(bot, False, tier_name)
+                _act(bot, i >= 2, tier_name)   # only outer (index 2) runs
 
         elif state.trending_down:
             # Strong downside move — inner and mid OFF, outer ON as safety net

@@ -1,0 +1,17 @@
+[Unit]
+Description=BTC Grid Engine Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/grid-engine
+ExecStart=/root/grid-engine/venv/bin/python dashboard_server.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

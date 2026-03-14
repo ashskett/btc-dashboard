@@ -44,6 +44,29 @@ def _load_private_key():
 #   0.72 UPPER_BAND ←── taper ──→ 0.80 MAX_BTC       ( 8% warning gap)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_CACHE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_cache.json")
+_CACHE_MAX_AGE = 7200   # use cached value for up to 2 hours on API failure
+
+
+def _load_cache():
+    try:
+        data = json.load(open(_CACHE_FILE))
+        age  = time.time() - data.get("ts", 0)
+        if age < _CACHE_MAX_AGE:
+            return data["btc_ratio"], data["skew"]
+        print(f"Inventory cache too old ({age/3600:.1f}h) — cannot use")
+    except Exception:
+        pass
+    return None, None
+
+
+def _save_cache(btc_ratio: float, skew: float):
+    try:
+        json.dump({"btc_ratio": btc_ratio, "skew": skew, "ts": time.time()}, open(_CACHE_FILE, "w"))
+    except Exception:
+        pass
+
+
 TARGET_BTC = 0.65   # ideal BTC allocation
 LOWER_BAND = 0.55   # below here: grid tilts to buy
 UPPER_BAND = 0.72   # above here: grid tilts to sell  ← was 0.75, now staggered from MAX_BTC
@@ -109,11 +132,25 @@ def calculate_inventory():
     """
     Fetch live BTC and quote balances from 3Commas.
 
-    Returns (btc_ratio, skew)
-
-    btc_ratio = BTC value / total portfolio value
-    skew = inventory pressure outside the neutral band
+    Returns (btc_ratio, skew).  On API failure, falls back to the last
+    cached value (up to 2 hours old) before returning neutral (0.5, 0.0).
     """
+    try:
+        result = _calculate_inventory_live()
+        _save_cache(*result)
+        return result
+    except Exception as e:
+        cached_ratio, cached_skew = _load_cache()
+        if cached_ratio is not None:
+            print(f"Inventory API error ({e}) — using cached value "
+                  f"(btc_ratio={cached_ratio:.2%}, skew={cached_skew:+.4f})")
+            return cached_ratio, cached_skew
+        print(f"Inventory API error ({e}) — no usable cache, falling back to neutral (50/50)")
+        return 0.5, 0.0
+
+
+def _calculate_inventory_live():
+    """Inner implementation — raises on any failure."""
 
     if not API_KEY or not API_SECRET:
         raise ValueError(
@@ -145,9 +182,7 @@ def calculate_inventory():
                       f"(attempt {attempt}/3) — retrying in {wait}s")
                 time.sleep(wait)
             else:
-                print("Warning: 3Commas returned empty balance data after 3 attempts "
-                      "— using neutral inventory (50/50)")
-                return 0.5, 0.0
+                raise RuntimeError("3Commas returned empty balance data after 3 attempts")
         else:
             assets = r.json()
             break

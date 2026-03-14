@@ -27,7 +27,7 @@ FEE_BUFFER      = 1.5      # safety multiplier: step must be 1.5× the break-eve
 # Inner bot catches chop, mid catches normal swings, outer catches extensions.
 TIERS = [
     {"name": "inner", "range_mult": 0.75, "base_levels": 10},
-    {"name": "mid",   "range_mult": 1.5,  "base_levels": 8},
+    {"name": "mid",   "range_mult": 1.5,  "base_levels": 6},   # was 8 — reduced to keep step ~30% above fee floor
     {"name": "outer", "range_mult": 3.0,  "base_levels": 6},
 ]
 

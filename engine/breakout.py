@@ -45,9 +45,12 @@ doesn't lose count across the 5-minute cycle gaps.
 
 import os
 import json
+import time
 import statistics
 
 _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "breakout_state.json")
+
+BREAKOUT_MAX_AGE = 4 * 3600   # auto-expire active breakout state after 4 hours
 
 # ── Tuning constants ───────────────────────────────────────────────────────────
 MOMENTUM_STREAK     = 4      # consecutive same-direction closes required
@@ -61,7 +64,16 @@ EXHAUSTION_WINDOW   = 5      # candles to average for exhaustion check
 
 def _load_state() -> dict:
     try:
-        return json.load(open(_STATE_FILE))
+        s = json.load(open(_STATE_FILE))
+        # Auto-expire stale active breakout states so they don't block trading
+        # across restarts or long quiet periods.
+        if s.get("active") and s.get("fired_at"):
+            age = time.time() - s["fired_at"]
+            if age > BREAKOUT_MAX_AGE:
+                print(f"Breakout state expired after {age/3600:.1f}h — auto-clearing")
+                s = {"consec_up": 0, "consec_down": 0, "active": None, "fire_price": None}
+                _save_state(s)
+        return s
     except Exception:
         return {
             "consec_up":    0,
@@ -155,6 +167,7 @@ def breakout_detected(df, atr_window: int = 30) -> str | None:
         s2 = _load_state()          # re-read after _check_momentum wrote
         s2["active"]     = direction
         s2["fire_price"] = float(df.close.iloc[-1])
+        s2["fired_at"]   = time.time()
         s2["consec_up"]  = 0
         s2["consec_down"] = 0
         _save_state(s2)
