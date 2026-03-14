@@ -144,12 +144,38 @@ systemctl enable grid-webhook
 systemctl restart grid-webhook
 echo "  Webhook service started."
 
-# 7. Open firewall port
+# 7. Open firewall port for webhook
 echo "▶ Opening port $WEBHOOK_PORT..."
 ufw allow $WEBHOOK_PORT/tcp 2>/dev/null || true
 iptables -I INPUT -p tcp --dport $WEBHOOK_PORT -j ACCEPT 2>/dev/null || true
 
-# 8. Test it
+# 8. Set up nginx reverse proxy for dashboard (port 80 → 5050)
+echo "▶ Setting up nginx reverse proxy..."
+apt-get install -y nginx apache2-utils 2>/dev/null | grep -E "^(Setting up|Already)" || true
+
+# Install nginx site config
+curl -fsSL "${RAW_BASE}/scripts/nginx-grid-engine.conf" \
+    -o /etc/nginx/sites-available/grid-engine || \
+    cp "$REPO_DIR/scripts/nginx-grid-engine.conf" /etc/nginx/sites-available/grid-engine
+
+# Enable site, disable default
+ln -sf /etc/nginx/sites-available/grid-engine /etc/nginx/sites-enabled/grid-engine
+rm -f /etc/nginx/sites-enabled/default
+
+# Create htpasswd file if it doesn't exist yet
+if [ ! -f /etc/nginx/.htpasswd ]; then
+    # Default: user=admin, password=grid — CHANGE THIS after setup
+    htpasswd -bc /etc/nginx/.htpasswd admin grid
+    echo "  Created default credentials: admin / grid (change with: htpasswd /etc/nginx/.htpasswd admin)"
+else
+    echo "  htpasswd already exists — skipping."
+fi
+
+ufw allow 80/tcp 2>/dev/null || true
+nginx -t && systemctl enable nginx && systemctl reload nginx
+echo "  nginx proxy active — dashboard at http://165.232.101.253"
+
+# 9. Test it
 sleep 1
 echo "▶ Testing webhook..."
 RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:$WEBHOOK_PORT/deploy)
@@ -163,10 +189,15 @@ echo ""
 echo "╔══════════════════════════════════════════════════╗"
 echo "║  Setup complete!                                  ║"
 echo "╠══════════════════════════════════════════════════╣"
+echo "║  Dashboard: http://165.232.101.253                ║"
+echo "║    Login:   admin / grid  (CHANGE THIS!)          ║"
 echo "║  Webhook: http://165.232.101.253:$WEBHOOK_PORT/deploy      ║"
 echo "║  Secret:  grid-engine-deploy                     ║"
 echo "║  Logs:    journalctl -u grid-webhook -f           ║"
 echo "╚══════════════════════════════════════════════════╝"
+echo ""
+echo "IMPORTANT: Change the dashboard password:"
+echo "  htpasswd /etc/nginx/.htpasswd admin"
 echo ""
 echo "NEXT: Add the GitHub webhook at:"
 echo "  https://github.com/ashskett/btc-dashboard/settings/hooks/new"

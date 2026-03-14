@@ -432,4 +432,4 @@ def engine_stop():
 
 if __name__ == "__main__":
     print("Dashboard running → open http://localhost:5050 in your browser")
-    app.run(host="0.0.0.0", port=5050, debug=False)
+    app.run(host="127.0.0.1", port=5050, debug=False)
