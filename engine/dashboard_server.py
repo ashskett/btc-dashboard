@@ -86,6 +86,18 @@ def signed_request(method, path, body=None, params=None):
 # ── Health check (unauthenticated) ───────────────────────
 @app.route("/ping")
 def ping():
+    # Debug: /ping?debug=balance returns raw 3Commas pie_chart_data
+    if request.args.get("debug") == "balance":
+        try:
+            signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
+            time.sleep(2)
+            r = signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
+            return jsonify({"status": r.status_code, "data": r.json() if r.ok else r.text[:500]})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    # Debug: /ping?debug=version returns PUBLIC_PATHS to confirm code version
+    if request.args.get("debug") == "version":
+        return jsonify({"public_paths": list(_PUBLIC_PATHS), "pid": os.getpid()})
     return jsonify({"ok": True})
 
 
