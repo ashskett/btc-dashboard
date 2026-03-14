@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import json, os, base64, time, subprocess, signal, sys
+import json, os, base64, time, subprocess, signal, sys, secrets
 import requests as req
 from dotenv import load_dotenv
 from cryptography.hazmat.primitives import hashes, serialization
@@ -11,6 +11,49 @@ load_dotenv()
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
+
+# ── Auth token ────────────────────────────────────────────
+_DASHBOARD_SECRET = None
+
+def _ensure_secret():
+    global _DASHBOARD_SECRET
+    token = os.getenv("DASHBOARD_SECRET", "").strip()
+    if token:
+        _DASHBOARD_SECRET = token
+        return
+    token = secrets.token_hex(24)
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        lines = open(env_path).readlines() if os.path.exists(env_path) else []
+        lines.append(f"DASHBOARD_SECRET={token}\n")
+        with open(env_path, "w") as f:
+            f.writelines(lines)
+    except Exception as e:
+        print(f"[auth] Warning: could not write token to .env: {e}")
+    _DASHBOARD_SECRET = token
+    print(f"\n{'='*64}")
+    print(f"  DASHBOARD_SECRET generated and saved to .env")
+    print(f"  Token: {token}")
+    print(f"  Browser URL: http://165.232.101.253:5050/?token={token}")
+    print(f"{'='*64}\n")
+
+_ensure_secret()
+
+_PUBLIC_PATHS = {"/", "/ping"}
+
+@app.before_request
+def check_token():
+    if request.path in _PUBLIC_PATHS:
+        return None
+    if not _DASHBOARD_SECRET:
+        return None
+    token = (
+        request.headers.get("X-Dashboard-Token") or
+        request.args.get("token") or
+        ""
+    )
+    if token != _DASHBOARD_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
 
 STATUS_FILE  = "engine_status.json"
 API_KEY      = os.getenv("THREECOMMAS_API_KEY")
@@ -38,6 +81,12 @@ def signed_request(method, path, body=None, params=None):
     ).decode()
     headers = {"Apikey": API_KEY, "Signature": sig, "Content-Type": "application/json"}
     return req.request(method, BASE_3C + path, headers=headers, data=payload, params=params, timeout=10)
+
+
+# ── Health check (unauthenticated) ───────────────────────
+@app.route("/ping")
+def ping():
+    return jsonify({"ok": True})
 
 
 # ── Serve dashboard HTML ──────────────────────────────────
@@ -432,4 +481,4 @@ def engine_stop():
 
 if __name__ == "__main__":
     print("Dashboard running → open http://localhost:5050 in your browser")
-    app.run(host="127.0.0.1", port=5050, debug=False)
+    app.run(host="0.0.0.0", port=5050, debug=False)

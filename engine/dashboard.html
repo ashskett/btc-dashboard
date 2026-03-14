@@ -659,6 +659,22 @@
 // ── CONFIG ───────────────────────────────────────────────
 // Since this page is served BY Flask, all API calls go to the same origin
 const API = '';   // empty = same origin (http://localhost:5050)
+
+// ── Auth token (reads ?token= from URL, stores in localStorage) ──
+(function() {
+  const p = new URLSearchParams(window.location.search);
+  const t = p.get('token');
+  if (t) localStorage.setItem('dash_token', t);
+  const TOKEN = localStorage.getItem('dash_token') || '';
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function(url, opts = {}) {
+    if (TOKEN && typeof url === 'string' && (url.startsWith('/') || url.startsWith(window.location.origin))) {
+      opts = { ...opts, headers: { 'X-Dashboard-Token': TOKEN, ...(opts.headers || {}) } };
+    }
+    return _fetch(url, opts);
+  };
+}());
+
 const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
 
 let chart, candles, gridLines=[];
