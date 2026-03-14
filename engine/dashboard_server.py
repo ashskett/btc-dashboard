@@ -232,6 +232,49 @@ def set_trendline():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Bot ID config ────────────────────────────────────────
+@app.route("/config/bots", methods=["GET", "POST"])
+def config_bots():
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if request.method == "GET":
+        return jsonify({"bot_ids": os.getenv("GRID_BOT_IDS", "")})
+    body    = request.get_json(force=True, silent=True) or {}
+    new_ids = body.get("bot_ids", "").strip()
+    if not new_ids:
+        return jsonify({"ok": False, "msg": "bot_ids required"}), 400
+    try:
+        lines   = open(env_path).readlines() if os.path.exists(env_path) else []
+        updated = False
+        for i, line in enumerate(lines):
+            if line.startswith("GRID_BOT_IDS="):
+                lines[i] = f"GRID_BOT_IDS={new_ids}\n"
+                updated = True
+                break
+        if not updated:
+            lines.append(f"GRID_BOT_IDS={new_ids}\n")
+        with open(env_path, "w") as f:
+            f.writelines(lines)
+        os.environ["GRID_BOT_IDS"] = new_ids
+        return jsonify({"ok": True, "msg": "Bot IDs saved — restart engine to apply"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+# ── Breakout state management ─────────────────────────────
+@app.route("/breakout/clear", methods=["POST"])
+def breakout_clear():
+    state_file = os.path.join(os.path.dirname(__file__), "breakout_state.json")
+    try:
+        import json as _json
+        _json.dump(
+            {"consec_up": 0, "consec_down": 0, "active": None, "fire_price": None},
+            open(state_file, "w")
+        )
+        return jsonify({"ok": True, "msg": "Breakout state cleared"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 # ── Logging endpoints ────────────────────────────────────
 @app.route("/log/status")
 def log_status():
