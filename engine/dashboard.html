@@ -667,7 +667,7 @@ let showGrid=true, showTL=true;
 let currentTf='1h';
 let status={};
 let bots=[];
-let dryRun=true;
+let dryRun=false;   // synced from engine status on first poll; default false (live)
 let prevPrice=null;
 let connected=false;
 
@@ -831,6 +831,9 @@ async function pollStatus(){
       el.className = `hchange ${chg>=0?'up':'down'}`;
     }
     prevPrice = d.price;
+
+    // Sync dry-run button state to what the engine actually reports
+    if(d.dry_run !== undefined) setDry(d.dry_run, /*silent=*/true);
 
     document.getElementById('pRegime').textContent  = d.regime||'—';
     // pSession updated below with weekend styling
@@ -1144,11 +1147,11 @@ async function saveBotIds(){
   } catch(e){ toast(`Error: ${e.message}`,'err'); }
 }
 
-function setDry(v){
+function setDry(v, silent=false){
   dryRun=v;
   document.getElementById('dryOn').className  = `cbtn ${v?'on-a':''}`;
   document.getElementById('dryOff').className = `cbtn ${!v?'on-r':''}`;
-  toast(v?'DRY RUN on — no real actions':'⚠ LIVE MODE — real orders will fire', v?'ok':'err');
+  if(!silent) toast(v?'DRY RUN on — no real actions':'⚠ LIVE MODE — real orders will fire', v?'ok':'err');
 }
 
 function toggleGrid(v){
