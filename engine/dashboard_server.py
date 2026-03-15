@@ -926,19 +926,17 @@ def deploy_endpoint():
 
     def _restart():
         time.sleep(1.0)
-        global _engine_proc
-        if _engine_proc and _engine_proc.poll() is None:
-            _engine_proc.terminate()
-            time.sleep(0.5)
-        # Spawn new server with close_fds so it doesn't inherit the bound socket,
-        # then hard-exit current process so the OS releases port 5050.
-        script = os.path.abspath(__file__)
-        subprocess.Popen(
-            [sys.executable, script],
-            cwd=os.path.dirname(script),
-            close_fds=True,
-            start_new_session=True,
+        # Use tmux to restart cleanly in the managed session — avoids the
+        # race condition where the new background process tries to bind port
+        # 5050 before os._exit releases it, causing a silent startup failure.
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        restart_cmd = (
+            "tmux send-keys -t grid C-c Enter ; sleep 2 ; "
+            f"tmux send-keys -t grid 'cd {script_dir} && "
+            "source venv/bin/activate && python dashboard_server.py' Enter"
         )
+        subprocess.Popen(restart_cmd, shell=True)
+        time.sleep(0.5)
         os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
