@@ -113,26 +113,19 @@
     width: 4px; height: 4px; border-radius: 50%;
     background: var(--accent); opacity: .5; flex-shrink: 0;
   }
-  .nt-track-wrap {
-    flex: 1; overflow: hidden; position: relative; height: 100%;
-  }
+  .nt-track-wrap { flex: 1; overflow: hidden; height: 100%; }
   #ntTrack {
-    position: relative; width: 100%; height: 100%; overflow: hidden;
+    display: inline-flex; align-items: center;
+    height: 100%; white-space: nowrap;
+    transition: transform 0.65s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform;
   }
-  .nt-slide {
-    position: absolute; inset: 0;
-    display: flex; align-items: center; gap: 9px;
-    padding: 0 14px;
-    transform: translateX(110%);
-    transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-    white-space: nowrap; overflow: hidden;
-  }
-  .nt-slide.active { transform: translateX(0); }
-  .nt-slide.exit   { transform: translateX(-110%); }
-  .nt-slide a { color: #c0cad6; text-decoration: none; font-size: 10px; transition: color .15s; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .nt-slide a:hover { color: #fff; }
-  .nt-src { font-size: 8px; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
-  .nt-age { font-size: 8px; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+  .nt-item { display: inline-flex; align-items: center; gap: 7px; padding: 0 20px; flex-shrink: 0; }
+  .nt-item a { color: #c0cad6; text-decoration: none; font-size: 10px; transition: color .15s; }
+  .nt-item a:hover { color: #fff; }
+  .nt-src { font-size: 8px; color: var(--muted); white-space: nowrap; }
+  .nt-age { font-size: 8px; color: var(--muted); white-space: nowrap; }
+  .nt-sep { color: var(--accent); opacity: .3; font-size: 9px; }
 
   /* CONNECTION ERROR BANNER */
   #connBanner {
@@ -3865,13 +3858,14 @@ function _exitPtPickMode(){
 
 // ── News Ticker ───────────────────────────────────────────────────────────
 (function newsTicker(){
-  const PAUSE_MS = 20000;   // hold each headline for 20s
-  const SLIDE_MS = 600;     // CSS transition duration
-  const FETCH_MS = 600000;  // re-fetch every 10 min
+  const PAUSE_MS = 20000;
+  const FETCH_MS = 600000;
 
-  let _headlines = [];
-  let _idx       = 0;
-  let _timer     = null;
+  let _itemEls = [];   // first-set item elements (for width measurement)
+  let _halfLen = 0;    // number of items in one set
+  let _stepIdx = 0;    // which item we're about to scroll off
+  let _offset  = 0;
+  let _timer   = null;
 
   function timeAgo(rfc){
     if(!rfc) return '';
@@ -3882,38 +3876,66 @@ function _exitPtPickMode(){
     return `${Math.floor(s/86400)}d ago`;
   }
 
-  function makeSlide(h){
-    const el = document.createElement('div');
-    el.className = 'nt-slide';
+  function makeItem(h){
+    const el = document.createElement('span');
+    el.className = 'nt-item';
     const age = h.published_at ? `<span class="nt-age">${timeAgo(h.published_at)}</span>` : '';
     el.innerHTML =
       `<span class="nt-src">${h.source}</span>` +
       `<a href="${h.url||'#'}" target="_blank" rel="noopener">${h.title}</a>` +
-      age;
+      age +
+      `<span class="nt-sep">◆</span>`;
     return el;
   }
 
   function advance(){
     clearTimeout(_timer);
     const track = document.getElementById('ntTrack');
-    if(!track || !_headlines.length) return;
+    if(!track || !_itemEls.length) return;
 
-    const h    = _headlines[_idx];
-    const next = makeSlide(h);
-    track.appendChild(next);
+    // Step by the width of the item scrolling off
+    _offset += _itemEls[_stepIdx].offsetWidth;
+    _stepIdx++;
 
-    // slide in
-    requestAnimationFrame(() => requestAnimationFrame(() => next.classList.add('active')));
+    track.style.transform = `translateX(-${_offset}px)`;
 
-    // slide out old
-    const old = track.querySelector('.nt-slide.active:not(:last-child)');
-    if(old){
-      old.classList.add('exit');
-      old.classList.remove('active');
-      setTimeout(() => old.remove(), SLIDE_MS + 100);
+    // Seamless reset: once we've consumed the first full set, snap back
+    if(_stepIdx >= _halfLen){
+      setTimeout(() => {
+        track.style.transition = 'none';
+        track.style.transform  = 'translateX(0)';
+        track.offsetHeight;  // force reflow
+        track.style.transition = '';
+        _offset  = 0;
+        _stepIdx = 0;
+      }, 700);
     }
 
-    _idx = (_idx + 1) % _headlines.length;
+    _timer = setTimeout(advance, PAUSE_MS);
+  }
+
+  function buildTrack(headlines){
+    const track = document.getElementById('ntTrack');
+    if(!track) return;
+
+    clearTimeout(_timer);
+    track.style.transition = 'none';
+    track.style.transform  = 'translateX(0)';
+    track.innerHTML = '';
+    _offset  = 0;
+    _stepIdx = 0;
+    _itemEls = [];
+    _halfLen = headlines.length;
+
+    // Render two copies for seamless looping
+    for(let pass = 0; pass < 2; pass++){
+      headlines.forEach((h, i) => {
+        const el = makeItem(h);
+        track.appendChild(el);
+        if(pass === 0) _itemEls.push(el);
+      });
+    }
+
     _timer = setTimeout(advance, PAUSE_MS);
   }
 
@@ -3923,13 +3945,7 @@ function _exitPtPickMode(){
       if(!r.ok) return;
       const data = await r.json();
       if(!Array.isArray(data) || !data.length) return;
-      _headlines = data;
-      _idx = 0;
-      // clear track and start fresh
-      const track = document.getElementById('ntTrack');
-      if(track) track.innerHTML = '';
-      clearTimeout(_timer);
-      advance();
+      buildTrack(data);
     } catch(e){}
   }
 
