@@ -5,6 +5,7 @@ Listens on port 9001 for POST /deploy from GitHub.
 Runs: git pull → rsync engine files → restart engine.
 """
 import os
+import sys
 import hmac
 import hashlib
 import subprocess
@@ -81,6 +82,14 @@ def deploy():
     run(restart)
 
     log.info("=== Deploy complete ===")
+
+    # 5. Restart this webhook process so the updated script takes effect immediately.
+    #    os.execv replaces the current process image — safe because the HTTP response
+    #    was already sent before this thread started.
+    log.info("Restarting webhook server with updated script...")
+    import time as _time
+    _time.sleep(1)
+    os.execv(sys.executable, [sys.executable, "/root/webhook_server.py"])
 
 
 class Handler(BaseHTTPRequestHandler):

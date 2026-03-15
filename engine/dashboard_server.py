@@ -1369,5 +1369,25 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Warning: could not auto-start engine: {e}")
 
+    # Startup self-heal: re-download static files from the correct branch 20s after
+    # startup. This silently fixes any bad webhook overwrite (e.g. webhook running
+    # old code that deployed from main). Only downloads files served from disk
+    # (dashboard.html + macro dashboards) — no restart needed since Flask reads them
+    # fresh on every request. Python code changes still require a full /deploy.
+    def _startup_heal():
+        import time as _t, urllib.request as _ur
+        _t.sleep(20)
+        _sd = os.path.dirname(os.path.abspath(__file__))
+        _heal_files = ["dashboard.html", "btc_macro_dashboard.html", "btc_macro_dashboard_mobile.html"]
+        for _f in _heal_files:
+            _url = f"{_DEPLOY_BASE}/{_f}"
+            _dst = os.path.join(_sd, _f)
+            try:
+                _ur.urlretrieve(_url, _dst + ".heal")
+                os.replace(_dst + ".heal", _dst)
+            except Exception:
+                pass
+    threading.Thread(target=_startup_heal, daemon=True).start()
+
     print("Dashboard running → open http://localhost:5050 in your browser")
     app.run(host="0.0.0.0", port=5050, debug=False)
