@@ -35,7 +35,7 @@
     height: 100vh;
     overflow: hidden;
     display: grid;
-    grid-template-rows: 48px 32px 1fr;
+    grid-template-rows: 48px 32px 22px 1fr;
     grid-template-columns: 1fr 300px;
   }
 
@@ -85,6 +85,42 @@
     opacity:.65; transition:opacity .15s; white-space:nowrap;
   }
   .macro-link:hover { opacity:1; }
+
+  /* NEWS TICKER */
+  #news-ticker {
+    grid-column: 1/-1;
+    background: rgba(6,10,14,.98);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    gap: 10px;
+    overflow: hidden;
+    font-size: 10px;
+  }
+  #news-ticker .nt-lbl {
+    font-size: 8px; font-weight: 800; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent); white-space: nowrap;
+    border: 1px solid rgba(0,212,255,.25); border-radius: 3px;
+    padding: 1px 5px; flex-shrink: 0;
+  }
+  #news-ticker .nt-src {
+    font-size: 8px; color: var(--muted); white-space: nowrap;
+    flex-shrink: 0; letter-spacing: .04em;
+  }
+  #news-ticker .nt-headline {
+    flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    color: #d0d8e4; transition: opacity .5s ease;
+    cursor: pointer;
+  }
+  #news-ticker .nt-headline:hover { color: #fff; text-decoration: underline; }
+  #news-ticker .nt-age {
+    font-size: 8px; color: var(--muted); white-space: nowrap; flex-shrink: 0;
+  }
+  #news-ticker .nt-dot {
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0; opacity: .5;
+  }
 
   /* CONNECTION ERROR BANNER */
   #connBanner {
@@ -379,6 +415,14 @@
   <div class="mp"><span class="mp-lbl">Funding</span><span class="mp-val" id="mpFund">—</span></div>
   <div class="mp"><span class="mp-lbl">Liquidity</span><span class="mp-val" id="mpLiq">—</span></div>
   <a href="/macro" target="_blank" class="macro-link">Full Macro Dashboard ↗</a>
+</div>
+
+<div id="news-ticker">
+  <span class="nt-lbl">News</span>
+  <span class="nt-dot"></span>
+  <span class="nt-src" id="ntSrc">—</span>
+  <a class="nt-headline" id="ntHeadline" href="#" target="_blank" rel="noopener">Loading news…</a>
+  <span class="nt-age" id="ntAge"></span>
 </div>
 
 <div id="connBanner">⚠ Cannot reach dashboard server — make sure dashboard_server.py is running</div>
@@ -3803,6 +3847,80 @@ function _exitPtPickMode(){
 
   run();
   setInterval(run, 300000); // refresh every 5 min (external APIs)
+})();
+
+// ── News Ticker ───────────────────────────────────────────────────────────
+(function newsTicker(){
+  const API_KEY  = 'ba7c44e5d68ff28d91361124a9c4017034dcbd0a';
+  const ROTATE_MS = 30000;   // show each headline for 30s
+  const FETCH_MS  = 600000;  // re-fetch every 10 min
+
+  let _headlines = [];
+  let _idx       = 0;
+  let _rotateTimer = null;
+
+  function timeAgo(iso){
+    const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+    if(s < 60)  return `${s}s ago`;
+    if(s < 3600) return `${Math.floor(s/60)}m ago`;
+    if(s < 86400) return `${Math.floor(s/3600)}h ago`;
+    return `${Math.floor(s/86400)}d ago`;
+  }
+
+  function showAt(i){
+    const h   = _headlines[i];
+    const el  = document.getElementById('ntHeadline');
+    const src = document.getElementById('ntSrc');
+    const age = document.getElementById('ntAge');
+    if(!h || !el) return;
+    el.style.opacity = '0';
+    setTimeout(()=>{
+      el.textContent = h.title;
+      el.href        = h.url || '#';
+      src.textContent = h.source || '';
+      age.textContent = h.published_at ? timeAgo(h.published_at) : '';
+      el.style.opacity = '1';
+    }, 500);
+  }
+
+  function rotate(){
+    if(!_headlines.length) return;
+    _idx = (_idx + 1) % _headlines.length;
+    showAt(_idx);
+  }
+
+  async function fetchNews(){
+    const url = `https://cryptopanic.com/api/v1/posts/?auth_token=${API_KEY}&currencies=BTC&kind=news&public=true&filter=rising`;
+    let data = null;
+    // try direct (CryptoPanic supports CORS)
+    try {
+      const r = await fetch(url, {signal: AbortSignal.timeout(8000)});
+      if(r.ok) data = await r.json();
+    } catch(e){}
+    // fall back to allorigins proxy
+    if(!data){
+      try {
+        const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {signal: AbortSignal.timeout(12000)});
+        if(r.ok){ const d = await r.json(); data = JSON.parse(d.contents); }
+      } catch(e){}
+    }
+    if(!data?.results?.length) return;
+
+    _headlines = data.results.slice(0, 12).map(p => ({
+      title:        p.title,
+      url:          p.url,
+      published_at: p.published_at,
+      source:       p.source?.title ?? '',
+    }));
+    _idx = 0;
+    showAt(0);
+
+    clearInterval(_rotateTimer);
+    _rotateTimer = setInterval(rotate, ROTATE_MS);
+  }
+
+  fetchNews();
+  setInterval(fetchNews, FETCH_MS);
 })();
 
 // Hook chart click for price-pick mode — runs after chart is initialised
