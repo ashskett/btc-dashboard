@@ -107,13 +107,47 @@ def redeploy_bot(bot_id, tier):
     stop_bot(bot_id)
     time.sleep(2)  # brief pause to let 3Commas cancel open orders
 
+    # Re-fetch post-stop state so we see actual BTC/USDC holdings after orders cancelled
+    try:
+        stopped = get_bot(bot_id)
+        btc_held  = float(stopped.get("investment_base_currency")  or 0)
+        usdc_held = float(stopped.get("investment_quote_currency") or 0)
+    except Exception:
+        stopped   = current
+        btc_held  = 0.0
+        usdc_held = 0.0
+
     # 3. Build the PATCH payload — only change range/levels, preserve everything else
     lower = round(tier["grid_low"],  2)
     upper = round(tier["grid_high"], 2)
     grids = int(tier["levels"])
 
-    # Preserve quantity_per_grid from current config (set by user in 3Commas UI)
-    qty = current.get("quantity_per_grid", current.get("investment_quote_currency"))
+    # Estimate how many sell vs buy levels exist at current price (≈ midpoint of new range)
+    mid_price   = (lower + upper) / 2
+    sell_levels = max(1, round((upper - mid_price) / (upper - lower) * grids))
+    buy_levels  = max(1, grids - sell_levels)
+
+    # Original configured qty (what 3Commas had before)
+    original_qty = float(current.get("quantity_per_grid") or 0) or (100.0 / mid_price)
+
+    # Cap qty_per_grid so each funded side can cover its levels.
+    # If a side has zero capital the bot will self-heal as the other side fills.
+    candidates = []
+    if btc_held  > 0: candidates.append(btc_held  / sell_levels)
+    if usdc_held > 0: candidates.append(usdc_held / (buy_levels * mid_price))
+
+    if candidates:
+        max_funded_qty = min(candidates)
+        if max_funded_qty < original_qty * 0.9:
+            qty = max_funded_qty
+            print(f"  ⚠ Capital low — qty_per_grid capped: {original_qty:.6f} → {qty:.6f} BTC"
+                  f"  (held: {btc_held:.4f} BTC / ${usdc_held:,.0f} USDC)")
+        else:
+            qty = original_qty
+    else:
+        # No capital at all — keep original and let 3Commas surface the error
+        qty = original_qty
+        print(f"  ⚠ No capital detected after stop (btc=0, usdc=0) — using original qty {qty:.6f}")
 
     patch_body = {
         "name":             current.get("name", f"Grid {tier['name']}"),
