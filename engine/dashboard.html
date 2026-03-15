@@ -336,6 +336,16 @@
   }
   .cbtn.pnl-tf.active { background:rgba(0,212,255,.12); border-color:var(--accent); color:var(--accent); }
   input[type="datetime-local"].pnl-input { color-scheme: dark; }
+  /* Live P&L summary */
+  .summ-grid { display:grid; grid-template-columns:1fr auto auto auto; gap:0 10px; align-items:center; }
+  .summ-hdr  { font-size:8px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; text-align:right; padding-bottom:4px; }
+  .summ-row  { padding:5px 0; border-top:1px solid rgba(255,255,255,.05); }
+  .summ-row.total { border-top:1px solid var(--border); font-weight:700; }
+  .summ-lbl  { font-size:10px; }
+  .summ-val  { font-size:11px; font-family:var(--mono); text-align:right; }
+  .summ-cnt  { font-size:9px; color:var(--muted); text-align:right; }
+  .summ-note { font-size:9px; color:var(--muted); margin-top:5px; font-style:italic; }
+  .summ-preset { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:8px; }
 </style>
 </head>
 <body>
@@ -589,9 +599,76 @@
   <!-- ── P&L PANEL ── -->
   <div class="aside-panel" id="panelPnl">
 
+    <!-- ── Live P&L Summary ── -->
+    <div class="pnl-sec">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div class="sec-title" style="margin-bottom:0;">Live P&amp;L Summary</div>
+        <button class="cbtn" id="summRefreshBtn" onclick="loadPnlSummary(true)" title="Refresh" style="padding:3px 8px;font-size:11px;">↻</button>
+      </div>
+
+      <!-- Quick range presets -->
+      <div class="summ-preset">
+        <button class="cbtn pnl-tf" data-summ="0"   onclick="setSummaryRange(this,0)">Today</button>
+        <button class="cbtn pnl-tf" data-summ="7"   onclick="setSummaryRange(this,7)">7d</button>
+        <button class="cbtn pnl-tf" data-summ="30"  onclick="setSummaryRange(this,30)">30d</button>
+        <button class="cbtn pnl-tf" data-summ="-1"  onclick="setSummaryRange(this,-1)">MTD</button>
+        <button class="cbtn pnl-tf active" data-summ="all" onclick="setSummaryRange(this,'all')">All</button>
+      </div>
+
+      <!-- Custom date inputs -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">From</div>
+          <input type="datetime-local" id="summaryFrom" class="pnl-input" style="font-size:10px;padding:5px 7px;" oninput="onSummaryRangeInput()">
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">To</div>
+          <input type="datetime-local" id="summaryTo" class="pnl-input" style="font-size:10px;padding:5px 7px;" oninput="onSummaryRangeInput()">
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div id="summLoading" style="color:var(--muted);font-size:10px;padding:4px 0;">Loading…</div>
+      <div id="summError"   style="display:none;color:var(--red);font-size:10px;padding:4px 0;"></div>
+      <div id="summTable"   style="display:none;">
+        <div class="summ-grid">
+          <div></div>
+          <div class="summ-hdr">Realized</div>
+          <div class="summ-hdr">Unrealized</div>
+          <div class="summ-hdr">#</div>
+
+          <div class="summ-lbl summ-row">Grid Bots</div>
+          <div class="summ-val summ-row" id="summGridReal">—</div>
+          <div class="summ-val summ-row" id="summGridUnreal">—</div>
+          <div class="summ-cnt summ-row" id="summGridCnt">—</div>
+
+          <div class="summ-lbl summ-row">DCA Bots</div>
+          <div class="summ-val summ-row" id="summDcaReal">—</div>
+          <div class="summ-val summ-row" id="summDcaUnreal">—</div>
+          <div class="summ-cnt summ-row" id="summDcaCnt">—</div>
+
+          <div class="summ-lbl summ-row total">Grand Total</div>
+          <div class="summ-val summ-row total" id="summGrandTotal">—</div>
+          <div class="summ-val summ-row total" style="color:var(--muted);font-size:9px;" id="summGrandUnreal">—</div>
+          <div></div>
+        </div>
+        <div class="summ-note" id="summNote"></div>
+      </div>
+
+      <!-- DCA bot config -->
+      <div style="margin-top:10px;">
+        <button class="cbtn" onclick="toggleDcaConfig()" style="font-size:9px;width:100%;">⚙ Configure DCA Bots</button>
+        <div id="dcaConfigPanel" style="display:none;margin-top:8px;">
+          <div style="font-size:9px;color:var(--muted);margin-bottom:6px;">Tick bots to include in DCA P&amp;L:</div>
+          <div id="dcaBotCheckboxes" style="max-height:160px;overflow-y:auto;"></div>
+          <button class="pnl-run" onclick="saveDcaBotConfig()" style="margin-top:6px;">Save</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Timeframe selector -->
     <div class="pnl-sec">
-      <div class="sec-title">Timeframe</div>
+      <div class="sec-title">Simulation Timeframe</div>
       <div class="btn-row" style="flex-wrap:wrap;gap:4px;margin-bottom:8px;">
         <button class="cbtn pnl-tf active" data-tf="1"   onclick="setPnlTf(this)">1h</button>
         <button class="cbtn pnl-tf"        data-tf="6"   onclick="setPnlTf(this)">6h</button>
@@ -3045,11 +3122,184 @@ function switchTab(tab) {
   document.querySelectorAll('.aside-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
   document.getElementById('panel' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+  if (tab === 'pnl') loadPnlSummary();
 }
 
 // ── P&L SIMULATION ───────────────────────────────────────────
 const FEE_RT = 0.0040;
 const REGIME_COLORS_PNL = { RANGE:'#22d3ee', TREND_UP:'#4ade80', TREND_DOWN:'#f87171', COMPRESSION:'#a78bfa' };
+
+// ── LIVE P&L SUMMARY ──────────────────────────────────────
+let _dcaConfigOpen = false;
+let _dcaAllBots    = [];   // full list from /dca/bots (for config panel)
+let _dcaIds        = [];   // saved DCA_BOT_IDS from /config/dca-bots
+
+function toLocalDTString(d) {
+  // Returns "YYYY-MM-DDTHH:MM" for a datetime-local input
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function setSummaryRange(btn, days) {
+  document.querySelectorAll('.pnl-tf[data-summ]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const fromEl = document.getElementById('summaryFrom');
+  const toEl   = document.getElementById('summaryTo');
+  toEl.value = '';
+  if (days === 'all') {
+    fromEl.value = '';
+  } else if (days === 0) {
+    const s = new Date(); s.setHours(0,0,0,0);
+    fromEl.value = toLocalDTString(s);
+  } else if (days === -1) { // MTD
+    const s = new Date(); s.setDate(1); s.setHours(0,0,0,0);
+    fromEl.value = toLocalDTString(s);
+  } else {
+    fromEl.value = toLocalDTString(new Date(Date.now() - days * 86400000));
+  }
+  loadPnlSummary(true);
+}
+
+function onSummaryRangeInput() {
+  document.querySelectorAll('.pnl-tf[data-summ]').forEach(b => b.classList.remove('active'));
+  loadPnlSummary(true);
+}
+
+function fmtMoney(v) {
+  if (v == null) return '—';
+  const sign = v >= 0 ? '+' : '';
+  const col  = v >= 0 ? 'var(--green)' : 'var(--red)';
+  return `<span style="color:${col}">${sign}$${Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>`;
+}
+
+async function loadPnlSummary(force = false) {
+  const fromEl  = document.getElementById('summaryFrom');
+  const toEl    = document.getElementById('summaryTo');
+  const loading = document.getElementById('summLoading');
+  const errEl   = document.getElementById('summError');
+  const table   = document.getElementById('summTable');
+
+  loading.style.display = 'block';
+  errEl.style.display   = 'none';
+  table.style.display   = 'none';
+
+  try {
+    // Convert local datetime inputs to UTC ISO for API
+    const fromUTC = fromEl.value ? new Date(fromEl.value).toISOString() : '';
+    const toUTC   = toEl.value   ? new Date(toEl.value).toISOString()   : '';
+    let   dcaQ    = '';
+    if (fromUTC) dcaQ += `&from=${encodeURIComponent(fromUTC)}`;
+    if (toUTC)   dcaQ += `&to=${encodeURIComponent(toUTC)}`;
+
+    const [gridR, dcaR] = await Promise.all([
+      fetch(`${API}/bots/pnl`),
+      fetch(`${API}/dca/pnl?${dcaQ.slice(1)}`),
+    ]);
+
+    const gridMap = gridR.ok ? await gridR.json() : {};
+    const dcaData = dcaR.ok  ? await dcaR.json()  : {total_realized:0, total_unrealized:0, total_deals:0, configured:false};
+
+    // Sum grid bots
+    let gridReal = 0, gridUnreal = 0, gridFills = 0;
+    for (const d of Object.values(gridMap)) {
+      if (!d.error) {
+        gridReal   += d.realized_usd   || 0;
+        gridUnreal += d.unrealized_usd || 0;
+        gridFills  += d.fill_count     || 0;
+      }
+    }
+
+    const dcaReal   = dcaData.total_realized   || 0;
+    const dcaUnreal = dcaData.total_unrealized || 0;
+    const dcaDeals  = dcaData.total_deals      || 0;
+
+    const grandReal   = gridReal   + dcaReal;
+    const grandUnreal = gridUnreal + dcaUnreal;
+
+    document.getElementById('summGridReal').innerHTML   = fmtMoney(gridReal);
+    document.getElementById('summGridUnreal').innerHTML = fmtMoney(gridUnreal);
+    document.getElementById('summGridCnt').textContent  = gridFills ? `${gridFills} fills` : '—';
+
+    if (!dcaData.configured) {
+      document.getElementById('summDcaReal').innerHTML   = '<span style="color:var(--muted)">not configured</span>';
+      document.getElementById('summDcaUnreal').innerHTML = '';
+      document.getElementById('summDcaCnt').textContent  = '';
+    } else {
+      document.getElementById('summDcaReal').innerHTML   = fmtMoney(dcaReal);
+      document.getElementById('summDcaUnreal').innerHTML = fmtMoney(dcaUnreal);
+      document.getElementById('summDcaCnt').textContent  = dcaDeals ? `${dcaDeals} deals` : '—';
+    }
+
+    document.getElementById('summGrandTotal').innerHTML  = fmtMoney(grandReal);
+    document.getElementById('summGrandUnreal').innerHTML = fmtMoney(grandUnreal);
+
+    let note = 'Grid totals are since last bot deploy (3Commas does not support date filtering for grid P&L).';
+    if (!dcaData.configured) note += ' Add DCA bot IDs below to include DCA P&L.';
+    else if (dcaData.date_filtered) note += ` DCA filtered ${fromUTC ? fromEl.value.slice(0,10) : '…'} → ${toUTC ? toEl.value.slice(0,10) : 'now'}.`;
+    document.getElementById('summNote').textContent = note;
+
+    loading.style.display = 'none';
+    table.style.display   = 'block';
+  } catch(e) {
+    loading.style.display = 'none';
+    errEl.style.display   = 'block';
+    errEl.textContent     = `Error: ${e.message}`;
+  }
+}
+
+async function toggleDcaConfig() {
+  _dcaConfigOpen = !_dcaConfigOpen;
+  const panel = document.getElementById('dcaConfigPanel');
+  panel.style.display = _dcaConfigOpen ? 'block' : 'none';
+  if (_dcaConfigOpen && !_dcaAllBots.length) await loadDcaConfigPanel();
+}
+
+async function loadDcaConfigPanel() {
+  const box = document.getElementById('dcaBotCheckboxes');
+  box.innerHTML = '<div style="color:var(--muted);font-size:10px;">Loading…</div>';
+  try {
+    const [allR, cfgR] = await Promise.all([
+      fetch(`${API}/dca/bots`),
+      fetch(`${API}/config/dca-bots`),
+    ]);
+    _dcaAllBots = allR.ok ? await allR.json() : [];
+    const cfg   = cfgR.ok ? await cfgR.json() : {};
+    _dcaIds     = (cfg.bot_ids || '').split(',').map(s=>s.trim()).filter(Boolean);
+
+    box.innerHTML = _dcaAllBots.map(b => {
+      const id      = String(b.id);
+      const checked = _dcaIds.includes(id) ? 'checked' : '';
+      const pair    = (b.pairs || [])[0] || '?';
+      const pnl     = parseFloat(b.finished_deals_profit_usd || 0);
+      const pnlStr  = `<span style="color:${pnl>=0?'var(--green)':'var(--red)'};font-size:9px;">${pnl>=0?'+':''}$${pnl.toFixed(0)}</span>`;
+      return `<label style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;font-size:10px;">
+        <input type="checkbox" data-dcaid="${id}" ${checked} style="cursor:pointer;">
+        <span style="flex:1;">${b.name || id}</span>
+        <span style="color:var(--muted);font-size:9px;">${pair}</span>
+        ${pnlStr}
+      </label>`;
+    }).join('');
+  } catch(e) {
+    box.innerHTML = `<div style="color:var(--red);font-size:10px;">Error: ${e.message}</div>`;
+  }
+}
+
+async function saveDcaBotConfig() {
+  const checked = [...document.querySelectorAll('#dcaBotCheckboxes input[data-dcaid]:checked')]
+    .map(el => el.dataset.dcaid);
+  const r = await fetch(`${API}/config/dca-bots`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({bot_ids: checked.join(',')}),
+  });
+  const d = r.ok ? await r.json() : {};
+  if (d.ok) {
+    _dcaIds = checked;
+    document.getElementById('dcaConfigPanel').style.display = 'none';
+    _dcaConfigOpen = false;
+    loadPnlSummary(true);
+  }
+}
 
 let _pnlTfHours = 1; // default: last 1h — 0 = All, -1 = manual range
 

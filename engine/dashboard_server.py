@@ -692,10 +692,37 @@ def config_bots():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+# ── DCA bot ID config ────────────────────────────────────
+@app.route("/config/dca-bots", methods=["GET", "POST"])
+def config_dca_bots():
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if request.method == "GET":
+        return jsonify({"bot_ids": os.getenv("DCA_BOT_IDS", "")})
+    body    = request.get_json(force=True, silent=True) or {}
+    new_ids = body.get("bot_ids", "").strip()
+    try:
+        lines   = open(env_path).readlines() if os.path.exists(env_path) else []
+        updated = False
+        for i, line in enumerate(lines):
+            if line.startswith("DCA_BOT_IDS="):
+                lines[i] = f"DCA_BOT_IDS={new_ids}\n"
+                updated = True
+                break
+        if not updated:
+            lines.append(f"DCA_BOT_IDS={new_ids}\n")
+        with open(env_path, "w") as f:
+            f.writelines(lines)
+        os.environ["DCA_BOT_IDS"] = new_ids
+        return jsonify({"ok": True, "bot_ids": new_ids})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 # ── DCA bots ──────────────────────────────────────────────
 from threecommas_dca import (
     get_dca_bots, get_dca_bot, create_dca_bot, enable_dca_bot,
     disable_dca_bot, panic_sell_dca_bot, get_dca_deals,
+    get_dca_completed_deals,
     update_dca_bot, delete_dca_bot, estimate_max_exposure,
 )
 
@@ -706,6 +733,99 @@ def dca_bots_list():
         return jsonify(bots)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/dca/pnl")
+def dca_pnl():
+    """
+    P&L summary for DCA bots listed in DCA_BOT_IDS env var.
+
+    Query params:
+      from  — ISO 8601 start (e.g. 2026-01-01T00:00:00Z)
+      to    — ISO 8601 end
+
+    If no dates supplied: returns totals from bot config (finished_deals_profit_usd).
+    If dates supplied: fetches completed deals per bot and sums usd_final_profit
+    for deals whose closed_at falls in range. Falls back to config totals on API error.
+
+    Response:
+    {
+      "configured": bool,
+      "date_filtered": bool,
+      "from": str|null,
+      "to": str|null,
+      "bots": [{ "id", "name", "realized_usd", "unrealized_usd", "deals", "pair" }],
+      "total_realized": float,
+      "total_unrealized": float,
+      "total_deals": int
+    }
+    """
+    from_iso = request.args.get("from")
+    to_iso   = request.args.get("to")
+    ids = [b.strip() for b in os.getenv("DCA_BOT_IDS", "").split(",") if b.strip()]
+    if not ids:
+        return jsonify({
+            "configured": False, "date_filtered": False,
+            "from": None, "to": None,
+            "bots": [], "total_realized": 0, "total_unrealized": 0, "total_deals": 0,
+        })
+
+    date_filtered = bool(from_iso or to_iso)
+    bots_result   = []
+    total_realized   = 0.0
+    total_unrealized = 0.0
+    total_deals      = 0
+
+    for bid in ids:
+        try:
+            r = _signed_request_local(bid, from_iso, to_iso, date_filtered)
+            bots_result.append(r)
+            total_realized   += r["realized_usd"]
+            total_unrealized += r["unrealized_usd"]
+            total_deals      += r["deals"]
+        except Exception as e:
+            bots_result.append({"id": bid, "name": "?", "realized_usd": 0,
+                                 "unrealized_usd": 0, "deals": 0, "error": str(e)})
+
+    return jsonify({
+        "configured": True,
+        "date_filtered": date_filtered,
+        "from": from_iso,
+        "to": to_iso,
+        "bots": bots_result,
+        "total_realized":   round(total_realized,   2),
+        "total_unrealized": round(total_unrealized, 2),
+        "total_deals": total_deals,
+    })
+
+
+def _signed_request_local(bot_id, from_iso, to_iso, date_filtered):
+    """Fetch P&L for one DCA bot — uses completed deals when date range given."""
+    rb = signed_request("GET", f"/ver1/bots/{bot_id}/show")
+    if rb.status_code != 200:
+        raise RuntimeError(f"Bot fetch {rb.status_code}")
+    b = rb.json()
+    name  = b.get("name", f"Bot {bot_id}")
+    pairs = b.get("pairs", [])
+    pair  = pairs[0] if pairs else "?"
+    unrealized = float(b.get("active_deals_usd_profit") or 0)
+
+    if date_filtered:
+        deals = get_dca_completed_deals(bot_id, from_iso=from_iso, to_iso=to_iso)
+        realized = sum(float(d.get("usd_final_profit") or 0) for d in deals)
+        deal_count = len(deals)
+    else:
+        realized   = float(b.get("finished_deals_profit_usd") or 0)
+        deal_count = int(b.get("finished_deals_count") or 0)
+
+    return {
+        "id":             bot_id,
+        "name":           name,
+        "pair":           pair,
+        "realized_usd":   round(realized,   2),
+        "unrealized_usd": round(unrealized, 2),
+        "deals":          deal_count,
+    }
 
 
 @app.route("/dca/bots", methods=["POST"])

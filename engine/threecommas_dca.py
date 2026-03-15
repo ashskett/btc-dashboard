@@ -181,6 +181,26 @@ def get_dca_deals(bot_id: str) -> list:
     return data if isinstance(data, list) else []
 
 
+def get_dca_completed_deals(bot_id: str, from_iso: str = None, to_iso: str = None, limit: int = 1000) -> list:
+    """
+    Return completed deals for a DCA bot, optionally filtered by close date.
+
+    from_iso / to_iso: ISO 8601 strings, e.g. "2026-01-01T00:00:00Z".
+    Returns deals sorted newest-first (3Commas default).
+    Each deal has: final_profit_percentage, usd_final_profit, closed_at, pair, id.
+    """
+    params = f"bot_id={bot_id}&scope=completed&limit={limit}"
+    if from_iso:
+        params += f"&closed_at_from={from_iso}"
+    if to_iso:
+        params += f"&closed_at_to={to_iso}"
+    r = _signed_request("GET", f"/ver1/deals?{params}")
+    if r.status_code != 200:
+        return []
+    data = r.json()
+    return data if isinstance(data, list) else []
+
+
 def update_dca_bot(
     bot_id: str,
     base_order_usd: float = None,
