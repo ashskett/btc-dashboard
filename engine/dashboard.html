@@ -375,6 +375,7 @@
   <div class="mp"><span class="mp-lbl">F&amp;G</span><span class="mp-val" id="mpFng">—</span></div>
   <div class="mp"><span class="mp-lbl">Macro Bias</span><span class="mp-val" id="mpBias">—</span></div>
   <div class="mp"><span class="mp-lbl">W.RSI</span><span class="mp-val" id="mpRsi">—</span></div>
+  <div class="mp"><span class="mp-lbl">OBV</span><span class="mp-val" id="mpObv">—</span></div>
   <div class="mp"><span class="mp-lbl">Funding</span><span class="mp-val" id="mpFund">—</span></div>
   <div class="mp"><span class="mp-lbl">Liquidity</span><span class="mp-val" id="mpLiq">—</span></div>
   <a href="/macro" target="_blank" class="macro-link">Full Macro Dashboard ↗</a>
@@ -3751,12 +3752,37 @@ function _exitPtPickMode(){
       set('mpRsi',`${rsiVal.toFixed(1)} <span style="font-size:9px;color:${c}">${lbl}</span>`);
     }
 
-    // ── Macro Bias (3-signal composite: F&G + Funding + W.RSI) ──
-    const sigs  = [fngSig, fundSig, rsiSig];
+    // ── OBV trend (weekly) ──
+    let obvSig = 'neutral';
+    if(klines && klines.length >= 10){
+      const obvSeries = [];
+      let obv = 0;
+      for(let i=1;i<klines.length;i++){
+        const c   = parseFloat(klines[i][4]);
+        const pc  = parseFloat(klines[i-1][4]);
+        const vol = parseFloat(klines[i][5]);
+        obv += c > pc ? vol : c < pc ? -vol : 0;
+        obvSeries.push(obv);
+      }
+      const last   = obvSeries[obvSeries.length-1];
+      const window = Math.min(5, obvSeries.length);
+      const sma    = obvSeries.slice(-window).reduce((a,v)=>a+v,0) / window;
+      const prev5  = obvSeries[obvSeries.length-6] ?? obvSeries[0];
+      const chg    = last - prev5;
+      obvSig = chg > 0 ? 'bull' : chg < 0 ? 'bear' : 'neutral';
+      const aboveMA = last > sma;
+      const c  = obvSig==='bull' ? '#00e5a0' : obvSig==='bear' ? '#ff4d6d' : '#8892a4';
+      const lbl = obvSig==='bull' ? 'RISING' : obvSig==='bear' ? 'FALLING' : 'FLAT';
+      const maTxt = aboveMA ? '↑MA' : '↓MA';
+      set('mpObv',`<span style="color:${c};font-weight:700">${lbl}</span> <span style="font-size:9px;color:var(--muted)">${maTxt}</span>`);
+    }
+
+    // ── Macro Bias (4-signal composite: F&G + Funding + W.RSI + OBV) ──
+    const sigs  = [fngSig, fundSig, rsiSig, obvSig];
     const bulls = sigs.filter(s=>s==='bull').length;
     const bears = sigs.filter(s=>s==='bear').length;
-    const biasSig   = bulls>=2?'bull':bears>=2?'bear':'neutral';
-    const biasLabel = bulls>=2?'BULLISH':bears>=2?'BEARISH':'NEUTRAL';
+    const biasSig   = bulls>=3?'bull':bears>=3?'bear':bulls>=2&&bears<=1?'bull':bears>=2&&bulls<=1?'bear':'neutral';
+    const biasLabel = biasSig==='bull'?'BULLISH':biasSig==='bear'?'BEARISH':'NEUTRAL';
     const biasC = sigCol(biasSig);
     set('mpBias',`<span style="color:${biasC};font-weight:800">${biasLabel}</span> <span style="font-size:9px;color:var(--muted)">${bulls}↑${bears}↓</span>`);
 
