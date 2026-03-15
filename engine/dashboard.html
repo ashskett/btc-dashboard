@@ -1209,13 +1209,13 @@ function redrawLines(){
       const lo  = parseFloat(bot.lower_price);
       const hi  = parseFloat(bot.upper_price);
       const lvl = Math.max(parseInt(bot.grids_quantity) || 2, 2);
-      const step = (hi - lo) / lvl;
+      const step = (hi - lo) / (lvl - 1);
       const col  = BOT_COLORS[i % BOT_COLORS.length];
       add(hi, col, LightweightCharts.LineStyle.Dashed,
           i === 0 ? 'Grid High' : '', i === 1 ? 1.5 : 1);
       add(lo, col, LightweightCharts.LineStyle.Dashed,
           i === 0 ? 'Grid Low' : '', i === 1 ? 1.5 : 1);
-      for (let n = 1; n < lvl; n++) {
+      for (let n = 1; n < lvl - 1; n++) {
         gridLines.push(candles.createPriceLine({
           price: lo + step * n, color: col + '44', lineWidth: 1,
           lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false,
