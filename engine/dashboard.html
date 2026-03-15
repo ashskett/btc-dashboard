@@ -61,9 +61,7 @@
   .pill { display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:6px; padding:4px 12px; min-width:85px; }
   .pill-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
   .pill-val { font-size:12px; font-weight:700; margin-top:1px; }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s ease-in-out infinite; }
-  .macro-nav-btn { margin-left:auto; font-family:var(--ui); font-size:10px; font-weight:700; color:var(--accent); text-decoration:none; letter-spacing:.08em; text-transform:uppercase; opacity:.6; transition:opacity .15s; white-space:nowrap; }
-  .macro-nav-btn:hover { opacity:1; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s ease-in-out infinite; margin-left:auto; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 
   /* MACRO BAR */
@@ -360,7 +358,6 @@
     <div class="pill"><span class="pill-lbl">Inventory</span><span class="pill-val" id="pInv">—</span></div>
     <div class="pill"><span class="pill-lbl">Skew</span><span class="pill-val" id="pSkew">—</span></div>
   </div>
-  <a href="/macro" target="_blank" class="macro-nav-btn" title="Open macro analysis dashboard">Macro ↗</a>
   <div class="dot" id="dot"></div>
 </header>
 
