@@ -18,6 +18,7 @@ from breakout import (
 from session import get_session
 from grid_logic import (
     get_grid_center,
+    get_grid_state,
     update_grid_center,
     drift_detected,
     calculate_grid_parameters,
@@ -151,7 +152,13 @@ def run():
         # ===============================
         # GRID CENTER / REGIME / SESSION
         # ===============================
-        state.center = get_grid_center()
+        _saved_grid = get_grid_state()
+        state.center = _saved_grid["grid_center"]
+        # grid_width_at_deploy: locked to the mid-tier grid_width at the time
+        # of the last redeploy. Used for drift detection so that a temporary
+        # ATR dip can't narrow the threshold and cause a premature recentre.
+        # Falls back to current state.grid_width once it's calculated below.
+        state.deploy_grid_width = _saved_grid.get("grid_width_at_deploy")
         state.regime = detect_regime(df, TRENDLINE)
         state.session = get_session()
 
@@ -308,12 +315,14 @@ def run():
             # Bots are NOT redeployed here (breakout still active), but keeping
             # the centre current means the eventual exhaustion/recovery redeploy
             # fires at the right level rather than one that may be several ATRs stale.
-            if drift_detected(state.price, state.center, state.grid_width, tilt=state.tilt or 0):
+            _drift_gw = state.deploy_grid_width or state.grid_width
+            if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0):
                 print(f"  Centre drift during {_active_dir} breakout — "
                       f"advancing centre ${state.center:,.0f} → ${state.price:,.0f} "
                       f"(bots held; no redeploy until breakout clears)")
-                update_grid_center(state.price)
+                update_grid_center(state.price, grid_width=state.grid_width)
                 state.center = state.price
+                state.deploy_grid_width = state.grid_width
 
             if breakout_exhausting(df):
                 print(f"BREAKOUT EXHAUSTING — momentum stalling at ${state.price:,.0f}  "
@@ -321,7 +330,7 @@ def run():
                 print("Triggering grid redeploy at new price level")
 
                 if DRY_RUN:
-                    update_grid_center(state.price)
+                    update_grid_center(state.price, grid_width=state.grid_width)
                     print(f"[SIMULATION] Would redeploy grid centered at ${state.price:,.0f}")
                     for i, bot_id in enumerate(GRID_BOTS[:3]):
                         tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
@@ -330,7 +339,7 @@ def run():
                 elif _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, state.tiers)
-                    update_grid_center(state.price)
+                    update_grid_center(state.price, grid_width=state.grid_width)
                     clear_breakout_state()
                 else:
                     print(f"Rate limit reached — skipping exhaustion redeploy")
@@ -466,7 +475,14 @@ def run():
         # ===============================
         # GRID DRIFT / REDEPLOYMENT
         # ===============================
-        if drift_detected(state.price, state.center, state.grid_width, tilt=state.tilt or 0):
+        # Use the grid_width that was current when the bots were last deployed,
+        # not the current ATR-derived width. This prevents a temporary ATR dip
+        # from narrowing the threshold and triggering a premature recentre.
+        _drift_gw = state.deploy_grid_width or state.grid_width
+        print(f"  Drift check: deploy_gw=${_drift_gw:,.0f}  current_gw=${state.grid_width:,.0f}"
+              f"  dist=${abs(state.price - (state.center + (state.tilt or 0))):,.0f}"
+              f"  threshold=${_drift_gw * 0.85:,.0f}")
+        if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0):
             state.drift_triggered = True
             print("Grid drift detected")
             print("New Grid Parameters")
@@ -481,7 +497,7 @@ def run():
 
             if DRY_RUN:
                 # In dry run: update center so simulation doesn't re-trigger drift every cycle
-                update_grid_center(state.price)
+                update_grid_center(state.price, grid_width=state.grid_width)
                 print("[SIMULATION] Would redeploy grid bots with tiered ranges:")
                 for i, bot_id in enumerate(GRID_BOTS[:3]):
                     tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
@@ -493,7 +509,7 @@ def run():
                 # Stop, reprice each bot to its tier range, restart
                 redeploy_all_bots(GRID_BOTS, state.tiers)
                 # Only advance center AFTER bots successfully redeployed
-                update_grid_center(state.price)
+                update_grid_center(state.price, grid_width=state.grid_width)
             else:
                 print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
                 print(f"  Bots remain on current ranges — center NOT advanced")
@@ -597,7 +613,8 @@ def run():
                 "session":        state.session,
                 "grid_low":       state.grid_low,
                 "grid_high":      state.grid_high,
-                "grid_width":     state.grid_width,
+                "grid_width":          state.grid_width,
+                "deploy_grid_width":   getattr(state, "deploy_grid_width", None),
                 "center":         state.center,
                 "trendline":      TRENDLINE if _trendline_active else None,
                 "trendline_gap":  round(state.price - TRENDLINE, 2) if _trendline_active else None,

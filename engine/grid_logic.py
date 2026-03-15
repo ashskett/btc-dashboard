@@ -145,36 +145,47 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df):
     }
 
 
-def get_grid_center():
-
+def get_grid_state():
+    """Return saved grid state dict with grid_center and grid_width_at_deploy."""
     if not os.path.exists(STATE_FILE):
-
         center = 68000
-
         with open(STATE_FILE, "w") as f:
             json.dump({"grid_center": center}, f)
-
-        return center
+        return {"grid_center": center, "grid_width_at_deploy": None}
 
     with open(STATE_FILE) as f:
         data = json.load(f)
 
-    return data["grid_center"]
+    return {
+        "grid_center":          data.get("grid_center", 68000),
+        "grid_width_at_deploy": data.get("grid_width_at_deploy"),
+    }
 
 
-def update_grid_center(price):
+def get_grid_center():
+    return get_grid_state()["grid_center"]
 
+
+def update_grid_center(price, grid_width=None):
+    """Save new grid center. grid_width should be the mid-tier width at deploy time
+    so that the drift threshold stays locked to that deployment, not the current ATR."""
+    state = {"grid_center": price}
+    if grid_width is not None:
+        state["grid_width_at_deploy"] = grid_width
     with open(STATE_FILE, "w") as f:
-        json.dump({"grid_center": price}, f)
+        json.dump(state, f)
 
 
 def drift_detected(price, center, grid_width, tilt=0):
     """
     Check if price has drifted beyond the threshold from the tilt-adjusted
-    grid center. Without accounting for tilt, drift triggers asymmetrically
-    when inventory is skewed.
+    grid center.
+
+    Threshold is 85% of grid_width (the mid-tier half-range locked at deploy
+    time). Using 85% instead of the old 75% gives the bots more room to
+    oscillate and complete grid cycles before recentring.
     """
     adjusted_center = center + tilt
     drift = abs(price - adjusted_center)
-    threshold = grid_width * 0.75
+    threshold = grid_width * 0.85
     return drift > threshold
