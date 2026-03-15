@@ -35,6 +35,13 @@ TIERS = [
 def _build_tier(price, atr, regime, session, skew, df, support, resistance,
                 range_mult, base_levels, compression):
     """Build grid parameters for a single tier."""
+    # Weekend ATR floor: quiet Sat/Sun can push ATR so low that the fee guard
+    # collapses inner/mid to 2 levels with $500+ steps — no fills possible.
+    # Floor at 1% of price (≈$840 at $84k) so there is always enough range
+    # for at least 4–5 meaningful levels across the tiers.
+    if session.startswith("WKD_"):
+        atr = max(atr, price * 0.010)
+
     grid_width = calculate_grid_width(atr) * range_mult
 
     # Inventory tilt — proportional to this tier's range
@@ -58,8 +65,9 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
         levels = int(levels * 1.5)   # denser grids when vol is squeezed
     if session in ("ASIA", "WKD_ASIA"):
         levels += 2
-    elif session in ("US", "WKD_US"):
+    elif session == "US":
         levels -= 2
+    # WKD_US: no penalty — weekend US is already thin; don't reduce density further
     levels = max(levels, 6)
 
     step = (grid_high - grid_low) / levels

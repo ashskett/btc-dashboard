@@ -155,6 +155,15 @@ def run():
         state.regime = detect_regime(df, TRENDLINE)
         state.session = get_session()
 
+        # Weekend override: structural low volatility on Sat/Sun looks like COMPRESSION
+        # to the BB/ATR indicators, but this is expected thin-market behaviour — not a
+        # genuine dead market. COMPRESSION was designed to protect against the latter.
+        # Overriding to RANGE keeps inner+mid running through normal weekend chop.
+        if state.regime == "COMPRESSION" and state.session.startswith("WKD_"):
+            print(f"Weekend session ({state.session}) — overriding COMPRESSION to RANGE "
+                  f"(structural low vol, not a dead market)")
+            state.regime = "RANGE"
+
         # Fast compression exit — if the 1H regime is COMPRESSION, fetch 5m candles
         # and check for momentum that the 1H indicators haven't yet detected.
         # BB width and ATR lag by 1-3 hours; 5m data catches the move in <5 minutes.
