@@ -3450,10 +3450,11 @@ function _exitPtPickMode(){
     for(let i=15;i<c.length;i++){const d=c[i]-c[i-1];ag=(ag*13+(d>=0?d:0))/14;al=(al*13+(d<0?-d:0))/14;}
     return al===0?100:100-(100/(1+ag/al));
   }
-  // CORS-safe fetch — tries direct then allorigins proxy. Uses unpatched _fetch to avoid auth header on external URLs.
+  // CORS-safe fetch — tries direct then allorigins proxy.
+  // Uses window.fetch (patched version only adds auth header to same-origin URLs, so external APIs are safe).
   async function sf(url){
-    try{const r=await _fetch(url,{signal:AbortSignal.timeout(7000)});if(r.ok)return r.json();}catch(e){}
-    try{const r=await _fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,{signal:AbortSignal.timeout(10000)});if(r.ok){const d=await r.json();return JSON.parse(d.contents);}}catch(e){}
+    try{const r=await fetch(url,{signal:AbortSignal.timeout(7000)});if(r.ok)return r.json();}catch(e){}
+    try{const r=await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,{signal:AbortSignal.timeout(10000)});if(r.ok){const d=await r.json();return JSON.parse(d.contents);}}catch(e){}
     return null;
   }
   const sigCol=s=>s==='bull'?'#00e5a0':s==='bear'?'#ff4d6d':'#8892a4';

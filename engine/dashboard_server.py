@@ -53,7 +53,7 @@ def _ensure_secret():
 
 _ensure_secret()
 
-_PUBLIC_PATHS = {"/", "/ping", "/deploy", "/account/balance/raw"}
+_PUBLIC_PATHS = {"/", "/ping", "/deploy", "/account/balance/raw", "/macro", "/macro/mobile"}
 
 @app.before_request
 def check_token():
