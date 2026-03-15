@@ -1060,6 +1060,24 @@ function initChart(){
     upColor:'#00e676', downColor:'#ff3d5a',
     borderUpColor:'#00e676', borderDownColor:'#ff3d5a',
     wickUpColor:'#00e676', wickDownColor:'#ff3d5a',
+    // Price lines (grid overlays) must not affect the vertical scale —
+    // on short TFs like 1m/5m the outer grid spans $20k+ while candles
+    // only move $200, compressing them to a flat line.
+    autoscaleInfoProvider: () => {
+      if (!_candleData.length) return null;
+      try {
+        const vr   = chart.timeScale().getVisibleLogicalRange();
+        const from = vr ? Math.max(0, Math.floor(vr.from)) : 0;
+        const to   = vr ? Math.min(_candleData.length - 1, Math.ceil(vr.to)) : _candleData.length - 1;
+        const sl   = _candleData.slice(from, to + 1);
+        if (!sl.length) return null;
+        const hi  = Math.max(...sl.map(c => c.high));
+        const lo  = Math.min(...sl.map(c => c.low));
+        const pad = Math.max((hi - lo) * 0.08, hi * 0.001); // min 0.1% of price
+        return { priceRange: { minValue: lo - pad, maxValue: hi + pad },
+                 margins: { above: 0.1, below: 0.1 } };
+      } catch(e) { return null; }
+    },
   });
 
   new ResizeObserver(()=>{
@@ -1524,7 +1542,7 @@ async function loadFills(){
 
 function applyFillMarkers(){
   if(!candles || !fillsData.length) return;
-  const gran = {'1m':60,'5m':300,'1h':3600,'4h':21600,'6h':21600,'1d':86400,'1w':604800,'1M':2592000}[currentTf] || 3600;
+  const gran = {'1m':60,'5m':300,'1h':3600,'4h':14400,'6h':21600,'1d':86400,'1w':604800,'1M':2592000}[currentTf] || 3600;
   const markers = fillsData
     .filter(f => f.price > 0 && f.time)
     .map(f => {
