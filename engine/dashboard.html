@@ -3851,7 +3851,6 @@ function _exitPtPickMode(){
 
 // ── News Ticker ───────────────────────────────────────────────────────────
 (function newsTicker(){
-  const API_KEY  = 'ba7c44e5d68ff28d91361124a9c4017034dcbd0a';
   const ROTATE_MS = 30000;   // show each headline for 30s
   const FETCH_MS  = 600000;  // re-fetch every 10 min
 
@@ -3859,9 +3858,10 @@ function _exitPtPickMode(){
   let _idx       = 0;
   let _rotateTimer = null;
 
-  function timeAgo(iso){
-    const s = Math.floor((Date.now() - new Date(iso)) / 1000);
-    if(s < 60)  return `${s}s ago`;
+  function timeAgo(rfc){
+    if(!rfc) return '';
+    const s = Math.floor((Date.now() - new Date(rfc)) / 1000);
+    if(s < 60)   return `${s}s ago`;
     if(s < 3600) return `${Math.floor(s/60)}m ago`;
     if(s < 86400) return `${Math.floor(s/3600)}h ago`;
     return `${Math.floor(s/86400)}d ago`;
@@ -3875,10 +3875,10 @@ function _exitPtPickMode(){
     if(!h || !el) return;
     el.style.opacity = '0';
     setTimeout(()=>{
-      el.textContent = h.title;
-      el.href        = h.url || '#';
+      el.textContent  = h.title;
+      el.href         = h.url || '#';
       src.textContent = h.source || '';
-      age.textContent = h.published_at ? timeAgo(h.published_at) : '';
+      age.textContent = timeAgo(h.published_at);
       el.style.opacity = '1';
     }, 500);
   }
@@ -3890,33 +3890,17 @@ function _exitPtPickMode(){
   }
 
   async function fetchNews(){
-    const url = `https://cryptopanic.com/api/v1/posts/?auth_token=${API_KEY}&currencies=BTC&kind=news&public=true&filter=rising`;
-    let data = null;
-    // try direct (CryptoPanic supports CORS)
     try {
-      const r = await fetch(url, {signal: AbortSignal.timeout(8000)});
-      if(r.ok) data = await r.json();
+      const r = await fetch(`${API}/news`, {signal: AbortSignal.timeout(10000)});
+      if(!r.ok) return;
+      const data = await r.json();
+      if(!Array.isArray(data) || !data.length) return;
+      _headlines = data;
+      _idx = 0;
+      showAt(0);
+      clearInterval(_rotateTimer);
+      _rotateTimer = setInterval(rotate, ROTATE_MS);
     } catch(e){}
-    // fall back to allorigins proxy
-    if(!data){
-      try {
-        const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {signal: AbortSignal.timeout(12000)});
-        if(r.ok){ const d = await r.json(); data = JSON.parse(d.contents); }
-      } catch(e){}
-    }
-    if(!data?.results?.length) return;
-
-    _headlines = data.results.slice(0, 12).map(p => ({
-      title:        p.title,
-      url:          p.url,
-      published_at: p.published_at,
-      source:       p.source?.title ?? '',
-    }));
-    _idx = 0;
-    showAt(0);
-
-    clearInterval(_rotateTimer);
-    _rotateTimer = setInterval(rotate, ROTATE_MS);
   }
 
   fetchNews();

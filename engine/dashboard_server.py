@@ -1180,6 +1180,53 @@ _DEPLOY_FILES_ROOT = [
     "btc_macro_dashboard.html",
     "btc_macro_dashboard_mobile.html",
 ]
+# ── News proxy ───────────────────────────────────────────
+_news_cache = {"data": None, "ts": 0.0}
+_NEWS_FEEDS = [
+    ("CoinTelegraph", "https://cointelegraph.com/rss"),
+    ("CoinDesk",      "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+]
+
+@app.route("/news")
+def news_proxy():
+    """Fetch and parse RSS from crypto news sources. Cached 10 min."""
+    global _news_cache
+    now = time.time()
+    if _news_cache["data"] is not None and now - _news_cache["ts"] < 600:
+        return jsonify(_news_cache["data"])
+    import xml.etree.ElementTree as ET
+    items = []
+    for source_name, feed_url in _NEWS_FEEDS:
+        try:
+            r = req.get(feed_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code != 200:
+                continue
+            root = ET.fromstring(r.text)
+            ns   = {"media": "http://search.yahoo.com/mrss/"}
+            for item in root.findall(".//item")[:8]:
+                title = (item.findtext("title") or "").strip()
+                link  = (item.findtext("link")  or "").strip()
+                pub   = (item.findtext("pubDate") or "").strip()
+                if not title or not link:
+                    continue
+                # Strip CDATA wrappers from link if present
+                if link.startswith("http"):
+                    pass
+                else:
+                    guid = item.findtext("guid") or ""
+                    link = guid if guid.startswith("http") else link
+                items.append({
+                    "title":        title,
+                    "url":          link,
+                    "published_at": pub,
+                    "source":       source_name,
+                })
+        except Exception:
+            continue
+    _news_cache = {"data": items, "ts": now}
+    return jsonify(items)
+
+
 _DEPLOY_BRANCH    = "claude/grid-engine-chat-review-hEEGu"
 _DEPLOY_BASE      = f"https://raw.githubusercontent.com/ashskett/btc-dashboard/{_DEPLOY_BRANCH}/engine"
 _DEPLOY_BASE_ROOT = f"https://raw.githubusercontent.com/ashskett/btc-dashboard/{_DEPLOY_BRANCH}"
