@@ -1286,16 +1286,24 @@ async function loadBots(){
       const col    = BOT_COLORS[i % BOT_COLORS.length];
       const feeOk  = tier ? tier.fee_ok !== false : true;
 
-      // Realized P&L from profits endpoint
-      const pnlData  = pnlMap[String(b.id)] || {};
-      const realized = pnlData.realized_usd;
-      const fillCnt  = pnlData.fill_count || 0;
-      const pnlColor = realized == null ? 'var(--muted)' : realized >= 0 ? 'var(--green)' : 'var(--red)';
-      const pnlSign  = realized != null && realized >= 0 ? '+' : '';
-      const pnlStr   = realized != null
+      // P&L from bot config (realized = completed cycles, unrealized = open position)
+      const pnlData    = pnlMap[String(b.id)] || {};
+      const realized   = pnlData.realized_usd;
+      const unrealized = pnlData.unrealized_usd;
+      const fillCnt    = pnlData.fill_count || 0;
+      const profitPct  = pnlData.profit_pct;
+      const pnlColor   = realized == null ? 'var(--muted)' : realized >= 0 ? 'var(--green)' : 'var(--red)';
+      const pnlSign    = realized != null && realized >= 0 ? '+' : '';
+      const pnlStr     = realized != null
         ? `<span style="color:${pnlColor};font-weight:700;">${pnlSign}$${realized.toFixed(2)}</span>`
         : '<span style="color:var(--muted)">—</span>';
-      const fillsNote = fillCnt ? `<span style="color:var(--muted);font-size:9px;"> (${fillCnt} fills)</span>` : '';
+      const unrColor   = unrealized == null ? 'var(--muted)' : unrealized >= 0 ? 'var(--green)' : 'var(--red)';
+      const unrSign    = unrealized != null && unrealized >= 0 ? '+' : '';
+      const unrStr     = unrealized != null
+        ? `<span style="color:${unrColor};font-size:9px;"> unreal: ${unrSign}$${unrealized.toFixed(2)}</span>`
+        : '';
+      const fillsNote  = fillCnt ? `<span style="color:var(--muted);font-size:9px;"> (${fillCnt} fills)</span>` : '';
+      const pctNote    = profitPct != null ? `<span style="color:var(--muted);font-size:9px;"> ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(4)}%</span>` : '';
 
       // Capital in USDC: qty_per_grid (BTC) × levels × btcPrice
       const qpg    = parseFloat(b.quantity_per_grid || 0);
@@ -1320,7 +1328,7 @@ async function loadBots(){
         </div>
         ${tierLine}
         <div class="bot-meta">
-          <div class="bm" title="Realized P&L from last ${fillCnt} grid fills (capped at 1000)">Realized P&L<span>${pnlStr}${fillsNote}</span></div>
+          <div class="bm" title="Realized P&L from completed grid cycles${fillCnt ? ` (${fillCnt} cycles)` : ''}">Realized P&L<span>${pnlStr}${pctNote}${fillsNote}${unrStr}</span></div>
           <div class="bm">ID<span>#${b.id}</span></div>
         </div>
         <div class="bot-meta" style="margin-top:4px;">

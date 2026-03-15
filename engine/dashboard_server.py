@@ -478,10 +478,14 @@ _pnl_cache   = {"data": None, "ts": 0.0}
 @app.route("/bots/pnl")
 def bot_pnl():
     """
-    Returns realized P&L per bot, summed from the profits (fills) endpoint.
-    Fetches up to 1000 fills per bot. Cached for 5 minutes.
+    Returns realized P&L per bot from the bot config fields.
+    current_profit_usd  = realized profit from completed grid cycles
+    total_profits_count = number of completed grid cycles (fills)
+    unrealized_profit_loss = open position paper gain/loss vs grid centre
+    Cached for 5 minutes.
 
-    Response: { "<bot_id>": { "realized_usd": float, "fill_count": int, "first_fill": str|null } }
+    Response: { "<bot_id>": { "realized_usd": float, "fill_count": int,
+                               "unrealized_usd": float, "profit_pct": float } }
     """
     global _pnl_cache
     now = time.time()
@@ -491,17 +495,21 @@ def bot_pnl():
         ids = [b.strip() for b in os.getenv("GRID_BOT_IDS", "").split(",") if b.strip()]
         result = {}
         for bid in ids[:3]:
-            r = signed_request("GET", f"/ver1/grid_bots/{bid}/profits", params={"limit": 1000})
+            r = signed_request("GET", f"/ver1/grid_bots/{bid}")
             if r.status_code != 200:
-                result[bid] = {"realized_usd": None, "fill_count": 0, "first_fill": None, "error": r.status_code}
+                result[bid] = {"realized_usd": None, "fill_count": 0, "unrealized_usd": None, "profit_pct": None, "error": r.status_code}
                 continue
-            data = r.json()
-            if not isinstance(data, list):
-                result[bid] = {"realized_usd": None, "fill_count": 0, "first_fill": None}
-                continue
-            total = sum(float(item.get("profit_usd") or item.get("usd_profit") or 0) for item in data)
-            first = data[-1].get("created_at") if data else None
-            result[bid] = {"realized_usd": round(total, 4), "fill_count": len(data), "first_fill": first}
+            b = r.json()
+            realized    = float(b.get("current_profit_usd")      or 0)
+            unrealized  = float(b.get("unrealized_profit_loss")   or 0)
+            fill_count  = int(b.get("total_profits_count")        or 0)
+            profit_pct  = float(b.get("profit_percentage")        or 0)
+            result[bid] = {
+                "realized_usd":   round(realized,   4),
+                "unrealized_usd": round(unrealized, 4),
+                "fill_count":     fill_count,
+                "profit_pct":     round(profit_pct * 100, 4),
+            }
         _pnl_cache = {"data": result, "ts": now}
         return jsonify(result)
     except Exception as e:
