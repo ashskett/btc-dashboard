@@ -318,6 +318,77 @@ def set_grid_bot_capital(bot_id):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ── Redeploy bot with current engine tier parameters ─────
+@app.route("/bots/<bot_id>/redeploy", methods=["POST"])
+def redeploy_bot_endpoint(bot_id):
+    """Stop, re-range, and restart a bot using the engine's latest tier calculation."""
+    ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
+    if bot_id not in ids:
+        return jsonify({"ok": False, "error": "Bot not managed by this engine"}), 403
+    try:
+        # Load latest engine status to get tier params
+        status_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), STATUS_FILE)
+        with open(status_path) as f:
+            status = json.load(f)
+        tiers = status.get("tiers", [])
+        if not tiers:
+            return jsonify({"ok": False, "error": "No tier data in engine status yet"}), 503
+
+        # Match tier by position in GRID_BOT_IDS (index 0=inner, 1=mid, 2=outer)
+        tier_idx = ids.index(bot_id)
+        if tier_idx >= len(tiers):
+            return jsonify({"ok": False, "error": f"No tier at index {tier_idx}"}), 400
+        tier = tiers[tier_idx]
+
+        lower  = round(float(tier["grid_low"]),  2)
+        upper  = round(float(tier["grid_high"]), 2)
+        levels = int(tier["levels"])
+
+        # Fetch current 3Commas config to preserve qty_per_grid and other settings
+        r = signed_request("GET", f"/ver1/grid_bots/{bot_id}")
+        if r.status_code != 200:
+            return jsonify({"ok": False, "error": f"3Commas GET {r.status_code}: {r.text[:200]}"}), 502
+        current  = r.json()
+        was_on   = bool(current.get("is_enabled", False))
+        orig_qty = float(current.get("quantity_per_grid") or 0)
+
+        # Stop if running
+        if was_on:
+            signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
+            time.sleep(2)
+
+        patch = {
+            "name":              current.get("name", f"Grid Bot {bot_id}"),
+            "upper_price":       upper,
+            "lower_price":       lower,
+            "grids_quantity":    levels,
+            "quantity_per_grid": orig_qty,
+            "grid_type":         current.get("grid_type", "arithmetic"),
+            "ignore_warnings":   True,
+        }
+        rp = signed_request("PATCH", f"/ver1/grid_bots/{bot_id}/manual", body=patch)
+        if rp.status_code not in (200, 201):
+            if was_on:  # try to restore
+                signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
+            return jsonify({"ok": False, "error": f"PATCH {rp.status_code}: {rp.text[:300]}"}), 502
+
+        # Restart
+        time.sleep(1)
+        signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
+
+        return jsonify({
+            "ok":     True,
+            "bot_id": bot_id,
+            "tier":   tier["name"],
+            "lower":  lower,
+            "upper":  upper,
+            "levels": levels,
+            "step":   tier.get("step"),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── Account balance + capital allocation ─────────────────
 _balance_cache = {"data": None, "ts": 0.0}
 
