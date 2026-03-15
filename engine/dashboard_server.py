@@ -1320,6 +1320,25 @@ def deploy_endpoint():
         except Exception as e:
             results[fname] = f"error: {e}"
 
+    # Always update and restart the webhook server so the old main-branch
+    # webhook process can't keep overwriting our files.
+    _wh_path = "/root/webhook_server.py"
+    try:
+        _wh_url = f"{_DEPLOY_BASE_ROOT}/scripts/webhook_server.py"
+        urllib.request.urlretrieve(_wh_url, _wh_path + ".new")
+        os.replace(_wh_path + ".new", _wh_path)
+        results["webhook_server.py"] = "ok"
+        # Kill old webhook process; new one will be started after restart
+        subprocess.run("pkill -f 'python.*webhook_server' || true", shell=True)
+        time.sleep(0.5)
+        subprocess.Popen(
+            [sys.executable, _wh_path],
+            start_new_session=True, close_fds=True,
+        )
+        results["webhook_restart"] = "ok"
+    except Exception as e:
+        results["webhook_restart"] = f"error: {e}"
+
     def _restart():
         time.sleep(1.0)
         script_dir = os.path.dirname(os.path.abspath(__file__))
