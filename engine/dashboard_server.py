@@ -393,6 +393,41 @@ def account_balance_raw():
 
 # ── Bot fills (completed grid cycles) ─────────────────────
 _fills_cache = {"data": None, "ts": 0.0}
+_pnl_cache   = {"data": None, "ts": 0.0}
+
+
+@app.route("/bots/pnl")
+def bot_pnl():
+    """
+    Returns realized P&L per bot, summed from the profits (fills) endpoint.
+    Fetches up to 1000 fills per bot. Cached for 5 minutes.
+
+    Response: { "<bot_id>": { "realized_usd": float, "fill_count": int, "first_fill": str|null } }
+    """
+    global _pnl_cache
+    now = time.time()
+    if _pnl_cache["data"] is not None and now - _pnl_cache["ts"] < 300:
+        return jsonify(_pnl_cache["data"])
+    try:
+        ids = [b.strip() for b in os.getenv("GRID_BOT_IDS", "").split(",") if b.strip()]
+        result = {}
+        for bid in ids[:3]:
+            r = signed_request("GET", f"/ver1/grid_bots/{bid}/profits", params={"limit": 1000})
+            if r.status_code != 200:
+                result[bid] = {"realized_usd": None, "fill_count": 0, "first_fill": None, "error": r.status_code}
+                continue
+            data = r.json()
+            if not isinstance(data, list):
+                result[bid] = {"realized_usd": None, "fill_count": 0, "first_fill": None}
+                continue
+            total = sum(float(item.get("profit_usd") or item.get("usd_profit") or 0) for item in data)
+            first = data[-1].get("created_at") if data else None
+            result[bid] = {"realized_usd": round(total, 4), "fill_count": len(data), "first_fill": first}
+        _pnl_cache = {"data": result, "ts": now}
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/bots/fills")
 def bot_fills():

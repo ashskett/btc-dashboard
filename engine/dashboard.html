@@ -1219,11 +1219,15 @@ async function pollStatus(){
 // ── BOTS ─────────────────────────────────────────────────
 async function loadBots(){
   try {
-    const r = await fetch(`${API}/bots`);
+    const [r, rp] = await Promise.all([
+      fetch(`${API}/bots`),
+      fetch(`${API}/bots/pnl`),
+    ]);
     if(!r.ok) throw new Error(r.status);
     const data = await r.json();
     if(!Array.isArray(data)) throw new Error('bad');
     bots = data;
+    const pnlMap = rp.ok ? await rp.json() : {};
     document.getElementById('gridBotCountLbl').textContent = `(${bots.length})`;
 
     const cont = document.getElementById('gridBotCards');
@@ -1245,12 +1249,22 @@ async function loadBots(){
     cont.innerHTML = bots.map((b,i)=>{
       const on     = b.is_enabled;
       const name   = b.name || `Bot ${b.id}`;
-      const profit = b.profit != null ? `$${Number(b.profit).toFixed(2)}` : '—';
       const deals  = b.active_deals_count ?? '—';
       const tier   = (status.tiers && status.tiers[i]) || null;
       const tm     = TIER_META[i] || {name:'—', desc:'—'};
       const col    = BOT_COLORS[i % BOT_COLORS.length];
       const feeOk  = tier ? tier.fee_ok !== false : true;
+
+      // Realized P&L from profits endpoint
+      const pnlData  = pnlMap[String(b.id)] || {};
+      const realized = pnlData.realized_usd;
+      const fillCnt  = pnlData.fill_count || 0;
+      const pnlColor = realized == null ? 'var(--muted)' : realized >= 0 ? 'var(--green)' : 'var(--red)';
+      const pnlSign  = realized != null && realized >= 0 ? '+' : '';
+      const pnlStr   = realized != null
+        ? `<span style="color:${pnlColor};font-weight:700;">${pnlSign}$${realized.toFixed(2)}</span>`
+        : '<span style="color:var(--muted)">—</span>';
+      const fillsNote = fillCnt ? `<span style="color:var(--muted);font-size:9px;"> (${fillCnt} fills)</span>` : '';
 
       // Capital in USDC: qty_per_grid (BTC) × levels × btcPrice
       const qpg    = parseFloat(b.quantity_per_grid || 0);
@@ -1275,8 +1289,7 @@ async function loadBots(){
         </div>
         ${tierLine}
         <div class="bot-meta">
-          <div class="bm">Profit<span>${profit}</span></div>
-          <div class="bm">Deals<span>${deals}</span></div>
+          <div class="bm" title="Realized P&L from last ${fillCnt} grid fills (capped at 1000)">Realized P&L<span>${pnlStr}${fillsNote}</span></div>
           <div class="bm">ID<span>#${b.id}</span></div>
         </div>
         <div class="bot-meta" style="margin-top:4px;">
