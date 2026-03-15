@@ -992,16 +992,25 @@ def deploy_endpoint():
 
     def _restart():
         time.sleep(1.0)
-        # Use tmux to restart cleanly in the managed session — avoids the
-        # race condition where the new background process tries to bind port
-        # 5050 before os._exit releases it, causing a silent startup failure.
         script_dir = os.path.dirname(os.path.abspath(__file__))
         restart_cmd = (
             "tmux send-keys -t grid C-c Enter ; sleep 2 ; "
             f"tmux send-keys -t grid 'cd {script_dir} && "
             "source venv/bin/activate && python dashboard_server.py' Enter"
         )
-        subprocess.Popen(restart_cmd, shell=True)
+        try:
+            # start_new_session=True puts the subprocess in its own process
+            # session/group so it doesn't receive SIGINT when C-c is sent to
+            # the grid tmux pane — without this, the shell gets SIGINT mid-
+            # "sleep 2" and the restart command is never sent.
+            subprocess.Popen(
+                restart_cmd, shell=True,
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            print(f"[deploy] restart subprocess failed: {e}", flush=True)
         time.sleep(0.5)
         os._exit(0)
 
