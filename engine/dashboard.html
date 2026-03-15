@@ -1188,16 +1188,48 @@ function clearLines(){
 
 function redrawLines(){
   clearLines();
+  if(!showGrid) return;
+
+  const add = (price, color, style, title, lw=1) => {
+    const l = candles.createPriceLine({ price, color, lineWidth:lw,
+      lineStyle:style, axisLabelVisible:!!title, title:title||'' });
+    gridLines.push(l);
+  };
+
+  // Prefer actual deployed bot levels (matches what 3Commas has configured)
+  // over engine's theoretical tier calculations
+  const deployedBots = bots
+    .filter(b => b.lower_price && b.upper_price)
+    .sort((a, b) =>
+      (parseFloat(a.upper_price) - parseFloat(a.lower_price)) -
+      (parseFloat(b.upper_price) - parseFloat(b.lower_price)));   // inner → outer
+
+  if (deployedBots.length) {
+    deployedBots.forEach((bot, i) => {
+      const lo  = parseFloat(bot.lower_price);
+      const hi  = parseFloat(bot.upper_price);
+      const lvl = Math.max(parseInt(bot.grids_quantity) || 2, 2);
+      const step = (hi - lo) / (lvl - 1);
+      const col  = BOT_COLORS[i % BOT_COLORS.length];
+      add(hi, col, LightweightCharts.LineStyle.Dashed,
+          i === 0 ? 'Grid High' : '', i === 1 ? 1.5 : 1);
+      add(lo, col, LightweightCharts.LineStyle.Dashed,
+          i === 0 ? 'Grid Low' : '', i === 1 ? 1.5 : 1);
+      for (let n = 1; n < lvl - 1; n++) {
+        gridLines.push(candles.createPriceLine({
+          price: lo + step * n, color: col + '44', lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false,
+        }));
+      }
+    });
+    if (status.center)
+      add(status.center, '#4a5a72', LightweightCharts.LineStyle.Dotted, 'Center');
+    return;
+  }
+
+  // Fallback: engine's theoretical tier data
   if(!status.grid_low) return;
-
-  if(showGrid){
-    const add = (price, color, style, title, lw=1) => {
-      const l = candles.createPriceLine({ price, color, lineWidth:lw,
-        lineStyle:style, axisLabelVisible:!!title, title:title||'' });
-      gridLines.push(l);
-    };
-
-    const tiers = status.tiers;
+  const tiers = status.tiers;
 
     if(tiers && tiers.length){
       // Draw each bot's own tier range + internal levels
@@ -1235,10 +1267,6 @@ function redrawLines(){
         }));
       }
     }
-  }
-
-  // Static trendline price line removed — trendlines are now drawn on canvas
-  // and managed via the trendlines system (draw tool in sidebar)
 }
 
 // ── STATUS POLL ───────────────────────────────────────────
