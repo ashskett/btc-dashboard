@@ -68,9 +68,9 @@ GRID_BOT_IDS=2743193,2743191,2743190
 
 | Bot ID | Name | Tier | Behaviour |
 |--------|------|------|-----------|
-| 2743193 | Inner | range_mult 0.75×, 20 base levels | Catches small oscillations |
-| 2743191 | Mid | range_mult 1.5×, 14 base levels | Main workhorse |
-| 2743190 | Outer | range_mult 3.0×, 10 base levels | Safety net, stays on longest |
+| 2743885 | Narrow | range_mult 0.75×, 10 base levels | Catches small oscillations |
+| 2743889 | Mid | range_mult 1.5×, 6 base levels | Main workhorse |
+| 2743888 | Wider | range_mult 3.0×, 6 base levels | Safety net, stays on longest |
 
 All bots trade `USDC_BTC` on Coinbase Spot via 3Commas.
 

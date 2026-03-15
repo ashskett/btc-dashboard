@@ -25,15 +25,19 @@ FEE_BUFFER      = 1.5      # safety multiplier: step must be 1.5× the break-eve
 # ── Tier definitions ─────────────────────────────────────────────────────────
 # Each tier is a multiplier on grid_width (ATR×3).
 # Inner bot catches chop, mid catches normal swings, outer catches extensions.
+# wkd_fee_buffer: weekend-specific FEE_BUFFER override for the inner tier.
+# On compression weekends the fee guard at 1.5× collapses inner to 7 levels
+# at ~$460 step (1.6× ATR floor). Dropping to 1.2× yields 9 levels at ~$358
+# step (1.27× ATR floor) — still 4% above fee floor, meaningfully more fills.
 TIERS = [
-    {"name": "inner", "range_mult": 0.75, "base_levels": 10},
+    {"name": "inner", "range_mult": 0.75, "base_levels": 10, "wkd_fee_buffer": 1.2},
     {"name": "mid",   "range_mult": 1.5,  "base_levels": 6},   # was 8 — reduced to keep step ~30% above fee floor
     {"name": "outer", "range_mult": 3.0,  "base_levels": 6},
 ]
 
 
 def _build_tier(price, atr, regime, session, skew, df, support, resistance,
-                range_mult, base_levels, compression):
+                range_mult, base_levels, compression, wkd_fee_buffer=None):
     """Build grid parameters for a single tier."""
     # Weekend ATR floor: quiet Sat/Sun can push ATR so low that the fee guard
     # collapses inner/mid to 2 levels with $500+ steps — no fills possible.
@@ -75,7 +79,11 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
     # ── Fee guard ─────────────────────────────────────────────────────────────
     # Each completed grid cycle = buy + sell. Both are taker fills.
     # Step must exceed round-trip fees × safety buffer to guarantee profit.
-    min_step = price * ROUND_TRIP_FEE * FEE_BUFFER
+    # On weekends the inner tier uses a tighter buffer (wkd_fee_buffer) so the
+    # fee guard allows more levels within the same range.
+    effective_fee_buffer = (wkd_fee_buffer if wkd_fee_buffer and session.startswith("WKD_")
+                            else FEE_BUFFER)
+    min_step = price * ROUND_TRIP_FEE * effective_fee_buffer
     if step < min_step:
         # Reduce level count until step is profitable, keeping range fixed
         max_levels = int((grid_high - grid_low) / min_step)
@@ -98,8 +106,8 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
         "grid_width": round(grid_width, 2),
         "tilt":       round(tilt, 2),
         "grid_levels": grid_levels,
-        "min_step":   round(price * ROUND_TRIP_FEE * FEE_BUFFER, 2),
-        "fee_ok":     bool(step >= price * ROUND_TRIP_FEE * FEE_BUFFER),
+        "min_step":   round(min_step, 2),
+        "fee_ok":     bool(step >= min_step),
     }
 
 
@@ -120,6 +128,7 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df):
             range_mult=t["range_mult"],
             base_levels=t["base_levels"],
             compression=compression,
+            wkd_fee_buffer=t.get("wkd_fee_buffer"),
         )
         tier_grid["name"] = t["name"]
         tiers.append(tier_grid)
