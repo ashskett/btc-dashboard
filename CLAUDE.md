@@ -19,6 +19,7 @@ An adaptive BTC/USDC grid trading bot running on a DigitalOcean VPS. It manages 
 | SSH | `ssh root@165.232.101.253` |
 | Project dir | `/root/grid-engine/` |
 | Dashboard URL | `http://165.232.101.253:5050` |
+| Dashboard Secret | `dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369` |
 | Process manager | tmux session named `grid` |
 | Start command | `cd /root/grid-engine && source venv/bin/activate && python dashboard_server.py` |
 | DO Account | ashskett@gmail.com |
