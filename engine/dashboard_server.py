@@ -184,11 +184,32 @@ def price():
         return jsonify({"error": str(e)}), 500
 
 
+def _aggregate_candles(daily, period):
+    """Aggregate daily OHLCV into weekly or monthly candles."""
+    import datetime
+    from collections import defaultdict
+    buckets = defaultdict(list)
+    for c in daily:
+        dt = datetime.datetime.utcfromtimestamp(c[0] / 1000)
+        if period == '1w':
+            anchor = dt - datetime.timedelta(days=dt.weekday())  # Monday
+        else:  # '1M'
+            anchor = datetime.datetime(dt.year, dt.month, 1)
+        key = int(datetime.datetime(anchor.year, anchor.month, anchor.day,
+                                    tzinfo=datetime.timezone.utc).timestamp() * 1000)
+        buckets[key].append(c)
+    result = []
+    for ts_ms, cs in sorted(buckets.items()):
+        result.append([ts_ms, cs[0][1], max(c[2] for c in cs),
+                        min(c[3] for c in cs), cs[-1][4], sum(c[5] for c in cs)])
+    return result
+
+
 # ── Candles via ccxt ──────────────────────────────────────
 @app.route("/candles")
 def candles():
     try:
-        import ccxt, time
+        import ccxt
         exchange = ccxt.coinbase()
 
         # Coinbase via ccxt only supports these granularities
@@ -200,18 +221,34 @@ def candles():
             '1h':  '1h',
             '4h':  '6h',   # Coinbase has no 4h — use 6h as nearest
             '1d':  '1d',
-            '1w':  '1w',
+            # 1w and 1M are not native Coinbase granularities — aggregated below
         }
         tf_raw    = request.args.get("tf", "1h")
-        tf        = TF_MAP.get(tf_raw, '1h')
         limit     = min(int(request.args.get("limit", 150)), 500)
         before_ms = request.args.get("before")
+
+        # Weekly / Monthly: fetch enough daily candles and aggregate
+        if tf_raw in ('1w', '1M'):
+            days_needed = limit * (7 if tf_raw == '1w' else 35)
+            fetch_limit = min(days_needed, 500)
+            if before_ms:
+                since = int(before_ms) - fetch_limit * 86_400_000
+                daily = exchange.fetch_ohlcv("BTC/USDC", timeframe='1d', since=since, limit=fetch_limit)
+                daily = [c for c in daily if c[0] < int(before_ms)]
+            else:
+                daily = exchange.fetch_ohlcv("BTC/USDC", timeframe='1d', limit=fetch_limit)
+            data = _aggregate_candles(daily, tf_raw)
+            if before_ms:
+                data = [c for c in data if c[0] < int(before_ms)]
+            return jsonify(data[-limit:])
+
+        tf = TF_MAP.get(tf_raw, '1h')
 
         if before_ms:
             # Fetch a window of candles ending strictly before the given timestamp.
             # ccxt fetch_ohlcv(since) fetches from that point forward, so we back-calculate.
             TF_MS = {'1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000,
-                     '6h': 21_600_000, '1d': 86_400_000, '1w': 604_800_000}
+                     '6h': 21_600_000, '1d': 86_400_000}
             tf_ms = TF_MS.get(tf, 3_600_000)
             since = int(before_ms) - limit * tf_ms
             data  = exchange.fetch_ohlcv("BTC/USDC", timeframe=tf, since=since, limit=limit)

@@ -463,6 +463,7 @@
     <button class="tf-btn" data-tf="4h">6H</button>
     <button class="tf-btn" data-tf="1d">1D</button>
     <button class="tf-btn" data-tf="1w">1W</button>
+    <button class="tf-btn" data-tf="1M">1M</button>
   </div>
   <div id="chartErr" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--red);font-size:12px;text-align:center;background:rgba(8,12,16,.9);padding:16px 24px;border:1px solid var(--red);border-radius:6px;"></div>
   <div class="grid-legend">
@@ -1081,6 +1082,8 @@ async function loadCandles(tf){
     if(data.error) throw new Error(data.error);
     if(!Array.isArray(data) || data.length === 0) throw new Error('No candle data returned');
 
+    if(tf !== currentTf) return;  // TF changed while fetch was in-flight — discard
+
     const ts = chart.timeScale();
     const mapped = data.map(c=>({time:c[0]/1000,open:c[1],high:c[2],low:c[3],close:c[4]}));
 
@@ -1520,7 +1523,7 @@ async function loadFills(){
 
 function applyFillMarkers(){
   if(!candles || !fillsData.length) return;
-  const gran = {'1m':60,'5m':300,'1h':3600,'4h':21600,'6h':21600,'1d':86400,'1w':604800}[currentTf] || 3600;
+  const gran = {'1m':60,'5m':300,'1h':3600,'4h':21600,'6h':21600,'1d':86400,'1w':604800,'1M':2592000}[currentTf] || 3600;
   const markers = fillsData
     .filter(f => f.price > 0 && f.time)
     .map(f => {
@@ -1740,6 +1743,7 @@ document.querySelectorAll('.tf-btn').forEach(btn=>{
     currentTf = btn.dataset.tf;
     _candlesInitialised = false;
     _candlesLoading = false;
+    _loadingOlder = false;
     _noMoreOlderCandles = false;
     _candleData = [];
     loadCandles(currentTf);
