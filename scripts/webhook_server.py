@@ -12,6 +12,7 @@ import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "grid-engine-deploy")
+DEPLOY_BRANCH  = os.environ.get("DEPLOY_BRANCH", "claude/grid-engine-chat-review-hEEGu")
 REPO_DIR = "/root/btc-dashboard"
 ENGINE_DIR = "/root/grid-engine"
 LOG_FILE = "/root/grid-engine/deploy.log"
@@ -41,13 +42,18 @@ def run(cmd, cwd=None):
 
 def deploy():
     log.info("=== Deploy started ===")
+    log.info(f"Branch: {DEPLOY_BRANCH}")
 
-    # 1. Pull latest code from whichever branch is currently checked out
-    branch = subprocess.run(
-        "git rev-parse --abbrev-ref HEAD", shell=True, cwd=REPO_DIR,
-        capture_output=True, text=True
-    ).stdout.strip() or "main"
-    rc = run(f"git pull origin {branch}", cwd=REPO_DIR)
+    # 1. Fetch and checkout the configured deploy branch
+    run(f"git fetch origin {DEPLOY_BRANCH}", cwd=REPO_DIR)
+    rc = run(f"git checkout {DEPLOY_BRANCH}", cwd=REPO_DIR)
+    if rc != 0:
+        # Branch may not exist locally yet — create tracking branch
+        rc = run(f"git checkout -b {DEPLOY_BRANCH} origin/{DEPLOY_BRANCH}", cwd=REPO_DIR)
+    if rc != 0:
+        log.error("git checkout failed — aborting deploy")
+        return
+    rc = run(f"git pull origin {DEPLOY_BRANCH}", cwd=REPO_DIR)
     if rc != 0:
         log.error("git pull failed — aborting deploy")
         return
@@ -57,6 +63,9 @@ def deploy():
         f"--exclude='*.log' --exclude='*.jsonl' --exclude='__pycache__' "
         f"--exclude='venv' "
         f"{REPO_DIR}/engine/ {ENGINE_DIR}/")
+
+    # 2b. Update this webhook server script itself
+    run(f"cp {REPO_DIR}/scripts/webhook_server.py /root/webhook_server.py")
 
     # 3. Sync dashboard.html if present in repo
     dash = f"{REPO_DIR}/engine/dashboard.html"
