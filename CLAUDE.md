@@ -243,7 +243,14 @@ GET  /trendlines/load           — load trendlines
 - DRY RUN MODE toggle (bottom right)
 
 ### This Git Repo (btc-dashboard)
-The files `btc_dashboard.html` and `btc_macro_dashboard_mobile.html` are an older **macro analysis dashboard** (React + Babel, CDN-based) that fetches from CoinGecko, Binance, etc. They are **separate** from the Flask `dashboard.html` on the droplet. The Flask dashboard is the live trading terminal.
+The files `btc_macro_dashboard.html` and `btc_macro_dashboard_mobile.html` are a **macro analysis dashboard** (React + Babel, CDN-based) that fetches from CoinGecko, Binance, Alternative.me, Yahoo Finance, FRED etc. They are **separate** from the Flask `dashboard.html` on the droplet. The Flask dashboard is the live trading terminal.
+
+The macro dashboard will be served as static files by the Flask server and linked from the engine dashboard. Key signals to embed in the engine dashboard top bar (see Pending Work):
+- Fear & Greed Index score + label
+- Macro bias badge (BULLISH/BEARISH/NEUTRAL)
+- Weekly RSI (14) value
+- Binance funding rate (annualised)
+- Liquidity risk score + regime (GREEN/AMBER/RED)
 
 ---
 
@@ -261,8 +268,9 @@ The files `btc_dashboard.html` and `btc_macro_dashboard_mobile.html` are an olde
 
 ---
 
-## Pending Work (as of Mar 14 2026)
+## Pending Work (as of Mar 15 2026)
 
+### Immediate / infrastructure
 1. **Fix PEM line endings** (immediate if not done): `sed -i 's/\r//' /root/grid-engine/3commas_private.pem`
 2. **Fix inventory live feed** — falling back to 50/50 neutral. `POST /ver1/accounts/{id}/pie_chart_data` may need `load_balances` trigger first; verify RSA signing path once PEM is fixed.
 3. **Clear inventory manual override** in dashboard (click Clear on override sliders)
@@ -270,6 +278,27 @@ The files `btc_dashboard.html` and `btc_macro_dashboard_mobile.html` are an olde
 5. **Set up systemd service** — currently using tmux; no auto-restart on reboot.
 6. **Add trendline** — draw a support/resistance trendline in the dashboard for TREND_DOWN regime detection.
 7. **Set up auto-deploy from this git repo** — webhook or cron so Claude's git pushes deploy automatically.
+
+### Next engine update (gather data first — do NOT deploy yet)
+8. **Loosen `trending_down` threshold** — change `gap_ratio < -1.5` to `gap_ratio < -2.0` in `regime.py:93`. The -1.5×ATR threshold fires too aggressively on normal pullbacks when the trendline is slightly optimistic. The TREND_DOWN hysteresis (2-cycle, ATR×0.15) already guards real downtrends; -2.0 avoids shutting inner off unnecessarily. Monitor current session logs before deploying.
+
+### Macro dashboard integration (next deploy cycle)
+9. **Deploy macro dashboards to droplet** — copy `btc_macro_dashboard.html` and `btc_macro_dashboard_mobile.html` to `/root/grid-engine/`. Add Flask routes in `dashboard_server.py`:
+   ```python
+   @app.route('/macro')
+   def macro_desktop(): return send_from_directory('.', 'btc_macro_dashboard.html')
+   @app.route('/macro/mobile')
+   def macro_mobile(): return send_from_directory('.', 'btc_macro_dashboard_mobile.html')
+   ```
+10. **Link macro dashboard from engine** — add a nav link/button in `dashboard.html` header pointing to `/macro` (desktop) and `/macro/mobile`.
+11. **Macro indicator strip on engine dashboard** — add a compact top bar to `dashboard.html` that fetches the same APIs as the macro dashboard and displays 5 read-only pills:
+    - **Fear & Greed** — score + colour-coded label (from Alternative.me)
+    - **Macro Bias** — composite BULLISH/BEARISH/NEUTRAL badge
+    - **Weekly RSI** — numeric value + overbought/oversold colour
+    - **Funding Rate** — Binance perpetual, annualised %
+    - **Liquidity** — GREEN/AMBER/RED regime badge (DXY+VIX composite)
+
+    These are purely informational overlays — they do not affect engine logic. Fetch client-side via the same CORS-proxy pattern used in the macro dashboard.
 
 ---
 
