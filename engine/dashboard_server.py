@@ -153,6 +153,14 @@ def ping():
 def index():
     return send_from_directory('.', 'dashboard.html')
 
+@app.route("/macro")
+def macro_desktop():
+    return send_from_directory('.', 'btc_macro_dashboard.html')
+
+@app.route("/macro/mobile")
+def macro_mobile():
+    return send_from_directory('.', 'btc_macro_dashboard_mobile.html')
+
 
 # ── Engine status ─────────────────────────────────────────
 @app.route("/status")
@@ -968,8 +976,14 @@ _DEPLOY_FILES = [
     "inventory.py",
     "indicators.py",
 ]
-_DEPLOY_BRANCH = "claude/grid-engine-chat-review-hEEGu"
-_DEPLOY_BASE   = f"https://raw.githubusercontent.com/ashskett/btc-dashboard/{_DEPLOY_BRANCH}/engine"
+# Macro dashboard HTML lives in repo root, not engine/
+_DEPLOY_FILES_ROOT = [
+    "btc_macro_dashboard.html",
+    "btc_macro_dashboard_mobile.html",
+]
+_DEPLOY_BRANCH    = "claude/grid-engine-chat-review-hEEGu"
+_DEPLOY_BASE      = f"https://raw.githubusercontent.com/ashskett/btc-dashboard/{_DEPLOY_BRANCH}/engine"
+_DEPLOY_BASE_ROOT = f"https://raw.githubusercontent.com/ashskett/btc-dashboard/{_DEPLOY_BRANCH}"
 
 @app.route("/deploy", methods=["POST"])
 def deploy_endpoint():
@@ -983,6 +997,15 @@ def deploy_endpoint():
     results = {}
     for fname in _DEPLOY_FILES:
         url  = f"{_DEPLOY_BASE}/{fname}"
+        dest = os.path.join(script_dir, fname)
+        try:
+            urllib.request.urlretrieve(url, dest + ".new")
+            os.replace(dest + ".new", dest)
+            results[fname] = "ok"
+        except Exception as e:
+            results[fname] = f"error: {e}"
+    for fname in _DEPLOY_FILES_ROOT:
+        url  = f"{_DEPLOY_BASE_ROOT}/{fname}"
         dest = os.path.join(script_dir, fname)
         try:
             urllib.request.urlretrieve(url, dest + ".new")

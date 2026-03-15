@@ -35,7 +35,7 @@
     height: 100vh;
     overflow: hidden;
     display: grid;
-    grid-template-rows: 48px 1fr;
+    grid-template-rows: 48px 32px 1fr;
     grid-template-columns: 1fr 300px;
   }
 
@@ -61,13 +61,37 @@
   .pill { display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:6px; padding:4px 12px; min-width:85px; }
   .pill-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
   .pill-val { font-size:12px; font-weight:700; margin-top:1px; }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s ease-in-out infinite; margin-left:auto; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s ease-in-out infinite; }
+  .macro-nav-btn { margin-left:auto; font-family:var(--ui); font-size:10px; font-weight:700; color:var(--accent); text-decoration:none; letter-spacing:.08em; text-transform:uppercase; opacity:.6; transition:opacity .15s; white-space:nowrap; }
+  .macro-nav-btn:hover { opacity:1; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  /* MACRO BAR */
+  #macro-bar {
+    grid-column: 1/-1;
+    background: rgba(8,12,16,.97);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 0;
+    overflow: hidden;
+  }
+  .mp { display:flex; align-items:center; gap:5px; padding: 0 14px; border-right:1px solid var(--border); height:100%; }
+  .mp:first-child { padding-left:0; }
+  .mp-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; white-space:nowrap; }
+  .mp-val { font-size:11px; font-weight:700; color:var(--text); white-space:nowrap; }
+  .macro-link {
+    margin-left:auto; font-family:var(--ui); font-size:10px; font-weight:600;
+    color:var(--accent); text-decoration:none; letter-spacing:.06em; text-transform:uppercase;
+    opacity:.65; transition:opacity .15s; white-space:nowrap;
+  }
+  .macro-link:hover { opacity:1; }
 
   /* CONNECTION ERROR BANNER */
   #connBanner {
     display:none;
-    position:fixed; top:48px; left:0; right:300px;
+    position:fixed; top:80px; left:0; right:300px;
     background:rgba(255,61,90,.12);
     border-bottom:1px solid rgba(255,61,90,.3);
     color:var(--red);
@@ -336,17 +360,27 @@
     <div class="pill"><span class="pill-lbl">Inventory</span><span class="pill-val" id="pInv">—</span></div>
     <div class="pill"><span class="pill-lbl">Skew</span><span class="pill-val" id="pSkew">—</span></div>
   </div>
+  <a href="/macro" target="_blank" class="macro-nav-btn" title="Open macro analysis dashboard">Macro ↗</a>
   <div class="dot" id="dot"></div>
 </header>
 
+<div id="macro-bar">
+  <div class="mp"><span class="mp-lbl">F&amp;G</span><span class="mp-val" id="mpFng">—</span></div>
+  <div class="mp"><span class="mp-lbl">Macro Bias</span><span class="mp-val" id="mpBias">—</span></div>
+  <div class="mp"><span class="mp-lbl">W.RSI</span><span class="mp-val" id="mpRsi">—</span></div>
+  <div class="mp"><span class="mp-lbl">Funding</span><span class="mp-val" id="mpFund">—</span></div>
+  <div class="mp"><span class="mp-lbl">Liquidity</span><span class="mp-val" id="mpLiq">—</span></div>
+  <a href="/macro" target="_blank" class="macro-link">Full Macro Dashboard ↗</a>
+</div>
+
 <div id="connBanner">⚠ Cannot reach dashboard server — make sure dashboard_server.py is running</div>
-<div id="crossAlert" style="display:none;position:fixed;top:48px;left:0;right:300px;z-index:60;
+<div id="crossAlert" style="display:none;position:fixed;top:80px;left:0;right:300px;z-index:60;
   background:rgba(255,61,90,.18);border-bottom:2px solid var(--red);color:var(--red);
   font-family:var(--mono);font-size:11px;text-align:center;padding:6px;letter-spacing:.06em;
   animation:flashRed 1s ease-in-out infinite;">
   ⚠ PRICE CROSSED TRENDLINE — <span id="crossAlertMsg"></span>
 </div>
-<div id="breakoutAlert" style="position:fixed;top:48px;left:0;right:300px;z-index:59;">
+<div id="breakoutAlert" style="position:fixed;top:80px;left:0;right:300px;z-index:59;">
   <span id="breakoutAlertMsg"></span>
   <button class="bo-clear" onclick="clearBreakout()">Clear ✕</button>
 </div>
@@ -3404,6 +3438,90 @@ function _exitPtPickMode(){
   if(hint) hint.style.display = 'none';
   document.body.classList.remove('draw-mode');
 }
+
+// ── Macro Indicator Strip ─────────────────────────────────────────────────
+(function macroStrip(){
+  // RSI(14) over an array of closes
+  function rsi14(c){
+    if(c.length<15)return null;
+    let ag=0,al=0;
+    for(let i=1;i<=14;i++){const d=c[i]-c[i-1];d>=0?ag+=d:al-=d;}
+    ag/=14;al/=14;
+    for(let i=15;i<c.length;i++){const d=c[i]-c[i-1];ag=(ag*13+(d>=0?d:0))/14;al=(al*13+(d<0?-d:0))/14;}
+    return al===0?100:100-(100/(1+ag/al));
+  }
+  // CORS-safe fetch — tries direct then allorigins proxy. Uses unpatched _fetch to avoid auth header on external URLs.
+  async function sf(url){
+    try{const r=await _fetch(url,{signal:AbortSignal.timeout(7000)});if(r.ok)return r.json();}catch(e){}
+    try{const r=await _fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,{signal:AbortSignal.timeout(10000)});if(r.ok){const d=await r.json();return JSON.parse(d.contents);}}catch(e){}
+    return null;
+  }
+  const sigCol=s=>s==='bull'?'#00e5a0':s==='bear'?'#ff4d6d':'#8892a4';
+  function set(id,html,col){const e=document.getElementById(id);if(!e)return;e.innerHTML=html;if(col)e.style.color=col;}
+
+  async function run(){
+    const [fng,fund,klines,dxyRaw,vixRaw]=await Promise.all([
+      sf('https://api.alternative.me/fng/?limit=1'),
+      sf('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1'),
+      sf('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1w&limit=30'),
+      sf('https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d'),
+      sf('https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=5d'),
+    ]);
+
+    // ── Fear & Greed ──
+    const fngScore = fng?.data?.[0] ? parseInt(fng.data[0].value) : null;
+    const fngLbl   = fng?.data?.[0]?.value_classification ?? '';
+    const fngSig   = fngScore!=null ? (fngScore<30?'bull':fngScore>65?'bear':'neutral') : 'neutral';
+    if(fngScore!=null){
+      const c=sigCol(fngSig);
+      set('mpFng',`${fngScore} <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:${c}22;color:${c}">${fngLbl}</span>`);
+    }
+
+    // ── Funding Rate ──
+    const rate    = fund?.[0]?.fundingRate!=null ? parseFloat(fund[0].fundingRate)*100 : null;
+    const fundSig = rate!=null ? (rate<-0.005?'bull':rate>0.01?'bear':'neutral') : 'neutral';
+    if(rate!=null){
+      const ann=(rate*3*365), c=sigCol(fundSig);
+      set('mpFund',`${rate>=0?'+':''}${rate.toFixed(4)}% <span style="font-size:9px;color:${c}">${ann>=0?'+':''}${ann.toFixed(1)}%pa</span>`,c);
+    }
+
+    // ── Weekly RSI ──
+    const closes = klines?.map(c=>parseFloat(c[4]))??[];
+    const rsiVal = rsi14(closes);
+    const rsiSig = rsiVal!=null ? (rsiVal<40?'bull':rsiVal>65?'bear':'neutral') : 'neutral';
+    if(rsiVal!=null){
+      const c=sigCol(rsiSig);
+      const lbl=rsiVal<30?'OVERSOLD':rsiVal>70?'OVERBOUGHT':rsiVal<40?'WEAK':rsiVal>65?'STRONG':'MID';
+      set('mpRsi',`${rsiVal.toFixed(1)} <span style="font-size:9px;color:${c}">${lbl}</span>`);
+    }
+
+    // ── Macro Bias (3-signal composite: F&G + Funding + W.RSI) ──
+    const sigs  = [fngSig, fundSig, rsiSig];
+    const bulls = sigs.filter(s=>s==='bull').length;
+    const bears = sigs.filter(s=>s==='bear').length;
+    const biasSig   = bulls>=2?'bull':bears>=2?'bear':'neutral';
+    const biasLabel = bulls>=2?'BULLISH':bears>=2?'BEARISH':'NEUTRAL';
+    const biasC = sigCol(biasSig);
+    set('mpBias',`<span style="color:${biasC};font-weight:800">${biasLabel}</span> <span style="font-size:9px;color:var(--muted)">${bulls}↑${bears}↓</span>`);
+
+    // ── Liquidity: DXY + VIX ──
+    const dxy = dxyRaw?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+    const vix = vixRaw?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+    if(dxy!=null || vix!=null){
+      const dxySig = dxy ? (dxy>106?'bear':dxy<101?'bull':'neutral') : 'neutral';
+      const vixSig = vix ? (vix>25?'bear':vix<15?'bull':'neutral') : 'neutral';
+      const regime = (dxySig==='bear'||vixSig==='bear') ? 'RED' : (dxySig==='bull'&&vixSig==='bull') ? 'GREEN' : 'AMBER';
+      const rc = regime==='GREEN'?'#00e5a0':regime==='RED'?'#ff4d6d':'#ffab00';
+      let html=`<span style="font-weight:800;color:${rc}">${regime}</span>`;
+      if(dxy!=null) html+=` <span style="font-size:9px;color:var(--muted)">DXY ${dxy.toFixed(1)}</span>`;
+      if(vix!=null) html+=` <span style="font-size:9px;color:var(--muted)">VIX ${vix.toFixed(1)}</span>`;
+      set('mpLiq',html);
+    }
+  }
+
+  run();
+  setInterval(run, 300000); // refresh every 5 min (external APIs)
+})();
 
 // Hook chart click for price-pick mode — runs after chart is initialised
 function _initChartPick(){
