@@ -778,6 +778,37 @@ def breakout_clear():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+@app.route("/breakout/inject", methods=["POST"])
+def breakout_inject():
+    """Inject a simulated breakout state for testing.
+    Body: { "direction": "UP"|"DOWN", "price": 73000 }
+    The next engine cycle will treat this as a live breakout.
+    """
+    import json as _json, time as _time
+    data = request.get_json(silent=True) or {}
+    direction = data.get("direction", "UP").upper()
+    if direction not in ("UP", "DOWN"):
+        return jsonify({"ok": False, "msg": "direction must be UP or DOWN"}), 400
+    price = float(data.get("price", 0))
+    if price <= 0:
+        return jsonify({"ok": False, "msg": "price must be > 0"}), 400
+
+    state_file = os.path.join(os.path.dirname(__file__), "breakout_state.json")
+    try:
+        state = {
+            "consec_up":   0,
+            "consec_down": 0,
+            "active":      direction,
+            "fire_price":  price,
+            "fired_at":    _time.time(),
+            "simulated":   True,
+        }
+        _json.dump(state, open(state_file, "w"))
+        return jsonify({"ok": True, "msg": f"Injected BREAKOUT_{direction} @ ${price:,.0f}", "state": state})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 # ── Logging endpoints ────────────────────────────────────
 @app.route("/log/status")
 def log_status():

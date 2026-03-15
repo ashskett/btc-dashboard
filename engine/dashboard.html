@@ -476,6 +476,23 @@
       <button class="cbtn" id="dryOff" onclick="setDry(false)">OFF — live</button>
     </div>
     <div class="hr"></div>
+    <span class="ctl-lbl">Simulate Breakout <span style="font-size:8px;color:var(--muted);font-weight:400;">(test only)</span></span>
+    <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
+      <select id="simBoDir" style="flex:none;width:80px;background:#080c10;border:1px solid #243044;
+        color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:5px 6px;border-radius:4px;">
+        <option value="UP">▲ UP</option>
+        <option value="DOWN">▼ DOWN</option>
+      </select>
+      <input id="simBoPrice" type="number" placeholder="fire price $" value="73000"
+        style="flex:1;background:#080c10;border:1px solid #243044;color:#ffab00;
+        font-family:'Space Mono',monospace;font-size:10px;font-weight:700;padding:5px 6px;border-radius:4px;"/>
+      <button class="cbtn" onclick="injectBreakout()" style="flex:none;border-color:#a855f7;color:#a855f7;">Inject</button>
+    </div>
+    <div style="font-size:9px;color:var(--muted);margin-top:4px;line-height:1.5;">
+      Writes fake breakout state — engine acts on it next cycle.<br>
+      Use Clear ✕ on the alert banner to reset.
+    </div>
+    <div class="hr"></div>
     <span class="ctl-lbl">Engine Log</span>
     <div class="row" style="margin-top:4px;">
       <span class="rk">Entries</span>
@@ -1460,6 +1477,26 @@ async function clearBreakout(){
     const d = await r.json();
     toast(d.msg, d.ok ? 'ok' : 'err');
   } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+async function injectBreakout(){
+  const direction = document.getElementById('simBoDir').value;
+  const price     = parseFloat(document.getElementById('simBoPrice').value);
+  if (!price || price <= 0){ toast('Enter a valid fire price', 'err'); return; }
+  showConfirmModal(
+    `Inject simulated BREAKOUT_${direction} @ $${price.toLocaleString()}?\n\nThe engine will treat this as a real breakout on its next cycle. Clear the alert banner when done testing.`,
+    async () => {
+      try{
+        const r = await fetch(`${API}/breakout/inject`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ direction, price })
+        });
+        const d = await r.json();
+        toast(d.msg, d.ok ? 'ok' : 'err');
+      } catch(e){ toast(`Error: ${e.message}`,'err'); }
+    },
+    /*danger=*/true
+  );
 }
 
 // ── BOT ID CONFIG ────────────────────────────────────────
