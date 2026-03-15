@@ -155,6 +155,15 @@ def run():
         state.regime = detect_regime(df, TRENDLINE)
         state.session = get_session()
 
+        # No-trendline override: when no real trendline is set the engine uses
+        # price as a neutral fallback, giving gap_ratio=0 and no directional context.
+        # Firing COMPRESSION (which stops inner+mid) with zero context is too aggressive —
+        # we have no evidence the market is genuinely dead. Default to RANGE.
+        if state.regime == "COMPRESSION" and not _trendline_active:
+            print("No active trendline — overriding COMPRESSION to RANGE "
+                  "(no directional context; draw a trendline to enable compression logic)")
+            state.regime = "RANGE"
+
         # Weekend override: structural low volatility on Sat/Sun looks like COMPRESSION
         # to the BB/ATR indicators, but this is expected thin-market behaviour — not a
         # genuine dead market. COMPRESSION was designed to protect against the latter.

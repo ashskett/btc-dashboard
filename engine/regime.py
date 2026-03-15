@@ -41,19 +41,31 @@ def detect_regime(df, trendline):
     #
     # MOMENTUM OVERRIDE (1H): if price has moved >1.5×ATR over the last 3 closes,
     # force-exit compression even if BB/ATR haven't caught up yet.
+    #
+    # TRENDLINE GAP GUARD: if price is sitting >1.5×ATR above the trendline,
+    # quiet BB/ATR is a bullish consolidation — ideal for grid bots, NOT a dead
+    # market. Only allow COMPRESSION when price is near the trendline (gap_ratio
+    # < 1.5) so the engine can't misread a tight Saturday range far above support
+    # as a dead market and stop inner+mid unnecessarily.
     bb_threshold = df.bb_width.quantile(0.1)
     atr_mean = df.atr.mean()
 
     price_change_3h = abs(df.close.iloc[-1] - df.close.iloc[-4]) if len(df) >= 4 else 0
     momentum_exit = (atr > 0) and (price_change_3h > atr * 1.5)
 
+    gap_ratio_now = (price - trendline) / atr if atr > 0 else 0
+    above_trendline = gap_ratio_now > 1.5   # comfortable bullish range above support
+
     last_3_bb = df.bb_width.iloc[-3:]
     compression_confirmed = (
-        (last_3_bb < bb_threshold).all() and atr < atr_mean and not momentum_exit
+        (last_3_bb < bb_threshold).all() and atr < atr_mean
+        and not momentum_exit
+        and not above_trendline
     )
 
     if compression_confirmed:
         return "COMPRESSION"
+
 
     # TREND_UP: price well above trendline with expanding ATR and BB width
     bb_expanding = bb_width > df.bb_width.quantile(0.6)
