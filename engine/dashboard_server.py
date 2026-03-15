@@ -227,19 +227,38 @@ def candles():
         limit     = min(int(request.args.get("limit", 150)), 500)
         before_ms = request.args.get("before")
 
-        # Weekly / Monthly: fetch enough daily candles and aggregate
+        # Weekly / Monthly: Coinbase has no native granularity for these.
+        # Paginate daily candles (≤300/call) to cover the requested range.
         if tf_raw in ('1w', '1M'):
-            days_needed = limit * (7 if tf_raw == '1w' else 35)
-            fetch_limit = min(days_needed, 500)
+            import time as _time
+            BATCH      = 300
+            days_per   = 7 if tf_raw == '1w' else 31
+            days_needed = limit * days_per
+            end_ms     = int(before_ms) if before_ms else int(_time.time() * 1000)
+            start_ms   = end_ms - days_needed * 86_400_000
+
+            # Paginate forward from start_ms until we reach end_ms
+            daily, batch_since = [], start_ms
+            while batch_since < end_ms:
+                batch = exchange.fetch_ohlcv("BTC/USDC", timeframe='1d',
+                                             since=batch_since, limit=BATCH)
+                if not batch:
+                    break
+                daily.extend(batch)
+                if batch[-1][0] >= end_ms:
+                    break
+                batch_since = batch[-1][0] + 86_400_000
+
+            # Deduplicate, sort, trim to window
+            seen, deduped = set(), []
+            for c in daily:
+                if c[0] not in seen:
+                    seen.add(c[0]); deduped.append(c)
+            deduped.sort(key=lambda c: c[0])
             if before_ms:
-                since = int(before_ms) - fetch_limit * 86_400_000
-                daily = exchange.fetch_ohlcv("BTC/USDC", timeframe='1d', since=since, limit=fetch_limit)
-                daily = [c for c in daily if c[0] < int(before_ms)]
-            else:
-                daily = exchange.fetch_ohlcv("BTC/USDC", timeframe='1d', limit=fetch_limit)
-            data = _aggregate_candles(daily, tf_raw)
-            if before_ms:
-                data = [c for c in data if c[0] < int(before_ms)]
+                deduped = [c for c in deduped if c[0] < int(before_ms)]
+
+            data = _aggregate_candles(deduped, tf_raw)
             return jsonify(data[-limit:])
 
         tf = TF_MAP.get(tf_raw, '1h')
