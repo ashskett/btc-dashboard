@@ -848,6 +848,7 @@ let status={};
 let bots=[];
 let dryRun=false;   // synced from engine status on first poll; default false (live)
 let prevPrice=null;
+let prevPortfolioTotal=null;
 let connected=false;
 
 // Infinite-scroll-left: track all loaded candle data so we can prepend older bars
@@ -1055,7 +1056,14 @@ async function pollStatus(){
 
     // header
     document.getElementById('hprice').textContent = f(d.price);
-    if(prevPrice!==null){
+    // 24h BTC change — use candle from 24h ago if available, else fall back to prev poll
+    if(_candleData && _candleData.length >= 25){
+      const price24hAgo = _candleData[_candleData.length - 25].open;
+      const chg = (d.price - price24hAgo) / price24hAgo * 100;
+      const el = document.getElementById('hchange');
+      el.textContent = `${chg>=0?'+':''}${chg.toFixed(2)}%`;
+      el.className = `hchange ${chg>=0?'up':'down'}`;
+    } else if(prevPrice!==null){
       const chg = (d.price-prevPrice)/prevPrice*100;
       const el = document.getElementById('hchange');
       el.textContent = `${chg>=0?'+':''}${chg.toFixed(2)}%`;
@@ -3243,9 +3251,23 @@ async function loadBalance(){
     const totalK = d.total_usd >= 1000
       ? `$${(d.total_usd/1000).toFixed(1)}k`
       : `$${Math.round(d.total_usd).toLocaleString()}`;
-    const btcPct = d.total_usd > 0 ? Math.round(d.btc_usd / d.total_usd * 100) : 0;
     document.getElementById('hpTotal').textContent = totalK;
-    document.getElementById('hpSub').textContent   = `${btcPct}% BTC · ${100-btcPct}% USDC`;
+
+    // 24h portfolio change: revalue BTC holdings at price 24h ago
+    let portSub = '';
+    if(_candleData && _candleData.length >= 25 && d.btc_usd > 0 && status && status.price > 0){
+      const price24hAgo = _candleData[_candleData.length - 25].open;
+      const btcQty = d.btc_usd / status.price;
+      const total24hAgo = btcQty * price24hAgo + d.usdc_usd;
+      const portChg = (d.total_usd - total24hAgo) / total24hAgo * 100;
+      const sign = portChg >= 0 ? '+' : '';
+      portSub = `${sign}${portChg.toFixed(2)}% 24h`;
+      document.getElementById('hpSub').style.color = portChg >= 0 ? 'var(--green)' : 'var(--red)';
+    } else {
+      portSub = `${d.total_usd > 0 ? Math.round(d.btc_usd/d.total_usd*100) : '—'}% BTC`;
+      document.getElementById('hpSub').style.color = 'var(--muted)';
+    }
+    document.getElementById('hpSub').textContent = portSub;
     document.getElementById('balDeployed').textContent = fmt(d.total_deployed);
     document.getElementById('balIdle').textContent   = fmt(d.usdc_idle);
     document.getElementById('balTs').textContent     = 'Updated ' + new Date().toLocaleTimeString();
