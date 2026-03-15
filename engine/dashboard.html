@@ -1197,6 +1197,12 @@ async function loadBots(){
     const cont = document.getElementById('gridBotCards');
     if(!bots.length){ cont.innerHTML='<div style="color:var(--muted);font-size:10px">No bots in GRID_BOT_IDS</div>'; return; }
 
+    // Save any in-progress capital values the user has typed before rebuilding HTML
+    const _savedCaps = {};
+    cont.querySelectorAll('input[id^="cap_"]').forEach(el => {
+      if(el.value !== '' && el.value !== el.defaultValue) _savedCaps[el.id] = el.value;
+    });
+
     const TIER_META = [
       {name:'Inner', desc:'tight scalp'},
       {name:'Mid',   desc:'swing range'},
@@ -1263,6 +1269,12 @@ async function loadBots(){
         </div>
       </div>`;
     }).join('');
+
+    // Restore any capital values the user was typing before the rebuild
+    Object.entries(_savedCaps).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if(el) el.value = val;
+    });
 
     // legend
     const legEl = document.getElementById('botLegendLines');
