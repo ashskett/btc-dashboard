@@ -457,10 +457,12 @@
   </div>
   <div id="chart"></div>
   <div class="tf-bar">
+    <button class="tf-btn" data-tf="1m">1m</button>
     <button class="tf-btn" data-tf="5m">5m</button>
     <button class="tf-btn active" data-tf="1h">1H</button>
     <button class="tf-btn" data-tf="4h">6H</button>
     <button class="tf-btn" data-tf="1d">1D</button>
+    <button class="tf-btn" data-tf="1w">1W</button>
   </div>
   <div id="chartErr" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--red);font-size:12px;text-align:center;background:rgba(8,12,16,.9);padding:16px 24px;border:1px solid var(--red);border-radius:6px;"></div>
   <div class="grid-legend">
@@ -1518,7 +1520,7 @@ async function loadFills(){
 
 function applyFillMarkers(){
   if(!candles || !fillsData.length) return;
-  const gran = {'5m':300,'1h':3600,'4h':21600,'6h':21600,'1d':86400}[currentTf] || 3600;
+  const gran = {'1m':60,'5m':300,'1h':3600,'4h':21600,'6h':21600,'1d':86400,'1w':604800}[currentTf] || 3600;
   const markers = fillsData
     .filter(f => f.price > 0 && f.time)
     .map(f => {

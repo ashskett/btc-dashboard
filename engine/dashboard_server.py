@@ -194,11 +194,13 @@ def candles():
         # Coinbase via ccxt only supports these granularities
         # Map UI timeframes to valid ccxt strings
         TF_MAP = {
+            '1m':  '1m',
             '5m':  '5m',
             '15m': '15m',
             '1h':  '1h',
             '4h':  '6h',   # Coinbase has no 4h — use 6h as nearest
             '1d':  '1d',
+            '1w':  '1w',
         }
         tf_raw    = request.args.get("tf", "1h")
         tf        = TF_MAP.get(tf_raw, '1h')
@@ -208,8 +210,8 @@ def candles():
         if before_ms:
             # Fetch a window of candles ending strictly before the given timestamp.
             # ccxt fetch_ohlcv(since) fetches from that point forward, so we back-calculate.
-            TF_MS = {'5m': 300_000, '15m': 900_000, '1h': 3_600_000,
-                     '6h': 21_600_000, '1d': 86_400_000}
+            TF_MS = {'1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000,
+                     '6h': 21_600_000, '1d': 86_400_000, '1w': 604_800_000}
             tf_ms = TF_MS.get(tf, 3_600_000)
             since = int(before_ms) - limit * tf_ms
             data  = exchange.fetch_ohlcv("BTC/USDC", timeframe=tf, since=since, limit=limit)
