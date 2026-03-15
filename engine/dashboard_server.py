@@ -17,14 +17,28 @@ _DASHBOARD_SECRET = None
 
 def _ensure_secret():
     global _DASHBOARD_SECRET
+    # Always read directly from .env file first so restarts pick up the
+    # persisted token even when the env var wasn't inherited (e.g. start_new_session).
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        for line in (open(env_path).readlines() if os.path.exists(env_path) else []):
+            if line.startswith("DASHBOARD_SECRET="):
+                persisted = line.split("=", 1)[1].strip()
+                if persisted:
+                    _DASHBOARD_SECRET = persisted
+                    return
+    except Exception:
+        pass
+    # Fall back to env var (e.g. set externally)
     token = os.getenv("DASHBOARD_SECRET", "").strip()
     if token:
         _DASHBOARD_SECRET = token
         return
+    # Generate a new token and write it to .env (replace any existing line)
     token = secrets.token_hex(24)
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     try:
         lines = open(env_path).readlines() if os.path.exists(env_path) else []
+        lines = [l for l in lines if not l.startswith("DASHBOARD_SECRET=")]
         lines.append(f"DASHBOARD_SECRET={token}\n")
         with open(env_path, "w") as f:
             f.writelines(lines)
