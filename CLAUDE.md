@@ -282,6 +282,29 @@ The macro dashboard will be served as static files by the Flask server and linke
 ### Next engine update (gather data first — do NOT deploy yet)
 8. **Loosen `trending_down` threshold** — change `gap_ratio < -1.5` to `gap_ratio < -2.0` in `regime.py:93`. The -1.5×ATR threshold fires too aggressively on normal pullbacks when the trendline is slightly optimistic. The TREND_DOWN hysteresis (2-cycle, ATR×0.15) already guards real downtrends; -2.0 avoids shutting inner off unnecessarily. Monitor current session logs before deploying.
 
+9. **Faster compression exit — three improvements to `compression_exit_fast()` in `regime.py:98`:**
+   Engine missed a post-compression breakout (Mar 15 ~01:00) because the move resolved in 2–3 candles before the 30-min accumulation check satisfied. Three fixes:
+
+   **(a) Single large-candle body trigger** ← highest priority
+   If a single 5m candle body > 0.4× 1H ATR, exit compression immediately. Fires within one engine cycle.
+   ```python
+   candle_body = abs(df_5m["close"].iloc[-1] - df_5m["open"].iloc[-1])
+   if atr_1h and candle_body > atr_1h * 0.4:
+       return True
+   ```
+
+   **(b) Volume spike trigger**
+   If 5m volume on last candle > 2.5× rolling 20-period mean, exit compression.
+   ```python
+   vol_mean = df_5m["volume"].rolling(20).mean().iloc[-1]
+   if df_5m["volume"].iloc[-1] > vol_mean * 2.5:
+       return True
+   ```
+
+   **(c) Lower existing rolling thresholds**
+   `atr_5m > atr_5m_mean * 1.5` → `1.3×` and `move_30m > atr_1h * 0.5` → `0.35×`
+   Deploy (a)+(b) first; add (c) if still too slow after monitoring.
+
 ### Macro dashboard integration (next deploy cycle)
 9. **Deploy macro dashboards to droplet** — copy `btc_macro_dashboard.html` and `btc_macro_dashboard_mobile.html` to `/root/grid-engine/`. Add Flask routes in `dashboard_server.py`:
    ```python
@@ -299,6 +322,43 @@ The macro dashboard will be served as static files by the Flask server and linke
     - **Liquidity** — GREEN/AMBER/RED regime badge (DXY+VIX composite)
 
     These are purely informational overlays — they do not affect engine logic. Fetch client-side via the same CORS-proxy pattern used in the macro dashboard.
+
+### Mobile dashboard (next deploy cycle)
+12. **Phase 1 — Responsive engine dashboard + PWA install**
+    - Add responsive CSS breakpoints to `dashboard.html` so it works on small screens (use `btc_macro_dashboard_mobile.html` as layout reference)
+    - Add `manifest.json` + mobile meta tags so it installs on iPhone/Android home screen, launches full-screen
+    - Lightweight Charts has native touch/pinch-zoom support — test and enable
+    - Redesign controls panel (bot start/stop, inventory sliders) for tap targets
+
+13. **Phase 2 — Push notifications from engine**
+    - Add `web-push` library to droplet (`pip install pywebpush`)
+    - New Flask endpoint `POST /push/subscribe` — stores browser push subscription
+    - Engine emits push notification on key events: BREAKOUT detected, hard stop triggered, engine crash, hourly cycle summary
+    - Client-side: register service worker in `dashboard.html`, prompt for notification permission on load
+
+### Backtesting (standalone script — future cycle)
+14. **`backtest.py` — 30-day strategy replay**
+    - Fetch 30 days of 1H OHLCV from Coinbase via ccxt
+    - Replay `detect_regime`, `trend_strength`, `detect_breakout`, `grid_logic`, bot ON/OFF decisions per candle
+    - Substitute hand-drawn trendline with 50-period rolling linear regression
+    - Approximate grid P&L per candle: `ATR × grid_step_count × fee_savings` when bot is ON
+    - Output: % time each bot ON, estimated total P&L, regime breakdown, breakout false positive rate, comparison vs always-on baseline
+    - Key limitation: actual 3Commas fills are intra-candle; treat output as directional signal not precise P&L
+
+### Liquidity monitoring (future cycle — after backtesting data gathered)
+15. **Micro-liquidity: bid-ask spread guard**
+    - `ccxt.fetch_order_book('BTC/USDC', limit=5)` each cycle
+    - If spread > 1.5× grid step size: pause inner bot, log `LOW_LIQUIDITY` event
+    - Cheap check — same exchange, same connection already open
+
+16. **Meso-liquidity: volume as third COMPRESSION condition**
+    - Add to `detect_regime` in `regime.py`: if 24h rolling volume < 15th percentile of 30-day volume, factor into COMPRESSION confirmation
+    - Prevents engine waking bots in dead markets where grid fills won't materialise even if BB/ATR look normal
+
+17. **Macro-liquidity: exchange reserve trend (dashboard signal only)**
+    - Already in macro dashboard via blockchain.info
+    - Do NOT wire into automated engine logic — too slow-moving and noisy on daily fetches
+    - Surface as a read-only badge in the macro indicator strip (item 11 above)
 
 ---
 
