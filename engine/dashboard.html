@@ -1486,10 +1486,16 @@ async function loadBots(){
       const fillsNote  = fillCnt ? `<span style="color:var(--muted);font-size:9px;"> (${fillCnt} fills)</span>` : '';
       const pctNote    = profitPct != null ? `<span style="color:var(--muted);font-size:9px;"> ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(4)}%</span>` : '';
 
-      // Capital in USDC: qty_per_grid (BTC) × levels × btcPrice
+      // Capital: use actual 3Commas investment fields (USDC side + BTC side valued at current price)
+      // This matches the "Investment" figure shown in 3Commas exactly.
+      // The old formula (qty × levels × price) overcounted because it ignored that
+      // buy orders sit below current price and sell orders hold BTC at acquisition price.
       const qpg    = parseFloat(b.quantity_per_grid || 0);
       const lvls   = parseInt(b.grids_quantity || 0);
-      const capUsdc = qpg && lvls && btcPrice ? Math.round(qpg * lvls * btcPrice) : 0;
+      const invQ   = parseFloat(b.investment_quote_currency || 0);  // USDC locked in buy orders
+      const invB   = parseFloat(b.investment_base_currency  || 0);  // BTC locked in sell orders
+      const capUsdc = btcPrice && (invQ || invB) ? Math.round(invQ + invB * btcPrice)
+                    : (qpg && lvls && btcPrice  ? Math.round(qpg * lvls * btcPrice) : 0);
       const perLvl  = qpg && btcPrice ? Math.round(qpg * btcPrice) : 0;
       const capStr  = capUsdc ? `≈ $${capUsdc.toLocaleString()}` : '—';
       const lvlStr  = perLvl  ? `≈ $${perLvl.toLocaleString()}/lvl` : qpg ? `${qpg} BTC/lvl` : '—';
@@ -1513,7 +1519,7 @@ async function loadBots(){
           <div class="bm">ID<span>#${b.id}</span></div>
         </div>
         <div class="bot-meta" style="margin-top:4px;">
-          <div class="bm" title="${qpg} BTC × ${lvls} lvls × $${btcPrice.toLocaleString()}">Capital<span style="color:var(--accent);">${capStr}</span></div>
+          <div class="bm" title="USDC: $${invQ.toLocaleString(undefined,{maximumFractionDigits:2})} + BTC: ${invB} × $${btcPrice.toLocaleString()}">Capital<span style="color:var(--accent);">${capStr}</span></div>
           <div class="bm">Per level<span style="color:var(--muted);">${lvlStr}</span></div>
           <div class="bm">Qty/grid<span style="color:var(--muted);font-size:9px;">${qpg ? qpg+' BTC' : '—'}</span></div>
         </div>
