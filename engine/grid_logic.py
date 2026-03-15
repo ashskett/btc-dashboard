@@ -30,14 +30,15 @@ FEE_BUFFER      = 1.5      # safety multiplier: step must be 1.5× the break-eve
 # at ~$460 step (1.6× ATR floor). Dropping to 1.2× yields 9 levels at ~$358
 # step (1.27× ATR floor) — still 4% above fee floor, meaningfully more fills.
 TIERS = [
-    {"name": "inner", "range_mult": 0.75, "base_levels": 10, "wkd_fee_buffer": 1.2},
-    {"name": "mid",   "range_mult": 1.5,  "base_levels": 6},   # was 8 — reduced to keep step ~30% above fee floor
-    {"name": "outer", "range_mult": 3.0,  "base_levels": 6},
+    {"name": "inner", "range_mult": 0.75, "base_levels": 10, "wkd_fee_buffer": 1.2, "compression_mult": 1.5},
+    {"name": "mid",   "range_mult": 1.5,  "base_levels": 6,  "compression_mult": 1.2},  # was 8 — reduced to keep step ~30% above fee floor
+    {"name": "outer", "range_mult": 3.0,  "base_levels": 6,  "compression_mult": 1.0},  # wide safety net — no density boost needed
 ]
 
 
 def _build_tier(price, atr, regime, session, skew, df, support, resistance,
-                range_mult, base_levels, compression, wkd_fee_buffer=None):
+                range_mult, base_levels, compression, wkd_fee_buffer=None,
+                compression_mult=1.5):
     """Build grid parameters for a single tier."""
     # Weekend ATR floor: quiet Sat/Sun can push ATR so low that the fee guard
     # collapses inner/mid to 2 levels with $500+ steps — no fills possible.
@@ -66,7 +67,7 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
     # Level count — compression and session adjustments
     levels = base_levels
     if compression:
-        levels = int(levels * 1.5)   # denser grids when vol is squeezed
+        levels = int(levels * compression_mult)   # denser grids when vol is squeezed
     if session in ("ASIA", "WKD_ASIA"):
         levels += 2
     elif session == "US":
@@ -129,6 +130,7 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df):
             base_levels=t["base_levels"],
             compression=compression,
             wkd_fee_buffer=t.get("wkd_fee_buffer"),
+            compression_mult=t.get("compression_mult", 1.5),
         )
         tier_grid["name"] = t["name"]
         tiers.append(tier_grid)
