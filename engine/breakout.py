@@ -62,6 +62,12 @@ MOMENTUM_ATR_MULT   = 2.5    # total move over those N bars must exceed ATR × t
                               # dump (~8×ATR total) fires with ease.
 VOLATILITY_MULT     = 1.7    # ATR spike multiplier (was 1.8, tested 1.5)
 BB_MULT             = 2.0    # BB width spike multiplier (unchanged)
+SPIKE_UP_MIN_MOVE   = 4.0    # Volatility-spike UP requires price to have moved at least
+                              # this many ATRs from the 10-bar low before firing.
+                              # Prevents single fast candles (e.g. +$600 spike) from
+                              # shutting down inner+mid — only large sustained pumps
+                              # (≥4×ATR ≈ $1,700 at current ATR) trigger BREAKOUT_UP
+                              # via this layer. DOWN is unchanged (capital protection).
 PROXIMITY_ATR_MULT  = 1.0    # proximity alert when within ATR × this of grid edge
 EXHAUSTION_AVG_MULT = 0.20   # 5-candle avg move < ATR×this → momentum stalling (was 0.05 — never triggered)
 EXHAUSTION_WINDOW   = 5      # candles to average for exhaustion check
@@ -138,10 +144,16 @@ def _check_volatility_spike(df, window: int = 30) -> str | None:
     bb_avg  = df.bb_width.tail(window).mean()
 
     if atr > atr_avg * VOLATILITY_MULT or bb > bb_avg * BB_MULT:
-        # Assign direction from recent price vs short-term midpoint
-        price    = df.close.iloc[-1]
-        mid      = df.close.tail(5).mean()
-        return "UP" if price > mid else "DOWN"
+        price = df.close.iloc[-1]
+        mid   = df.close.tail(5).mean()
+        if price > mid:
+            # UP: only fire if price has moved a large distance from recent lows.
+            # Filters out single-candle spikes that elevate ATR without a real breakout.
+            move_from_low = price - df.close.tail(10).min()
+            if move_from_low >= atr * SPIKE_UP_MIN_MOVE:
+                return "UP"
+            return None
+        return "DOWN"
 
     return None
 
