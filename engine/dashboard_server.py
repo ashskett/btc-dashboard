@@ -957,6 +957,7 @@ def engine_stop():
 _DEPLOY_FILES = [
     "dashboard.html",
     "dashboard_server.py",
+    "threecommas.py",
     "threecommas_dca.py",
     "grid_logic.py",
     "session.py",
