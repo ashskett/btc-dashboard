@@ -40,8 +40,8 @@ def _load_private_key():
 #   (engine.py)  │ Staggered from band edges so there is a warning zone.
 #
 # Stagger layout:
-#   0.20 MIN_BTC ←── hard stop ──→ 0.55 LOWER_BAND  (35% warning gap)
-#   0.72 UPPER_BAND ←── taper ──→ 0.80 MAX_BTC       ( 8% warning gap)
+#   0.20 MIN_BTC ←── hard stop ──→ 0.45 LOWER_BAND  (25% warning gap)
+#   0.62 UPPER_BAND ←── taper ──→ 0.80 MAX_BTC      (18% warning gap)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CACHE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_cache.json")
@@ -67,9 +67,9 @@ def _save_cache(btc_ratio: float, skew: float):
         pass
 
 
-TARGET_BTC = 0.65   # ideal BTC allocation
-LOWER_BAND = 0.55   # below here: grid tilts to buy
-UPPER_BAND = 0.72   # above here: grid tilts to sell  ← was 0.75, now staggered from MAX_BTC
+TARGET_BTC = 0.55   # ideal BTC allocation
+LOWER_BAND = 0.45   # below here: grid tilts to buy
+UPPER_BAND = 0.62   # above here: grid tilts to sell
 TAPER_ZONE = 0.03   # ramp width on each side of the band edge
 
 

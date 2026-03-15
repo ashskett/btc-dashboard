@@ -378,6 +378,64 @@ def set_grid_bot_capital(bot_id):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ── Redistribute total capital across all bots by tier weight ──
+@app.route("/account/allocate_total", methods=["POST"])
+def allocate_total_capital():
+    """
+    Distribute a total USD amount across all three grid bots weighted by
+    their base grid levels: inner 20, mid 14, outer 10 (ratio 20:14:10).
+    Body: { total_usd: float, btc_price: float }
+    """
+    TIER_LEVELS = [20, 14, 10]   # inner, mid, outer
+    ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
+    if len(ids) != 3:
+        return jsonify({"ok": False, "error": f"Expected 3 GRID_BOT_IDS, got {len(ids)}"}), 500
+    try:
+        body      = request.get_json(force=True, silent=True) or {}
+        total_usd = float(body.get("total_usd", 0))
+        btc_price = float(body.get("btc_price", 0))
+        if total_usd <= 0:
+            return jsonify({"ok": False, "error": "total_usd must be > 0"}), 400
+
+        total_weight = sum(TIER_LEVELS)
+        results = []
+        for bot_id, levels in zip(ids, TIER_LEVELS):
+            share     = total_usd * levels / total_weight
+            r_cur     = signed_request("GET", f"/ver1/grid_bots/{bot_id}")
+            if r_cur.status_code != 200:
+                return jsonify({"ok": False, "error": f"GET bot {bot_id}: {r_cur.status_code}"}), 502
+            current   = r_cur.json()
+            g_levels  = int(current.get("grids_quantity") or levels)
+            if btc_price > 0:
+                qty = round(share / (g_levels * btc_price), 6)
+            else:
+                qty = round(share / g_levels, 2)
+            was_on    = bool(current.get("is_enabled", False))
+            if was_on:
+                signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
+                time.sleep(2)
+            patch = {
+                "name":              current.get("name", f"Grid Bot {bot_id}"),
+                "upper_price":       float(current.get("upper_price", 0)),
+                "lower_price":       float(current.get("lower_price", 0)),
+                "grids_quantity":    g_levels,
+                "quantity_per_grid": qty,
+                "grid_type":         current.get("grid_type", "arithmetic"),
+                "ignore_warnings":   True,
+            }
+            rp = signed_request("PATCH", f"/ver1/grid_bots/{bot_id}/manual", body=patch)
+            if rp.status_code not in (200, 201):
+                return jsonify({"ok": False, "error": f"PATCH {bot_id}: {rp.status_code} {rp.text[:200]}"}), 502
+            if was_on:
+                time.sleep(1)
+                signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
+            results.append({"bot_id": bot_id, "share": round(share, 2), "qty_per_grid": qty,
+                             "levels": g_levels, "restarted": was_on})
+        return jsonify({"ok": True, "total_usd": total_usd, "bots": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── Redeploy bot with current engine tier parameters ─────
 @app.route("/bots/<bot_id>/redeploy", methods=["POST"])
 def redeploy_bot_endpoint(bot_id):

@@ -931,6 +931,22 @@
           <span class="rk">USDC Idle</span>
           <span class="rv" id="balIdle">—</span>
         </div>
+
+        <div class="hr" style="margin:10px 0;"></div>
+        <div style="margin-bottom:5px;font-size:9px;color:var(--muted);letter-spacing:.06em;">REDISTRIBUTE CAPITAL</div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:6px;">
+          Splits total across bots by grid levels (20:14:10).
+          Bots are stopped, updated, then restarted.
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+          <input type="number" id="balReallocInput" class="pnl-input" style="flex:1;min-width:0;"
+            placeholder="Total USD (e.g. 46000)" min="1000" step="100"
+            oninput="_updateReallocPreview()">
+          <button class="cbtn on-b" id="balReallocBtn" onclick="redistributeCapital()"
+            style="font-size:9px;padding:4px 10px;flex:none;white-space:nowrap;">Redistribute</button>
+        </div>
+        <div id="balReallocPreview" style="font-size:9px;color:var(--muted);display:none;margin-bottom:4px;"></div>
+
         <div style="font-size:9px;color:var(--muted);margin-top:8px;text-align:center;" id="balTs">—</div>
       </div>
       <div id="balError" style="display:none;color:var(--red);font-size:10px;text-align:center;padding:12px 0;"></div>
@@ -3771,6 +3787,12 @@ async function loadBalance(){
       </div>`;
     }).join('');
 
+    // Pre-fill redistribute input with total deployable (deployed + idle)
+    const deployable = d.total_deployed + d.usdc_idle;
+    const inp = document.getElementById('balReallocInput');
+    if(inp && !inp.value) inp.value = Math.round(deployable);
+    _updateReallocPreview();
+
     loading.style.display = 'none';
     content.style.display = 'block';
   } catch(e){
@@ -3778,6 +3800,58 @@ async function loadBalance(){
     errEl.style.display   = 'block';
     errEl.textContent     = `Failed to load balance: ${e.message}`;
   }
+}
+
+async function redistributeCapital(){
+  const inp = document.getElementById('balReallocInput');
+  const total = parseFloat(inp?.value || 0);
+  if(!total || total < 100){ toast('Enter a valid total USD amount', 'err'); return; }
+  const price = status?.price || btcPrice || 0;
+  if(!price){ toast('BTC price not available yet — wait for status poll', 'err'); return; }
+
+  // Preview the split: 20:14:10 weights
+  const weights = [20, 14, 10];
+  const sum = 44;
+  const names = ['Inner','Mid','Outer'];
+  const shares = weights.map(w => (total * w / sum).toFixed(0));
+  const preview = names.map((n,i) => `${n}: $${Number(shares[i]).toLocaleString()}`).join(' · ');
+
+  const confirmed = confirm(
+    `Redistribute $${total.toLocaleString()} across bots?\n\n${preview}\n\nAll active bots will be stopped and restarted.`
+  );
+  if(!confirmed) return;
+
+  const btn = document.getElementById('balReallocBtn');
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await apiFetch(`${API}/account/allocate_total`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({total_usd: total, btc_price: price}),
+    });
+    const j = await r.json();
+    if(!j.ok){ toast('Redistribute failed: '+(j.error||'unknown'), 'err'); return; }
+    const lines = j.bots.map(b => `${b.bot_id}: $${b.share} (${b.qty_per_grid} BTC/lvl × ${b.levels})`).join('\n');
+    toast(`Capital redistributed ✓\n${lines}`, 'ok');
+    setTimeout(loadBalance, 3000);
+  } catch(e){
+    toast('Redistribute error: '+e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Redistribute';
+  }
+}
+
+function _updateReallocPreview(){
+  const inp     = document.getElementById('balReallocInput');
+  const preview = document.getElementById('balReallocPreview');
+  if(!inp || !preview) return;
+  const total = parseFloat(inp.value || 0);
+  if(!total){ preview.style.display = 'none'; return; }
+  const weights = [20, 14, 10], sum = 44, names = ['Inner','Mid','Outer'];
+  preview.textContent = names.map((n,i) => `${n} $${Math.round(total*weights[i]/sum).toLocaleString()}`).join(' · ');
+  preview.style.display = 'block';
 }
 
 // ── PRICE TARGET CHART PICK MODE ─────────────────────────────
