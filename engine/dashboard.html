@@ -93,34 +93,52 @@
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    padding: 0 14px;
-    gap: 10px;
     overflow: hidden;
     font-size: 10px;
   }
-  #news-ticker .nt-lbl {
+  .nt-left {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 12px 0 14px; flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: rgba(6,10,14,.98);
+    position: relative; z-index: 2; height: 100%;
+  }
+  .nt-lbl {
     font-size: 8px; font-weight: 800; letter-spacing: .12em;
-    text-transform: uppercase; color: var(--accent); white-space: nowrap;
+    text-transform: uppercase; color: var(--accent);
     border: 1px solid rgba(0,212,255,.25); border-radius: 3px;
-    padding: 1px 5px; flex-shrink: 0;
+    padding: 1px 5px; white-space: nowrap;
   }
-  #news-ticker .nt-src {
-    font-size: 8px; color: var(--muted); white-space: nowrap;
-    flex-shrink: 0; letter-spacing: .04em;
-  }
-  #news-ticker .nt-headline {
-    flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-    color: #d0d8e4; transition: opacity .5s ease;
-    cursor: pointer;
-  }
-  #news-ticker .nt-headline:hover { color: #fff; text-decoration: underline; }
-  #news-ticker .nt-age {
-    font-size: 8px; color: var(--muted); white-space: nowrap; flex-shrink: 0;
-  }
-  #news-ticker .nt-dot {
+  .nt-dot {
     width: 4px; height: 4px; border-radius: 50%;
-    background: var(--accent); flex-shrink: 0; opacity: .5;
+    background: var(--accent); opacity: .5; flex-shrink: 0;
   }
+  .nt-track-wrap {
+    flex: 1; overflow: hidden; position: relative; height: 100%;
+    display: flex; align-items: center;
+  }
+  .nt-track-wrap::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 32px;
+    background: linear-gradient(to right, rgba(6,10,14,.98), transparent);
+    z-index: 1; pointer-events: none;
+  }
+  #ntTrack {
+    display: inline-flex; align-items: center;
+    white-space: nowrap; will-change: transform;
+  }
+  @keyframes ntScroll {
+    from { transform: translateX(0); }
+    to   { transform: translateX(var(--nt-end)); }
+  }
+  .nt-item { display: inline-flex; align-items: center; gap: 7px; padding: 0 18px; }
+  .nt-item a {
+    color: #c0cad6; text-decoration: none; font-size: 10px;
+    transition: color .15s;
+  }
+  .nt-item a:hover { color: #fff; }
+  .nt-src  { font-size: 8px; color: var(--muted); }
+  .nt-age  { font-size: 8px; color: var(--muted); }
+  .nt-sep  { color: var(--accent); opacity: .35; font-size: 9px; }
 
   /* CONNECTION ERROR BANNER */
   #connBanner {
@@ -418,11 +436,13 @@
 </div>
 
 <div id="news-ticker">
-  <span class="nt-lbl">News</span>
-  <span class="nt-dot"></span>
-  <span class="nt-src" id="ntSrc">—</span>
-  <a class="nt-headline" id="ntHeadline" href="#" target="_blank" rel="noopener">Loading news…</a>
-  <span class="nt-age" id="ntAge"></span>
+  <div class="nt-left">
+    <span class="nt-lbl">News</span>
+    <span class="nt-dot"></span>
+  </div>
+  <div class="nt-track-wrap">
+    <div id="ntTrack"><span style="color:var(--muted);font-size:10px;padding-left:16px;">Loading…</span></div>
+  </div>
 </div>
 
 <div id="connBanner">⚠ Cannot reach dashboard server — make sure dashboard_server.py is running</div>
@@ -3851,42 +3871,44 @@ function _exitPtPickMode(){
 
 // ── News Ticker ───────────────────────────────────────────────────────────
 (function newsTicker(){
-  const ROTATE_MS = 30000;   // show each headline for 30s
-  const FETCH_MS  = 600000;  // re-fetch every 10 min
-
-  let _headlines = [];
-  let _idx       = 0;
-  let _rotateTimer = null;
+  const FETCH_MS = 600000;  // re-fetch every 10 min
+  const SPEED_PX = 55;      // pixels per second
 
   function timeAgo(rfc){
     if(!rfc) return '';
     const s = Math.floor((Date.now() - new Date(rfc)) / 1000);
-    if(s < 60)   return `${s}s ago`;
-    if(s < 3600) return `${Math.floor(s/60)}m ago`;
+    if(s < 60)    return `${s}s ago`;
+    if(s < 3600)  return `${Math.floor(s/60)}m ago`;
     if(s < 86400) return `${Math.floor(s/3600)}h ago`;
     return `${Math.floor(s/86400)}d ago`;
   }
 
-  function showAt(i){
-    const h   = _headlines[i];
-    const el  = document.getElementById('ntHeadline');
-    const src = document.getElementById('ntSrc');
-    const age = document.getElementById('ntAge');
-    if(!h || !el) return;
-    el.style.opacity = '0';
-    setTimeout(()=>{
-      el.textContent  = h.title;
-      el.href         = h.url || '#';
-      src.textContent = h.source || '';
-      age.textContent = timeAgo(h.published_at);
-      el.style.opacity = '1';
-    }, 500);
-  }
+  function buildTrack(headlines){
+    const track = document.getElementById('ntTrack');
+    if(!track) return;
 
-  function rotate(){
-    if(!_headlines.length) return;
-    _idx = (_idx + 1) % _headlines.length;
-    showAt(_idx);
+    // Build one set of items
+    const makeSet = () => headlines.map(h =>
+      `<span class="nt-item">` +
+        `<span class="nt-src">${h.source}</span>` +
+        `<a href="${h.url||'#'}" target="_blank" rel="noopener">${h.title}</a>` +
+        (h.published_at ? `<span class="nt-age">${timeAgo(h.published_at)}</span>` : '') +
+        `<span class="nt-sep">◆</span>` +
+      `</span>`
+    ).join('');
+
+    // Duplicate for seamless infinite loop
+    track.innerHTML = makeSet() + makeSet();
+    track.style.animation = 'none';
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const halfW    = track.scrollWidth / 2;
+        const duration = halfW / SPEED_PX;
+        track.style.setProperty('--nt-end', `-${halfW}px`);
+        track.style.animation = `ntScroll ${duration}s linear infinite`;
+      });
+    });
   }
 
   async function fetchNews(){
@@ -3895,11 +3917,7 @@ function _exitPtPickMode(){
       if(!r.ok) return;
       const data = await r.json();
       if(!Array.isArray(data) || !data.length) return;
-      _headlines = data;
-      _idx = 0;
-      showAt(0);
-      clearInterval(_rotateTimer);
-      _rotateTimer = setInterval(rotate, ROTATE_MS);
+      buildTrack(data);
     } catch(e){}
   }
 
