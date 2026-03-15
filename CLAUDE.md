@@ -446,45 +446,62 @@ curl -s "http://165.232.101.253:5050/" | grep "tabGrid"   # → Grid tab present
 
 ---
 
-### If /deploy is broken (bootstrap recovery)
+### Self-healing system (as of Mar 15 2026)
 
-If the server gets into a bad state (e.g. wrong dashboard_server.py deployed from
-main by the webhook, or port stuck), the user needs to run this ONCE on the droplet:
+The deploy system is now self-healing at two levels:
 
-```bash
-# Kill stuck process
-lsof -ti:5050 | xargs kill -9
+**1. `/deploy` endpoint fixes the webhook on every call**
+Every `POST /deploy` also downloads `scripts/webhook_server.py` from the feature
+branch to `/root/webhook_server.py`, kills the old webhook process, and starts the
+new one. This breaks the main-branch overwrite loop permanently.
 
-# Pull correct files from our branch
-cd /root/grid-engine
-branch="claude/grid-engine-chat-review-hEEGu"
-base="https://raw.githubusercontent.com/ashskett/btc-dashboard/${branch}/engine"
-curl -fsSL "${base}/dashboard_server.py" -o dashboard_server.py
-curl -fsSL "${base}/engine.py"           -o engine.py
-curl -fsSL "${base}/grid_logic.py"       -o grid_logic.py
-curl -fsSL "${base}/session.py"          -o session.py
-
-# Also update the webhook so it stays pointed at the right branch
-curl -fsSL "https://raw.githubusercontent.com/ashskett/btc-dashboard/${branch}/scripts/webhook_server.py" \
-  -o /root/webhook_server.py
-
-# Restart in tmux
-source venv/bin/activate && python dashboard_server.py
-```
-
-After this, `/deploy` works again and no further manual steps are needed.
+**2. Startup self-heal in dashboard_server.py**
+20 seconds after Flask starts (even if started from bad webhook-deployed code),
+it re-downloads `dashboard.html` and macro dashboards from the feature branch.
+No restart needed — Flask reads HTML files from disk on every request.
 
 ---
 
-### Why this can break
+### If /deploy is broken (bootstrap recovery)
 
-The webhook server at port 9001 (`/root/webhook_server.py`) updates files via
-`git pull` + `rsync` but its tmux-based restart is unreliable because the Flask
-process runs outside the tmux `grid` session. The restart sends C-c to tmux (which
-may kill the engine instead of Flask), then starts a new Flask in tmux — but if the
-old Flask process is still holding port 5050, the new one crashes silently and the
-old version continues serving.
+Only needed if the server is completely locked out (no `/deploy` endpoint, e.g.
+`main` branch webhook deployed the very old pre-/deploy server). Signs: `/ping`
+returns 404, `/deploy` returns 404.
 
-**Resolution:** Always call `POST /deploy` on port 5050 after pushing. This endpoint
-runs inside the correct Flask process, downloads files to the right path, and
-restarts cleanly via `subprocess.Popen + os._exit(0)`.
+```bash
+ssh root@165.232.101.253
+lsof -ti:5050 | xargs kill -9
+cd /root/grid-engine
+
+branch="claude/grid-engine-chat-review-hEEGu"
+base="https://raw.githubusercontent.com/ashskett/btc-dashboard/${branch}/engine"
+curl -fsSL "${base}/dashboard_server.py" -o dashboard_server.py
+curl -fsSL "${base}/dashboard.html"      -o dashboard.html
+
+# If curl returns cached old file (NameError: threading not defined):
+sed -i 's/import json, os, base64, time, subprocess, signal, sys, secrets$/import json, os, base64, time, subprocess, signal, sys, secrets, threading/' dashboard_server.py
+
+# Kill anything still on port 5050 then start
+lsof -ti:5050 | xargs kill -9 2>/dev/null; python dashboard_server.py
+```
+
+Then immediately call `/deploy` from Claude to pull all files and fix the webhook:
+```bash
+curl -s -X POST "http://165.232.101.253:5050/deploy?token=grid-deploy-2026"
+```
+
+After this, no further manual steps are needed.
+
+---
+
+### Root cause of the old breakage (fixed)
+
+The webhook at port 9001 (`/root/webhook_server.py`) was an old version that read
+`git rev-parse --abbrev-ref HEAD` on `/root/btc-dashboard` (checked out on `main`)
+and deployed from `main`. This caused a self-reinforcing loop:
+- Old webhook fires → deploys `main` → overwrites `dashboard_server.py` with old
+  version (no `/deploy`, no `/ping`) → reinstalls old webhook from `main`
+
+**Fixed by:** `/deploy` now always kills and replaces the webhook process with the
+feature-branch version. The new webhook hardcodes `DEPLOY_BRANCH` and self-restarts
+via `os.execv` after each deploy so the updated code takes effect immediately.
