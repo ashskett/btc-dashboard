@@ -422,19 +422,26 @@ sed -i 's/DRY_RUN = False/DRY_RUN = True/' /root/grid-engine/engine.py
 
 ### Normal deploy (no user action needed)
 
-Claude edits files in `engine/`, commits, pushes to the feature branch, then calls:
+**Two-step process — Claude does both:**
 
-```
-POST http://165.232.101.253:5050/deploy?token=grid-deploy-2026
+1. Commit and push to `claude/grid-engine-chat-review-hEEGu`
+2. POST to `/deploy` on the running Flask server:
+
+```bash
+curl -s -X POST "http://165.232.101.253:5050/deploy?token=grid-deploy-2026"
 ```
 
-The `/deploy` endpoint on the running dashboard server pulls all engine files from
-`claude/grid-engine-chat-review-hEEGu` on GitHub and restarts itself. Fully automated.
+The `/deploy` endpoint downloads all engine files from the feature branch on GitHub
+and restarts itself. Fully automated — no SSH needed.
+
+**Why two steps?** The webhook at port 9001 updates files via rsync but its tmux
+restart is unreliable (Flask runs outside tmux). The `/deploy` endpoint on port 5050
+is the authoritative restart mechanism and must always be called after pushing.
 
 **Verify it worked:**
 ```bash
 curl -s http://165.232.101.253:5050/ping          # → {"ok":true}
-curl -s http://165.232.101.253:5050/status?token=... | python3 -m json.tool
+curl -s "http://165.232.101.253:5050/" | grep "tabGrid"   # → Grid tab present = new version
 ```
 
 ---
@@ -471,9 +478,13 @@ After this, `/deploy` works again and no further manual steps are needed.
 
 ### Why this can break
 
-The webhook server at port 9001 (`/root/webhook_server.py`) was originally reading
-from whatever branch `/root/btc-dashboard` had checked out (usually `main`). If
-triggered, it would deploy old files and overwrite the good `dashboard_server.py`.
-The updated `scripts/webhook_server.py` now hardcodes `DEPLOY_BRANCH` to our feature
-branch. If the webhook ever gets triggered and deploys a bad server, use the bootstrap
-recovery above.
+The webhook server at port 9001 (`/root/webhook_server.py`) updates files via
+`git pull` + `rsync` but its tmux-based restart is unreliable because the Flask
+process runs outside the tmux `grid` session. The restart sends C-c to tmux (which
+may kill the engine instead of Flask), then starts a new Flask in tmux — but if the
+old Flask process is still holding port 5050, the new one crashes silently and the
+old version continues serving.
+
+**Resolution:** Always call `POST /deploy` on port 5050 after pushing. This endpoint
+runs inside the correct Flask process, downloads files to the right path, and
+restarts cleanly via `subprocess.Popen + os._exit(0)`.
