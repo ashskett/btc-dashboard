@@ -1076,7 +1076,8 @@ async function loadCandles(tf){
   if (_candlesLoading) return;
   _candlesLoading = true;
   try {
-    const r = await fetch(`${API}/candles?tf=${tf}&limit=150`);
+    const tfLimit = tf === '1M' ? 72 : tf === '1w' ? 156 : 150;
+    const r = await fetch(`${API}/candles?tf=${tf}&limit=${tfLimit}`);
     if(!r.ok) throw new Error(`Server error ${r.status}`);
     const data = await r.json();
     if(data.error) throw new Error(data.error);

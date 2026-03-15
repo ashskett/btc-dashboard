@@ -232,8 +232,10 @@ def candles():
         if tf_raw in ('1w', '1M'):
             import time as _time
             BATCH      = 300
+            # Cap: 1w → max 4 years of daily data; 1M → max 6 years
+            max_days   = 4 * 365 if tf_raw == '1w' else 6 * 365
             days_per   = 7 if tf_raw == '1w' else 31
-            days_needed = limit * days_per
+            days_needed = min(limit * days_per, max_days)
             end_ms     = int(before_ms) if before_ms else int(_time.time() * 1000)
             start_ms   = end_ms - days_needed * 86_400_000
 
