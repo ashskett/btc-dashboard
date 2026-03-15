@@ -420,32 +420,60 @@ sed -i 's/DRY_RUN = False/DRY_RUN = True/' /root/grid-engine/engine.py
 
 ## How Claude Deploys Changes
 
-Since SSH is sandboxed, the workflow is:
+### Normal deploy (no user action needed)
 
-1. Claude edits files in `engine/`, commits, and pushes to the feature branch.
-2. You deploy to the droplet by curling the raw files directly from GitHub.
+Claude edits files in `engine/`, commits, pushes to the feature branch, then calls:
 
-**`/root/grid-engine` is NOT a git repo** — do not `git pull` there. Use curl instead:
-
-```bash
-# ── ONE-COMMAND DEPLOY ──────────────────────────────────────────────────────
-# Run this on the droplet to pull all engine files and restart the server.
-# The server now auto-starts the engine on boot — no separate engine command needed.
-
-tmux send-keys -t grid C-c Enter && sleep 1
-cd /root/grid-engine && source venv/bin/activate
-
-branch="claude/grid-engine-chat-review-hEEGu"
-base="https://raw.githubusercontent.com/ashskett/btc-dashboard/${branch}/engine"
-
-curl -fsSL "${base}/dashboard.html"        -o dashboard.html
-curl -fsSL "${base}/dashboard_server.py"   -o dashboard_server.py
-curl -fsSL "${base}/threecommas_dca.py"    -o threecommas_dca.py
-curl -fsSL "${base}/grid_logic.py"         -o grid_logic.py
-curl -fsSL "${base}/session.py"            -o session.py
-
-python dashboard_server.py
-# Engine auto-starts alongside the dashboard server — check logs for "Engine auto-started"
+```
+POST http://165.232.101.253:5050/deploy?token=grid-deploy-2026
 ```
 
-**Future goal**: webhook auto-deploy so the curl step happens automatically on push.
+The `/deploy` endpoint on the running dashboard server pulls all engine files from
+`claude/grid-engine-chat-review-hEEGu` on GitHub and restarts itself. Fully automated.
+
+**Verify it worked:**
+```bash
+curl -s http://165.232.101.253:5050/ping          # → {"ok":true}
+curl -s http://165.232.101.253:5050/status?token=... | python3 -m json.tool
+```
+
+---
+
+### If /deploy is broken (bootstrap recovery)
+
+If the server gets into a bad state (e.g. wrong dashboard_server.py deployed from
+main by the webhook, or port stuck), the user needs to run this ONCE on the droplet:
+
+```bash
+# Kill stuck process
+lsof -ti:5050 | xargs kill -9
+
+# Pull correct files from our branch
+cd /root/grid-engine
+branch="claude/grid-engine-chat-review-hEEGu"
+base="https://raw.githubusercontent.com/ashskett/btc-dashboard/${branch}/engine"
+curl -fsSL "${base}/dashboard_server.py" -o dashboard_server.py
+curl -fsSL "${base}/engine.py"           -o engine.py
+curl -fsSL "${base}/grid_logic.py"       -o grid_logic.py
+curl -fsSL "${base}/session.py"          -o session.py
+
+# Also update the webhook so it stays pointed at the right branch
+curl -fsSL "https://raw.githubusercontent.com/ashskett/btc-dashboard/${branch}/scripts/webhook_server.py" \
+  -o /root/webhook_server.py
+
+# Restart in tmux
+source venv/bin/activate && python dashboard_server.py
+```
+
+After this, `/deploy` works again and no further manual steps are needed.
+
+---
+
+### Why this can break
+
+The webhook server at port 9001 (`/root/webhook_server.py`) was originally reading
+from whatever branch `/root/btc-dashboard` had checked out (usually `main`). If
+triggered, it would deploy old files and overwrite the good `dashboard_server.py`.
+The updated `scripts/webhook_server.py` now hardcodes `DEPLOY_BRANCH` to our feature
+branch. If the webhook ever gets triggered and deploys a bad server, use the bootstrap
+recovery above.
