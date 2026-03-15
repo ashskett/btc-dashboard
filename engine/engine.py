@@ -525,14 +525,15 @@ def run():
         #
         # Tier mapping: GRID_BOTS[0]=inner  GRID_BOTS[1]=mid  GRID_BOTS[2]=outer
         #
-        # State          │ inner │  mid  │ outer │ Rationale
-        # ───────────────┼───────┼───────┼───────┼─────────────────────────────────
-        # RANGE          │  ON   │  ON   │  ON   │ Normal — all bots trade
-        # TREND_UP       │  ON   │  ON   │  ON   │ Ride the move — grid profits on pullbacks
-        # trending_up    │  OFF  │  ON   │  ON   │ Price running — inner gets burned through
-        # TREND_DOWN     │  OFF  │  OFF  │  ON   │ Outer catches the bounce
-        # trending_down  │  OFF  │  OFF  │  ON   │ Same — strong dump, wait with outer
-        # COMPRESSION    │  OFF  │  OFF  │  ON   │ Outer wide enough to catch even low-vol oscillations
+        # State                   │ inner │  mid  │ outer │ Rationale
+        # ────────────────────────┼───────┼───────┼───────┼──────────────────────────────────────
+        # RANGE                   │  ON   │  ON   │  ON   │ Normal — all bots trade
+        # TREND_UP                │  ON   │  ON   │  ON   │ Ride the move — grid profits on pullbacks
+        # trending_up + TREND_UP  │  OFF  │  ON   │  ON   │ Price running hard — inner gets burned
+        # TREND_DOWN              │  OFF  │  OFF  │  ON   │ Outer catches the bounce
+        # trending_down           │  OFF  │  OFF  │  ON   │ Same — strong dump, wait with outer
+        # COMPRESSION             │  OFF  │  OFF  │  ON   │ Outer wide enough for low-vol oscillations
+        # Note: trending_up in RANGE regime = price above support, NOT a trend — all bots ON
 
         if state.regime == "COMPRESSION":
             print("COMPRESSION — inner+mid off, outer running (wide range catches low-vol oscillations)")
@@ -554,9 +555,11 @@ def run():
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
                 _act(bot, i >= 2, tier_name)
 
-        elif state.trending_up:
-            # Price running hard above trendline — inner too tight, mid+outer ride it
-            print(f"TRENDING UP (gap={state.gap_ratio:.2f}×ATR) — inner off, mid+outer running")
+        elif state.trending_up and state.regime != "RANGE":
+            # Price running hard above trendline AND regime confirms directional move.
+            # In RANGE regime, high gap_ratio just means price is sitting comfortably
+            # above a support trendline — not actually trending. Inner should run there.
+            print(f"TRENDING UP (gap={state.gap_ratio:.2f}×ATR, regime={state.regime}) — inner off, mid+outer running")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
                 _act(bot, i >= 1, tier_name)  # mid (index 1) and outer (index 2) run
