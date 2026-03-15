@@ -54,6 +54,9 @@
   .hchange { font-size:11px; padding:2px 7px; border-radius:3px; font-weight:700; }
   .hchange.up   { background:rgba(0,230,118,.15); color:var(--green); }
   .hchange.down { background:rgba(255,61,90,.15);  color:var(--red); }
+  .hportfolio { display:flex; flex-direction:column; align-items:flex-start; line-height:1.2; cursor:default; }
+  .hportfolio .hp-total { font-family:var(--ui); font-size:14px; font-weight:800; color:#e8edf2; letter-spacing:-.01em; }
+  .hportfolio .hp-sub   { font-size:9px; color:var(--muted); letter-spacing:.04em; }
   .pills { display:flex; gap:8px; flex:1; justify-content:center; }
   .pill { display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:6px; padding:4px 12px; min-width:85px; }
   .pill-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
@@ -319,6 +322,10 @@
   <span class="logo">⬡ Grid Engine</span>
   <span class="hprice" id="hprice">———</span>
   <span class="hchange up" id="hchange">—</span>
+  <div class="hportfolio" id="hportfolio" title="Total portfolio value (BTC + USDC)">
+    <span class="hp-total" id="hpTotal">——</span>
+    <span class="hp-sub"   id="hpSub">portfolio</span>
+  </div>
   <div class="pills">
     <div class="pill"><span class="pill-lbl">Regime</span><span class="pill-val c" id="pRegime">—</span></div>
     <div class="pill"><span class="pill-lbl">Session</span><span class="pill-val" id="pSession">—</span></div>
@@ -2433,6 +2440,8 @@ setInterval(loadFills, 300000);
 setInterval(tickTrendlines, 1000);   // live level + cross detection every second
 loadDcaBots();
 setInterval(loadDcaBots, 60000);
+loadBalance();
+setInterval(loadBalance, 60000);
 
 // ── DCA BOTS ─────────────────────────────────────────────────
 let _dcaBots = [];
@@ -3229,6 +3238,14 @@ async function loadBalance(){
     document.getElementById('balTotal').textContent  = fmt(d.total_usd);
     document.getElementById('balBtc').textContent    = fmt(d.btc_usd);
     document.getElementById('balUsdc').textContent   = fmt(d.usdc_usd);
+
+    // Header portfolio value
+    const totalK = d.total_usd >= 1000
+      ? `$${(d.total_usd/1000).toFixed(1)}k`
+      : `$${Math.round(d.total_usd).toLocaleString()}`;
+    const btcPct = d.total_usd > 0 ? Math.round(d.btc_usd / d.total_usd * 100) : 0;
+    document.getElementById('hpTotal').textContent = totalK;
+    document.getElementById('hpSub').textContent   = `${btcPct}% BTC · ${100-btcPct}% USDC`;
     document.getElementById('balDeployed').textContent = fmt(d.total_deployed);
     document.getElementById('balIdle').textContent   = fmt(d.usdc_idle);
     document.getElementById('balTs').textContent     = 'Updated ' + new Date().toLocaleTimeString();
