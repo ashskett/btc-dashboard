@@ -134,9 +134,42 @@ def calculate_inventory():
 
     Returns (btc_ratio, skew).  On API failure, falls back to the last
     cached value (up to 2 hours old) before returning neutral (0.5, 0.0).
+
+    Large-swing sanity check:
+    If the live result differs from the cached value by > 0.12 in a single
+    cycle, 3Commas may be returning a stale snapshot (observed during heavy
+    fill activity when the balance cache hasn't caught up yet).  We wait 10s
+    and re-fetch once.  If the re-fetch is closer to the cached value, we
+    use it — a genuine large change would produce consistent results on both
+    fetches.  Threshold 0.12 = ~2× the largest single-cycle drift that is
+    explainable by normal price movement alone.
     """
     try:
         result = _calculate_inventory_live()
+        btc_ratio, _ = result
+
+        # Sanity check against cache
+        cached_ratio, _ = _load_cache()
+        if cached_ratio is not None and abs(btc_ratio - cached_ratio) > 0.12:
+            print(f"WARNING: Large inventory swing detected "
+                  f"({cached_ratio:.2%} → {btc_ratio:.2%}, "
+                  f"Δ={btc_ratio - cached_ratio:+.2%}). "
+                  f"Re-fetching in 10s to confirm...")
+            time.sleep(10)
+            try:
+                result2 = _calculate_inventory_live()
+                btc2, _ = result2
+                print(f"Re-fetch: {btc2:.2%}  (Δ from cache: {btc2 - cached_ratio:+.2%})")
+                # If re-fetch is closer to cache, first fetch was likely stale.
+                # If both fetches show a similar large change, accept as real.
+                if abs(btc2 - cached_ratio) < abs(btc_ratio - cached_ratio):
+                    print(f"Re-fetch closer to cache — using re-fetch value ({btc2:.2%})")
+                    result = result2
+                else:
+                    print(f"Both fetches confirm large swing — accepting {btc_ratio:.2%}")
+            except Exception as e2:
+                print(f"Re-fetch failed ({e2}) — using first result ({btc_ratio:.2%})")
+
         _save_cache(*result)
         return result
     except Exception as e:
@@ -167,7 +200,9 @@ def _calculate_inventory_live():
         _signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
     except Exception as e:
         print(f"Warning: load_balances failed ({e}) — proceeding with cached data")
-    time.sleep(3)  # give 3Commas time to refresh its balance cache
+    time.sleep(8)  # give 3Commas time to refresh its balance cache
+    # (8s — was 3s. Stale snapshots observed during high fill activity; longer wait
+    # reduces the window where pie_chart_data returns pre-fill balance data.)
 
     # Step 2: fetch per-currency breakdown.
     # 3Commas occasionally returns 204/empty immediately after load_balances
