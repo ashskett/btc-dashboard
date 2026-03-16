@@ -81,9 +81,10 @@ def trend_strength(price, trendline, atr):
     """
     Returns a gap_ratio (price - trendline) / atr and derived trend flags.
 
-    trending_up:   price > trendline + 3.0×ATR — price running away upward.
-                   3x threshold never fired in 10hrs of data, so it only catches
-                   genuine breakout moves, not normal ranging drift.
+    trending_up:   price > trendline + 5.5×ATR — price running away upward.
+                   Raised from 3.0 (Mar 16): 3x suppressed inner all morning during
+                   consolidation at gap_ratio 4.8–5.8 — too conservative. 5.5x only
+                   parks inner on a genuine acceleration, not normal ranging drift.
 
     trending_down: price < trendline - 1.5×ATR — meaningful downside pressure.
                    1.5x is tight enough to catch real dumps but the hysteresis
@@ -102,7 +103,7 @@ def trend_strength(price, trendline, atr):
 
     return {
         "gap_ratio":     round(gap_ratio, 3),
-        "trending_up":   bool(gap_ratio >  3.0),
+        "trending_up":   bool(gap_ratio >  5.5),
         "trending_down": bool(gap_ratio < -1.5),
     }
 
