@@ -1192,6 +1192,26 @@ def log_clear():
     return jsonify({"ok": True})
 
 
+@app.route("/portfolio/log")
+def portfolio_log():
+    """Return portfolio snapshots for P&L charting. ?limit=N (default all)."""
+    limit  = request.args.get("limit", type=int)
+    pf_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio_log.jsonl")
+    rows   = []
+    if os.path.exists(pf_log):
+        with open(pf_log) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        rows.append(json.loads(line))
+                    except Exception:
+                        pass
+    if limit:
+        rows = rows[-limit:]
+    return jsonify(rows)
+
+
 # ── Engine process management ────────────────────────────
 _engine_proc   = None
 _engine_output = []   # rolling buffer of last 200 lines

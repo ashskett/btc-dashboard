@@ -60,11 +60,45 @@ def _load_cache():
     return None, None
 
 
-def _save_cache(btc_ratio: float, skew: float):
+def _save_cache(btc_ratio: float, skew: float, btc_qty: float = 0.0,
+                usdc_qty: float = 0.0, btc_price: float = 0.0):
     try:
-        json.dump({"btc_ratio": btc_ratio, "skew": skew, "ts": time.time()}, open(_CACHE_FILE, "w"))
+        json.dump({
+            "btc_ratio": btc_ratio, "skew": skew, "ts": time.time(),
+            "btc_qty": btc_qty, "usdc_qty": usdc_qty, "btc_price": btc_price,
+        }, open(_CACHE_FILE, "w"))
     except Exception:
         pass
+
+
+def portfolio_snapshot() -> dict | None:
+    """
+    Return the most recent portfolio snapshot from the inventory cache.
+    Returns None if the cache is missing or stale.
+
+    Keys: btc_qty, usdc_qty, btc_price, portfolio_usd, btc_ratio, ts
+    No API call — uses whatever was fetched during the last calculate_inventory() cycle.
+    """
+    try:
+        data = json.load(open(_CACHE_FILE))
+        age  = time.time() - data.get("ts", 0)
+        if age > _CACHE_MAX_AGE:
+            return None
+        btc_qty   = float(data.get("btc_qty",   0))
+        usdc_qty  = float(data.get("usdc_qty",  0))
+        btc_price = float(data.get("btc_price", 0))
+        if btc_price == 0:
+            return None
+        return {
+            "btc_qty":       round(btc_qty,  8),
+            "usdc_qty":      round(usdc_qty, 2),
+            "btc_price":     round(btc_price, 2),
+            "portfolio_usd": round(btc_qty * btc_price + usdc_qty, 2),
+            "btc_ratio":     round(data.get("btc_ratio", 0), 4),
+            "ts":            data["ts"],
+        }
+    except Exception:
+        return None
 
 
 TARGET_BTC = 0.55   # ideal BTC allocation
@@ -146,7 +180,7 @@ def calculate_inventory():
     """
     try:
         result = _calculate_inventory_live()
-        btc_ratio, _ = result
+        btc_ratio = result[0]
 
         # Sanity check against cache
         cached_ratio, _ = _load_cache()
@@ -158,10 +192,8 @@ def calculate_inventory():
             time.sleep(10)
             try:
                 result2 = _calculate_inventory_live()
-                btc2, _ = result2
+                btc2 = result2[0]
                 print(f"Re-fetch: {btc2:.2%}  (Δ from cache: {btc2 - cached_ratio:+.2%})")
-                # If re-fetch is closer to cache, first fetch was likely stale.
-                # If both fetches show a similar large change, accept as real.
                 if abs(btc2 - cached_ratio) < abs(btc_ratio - cached_ratio):
                     print(f"Re-fetch closer to cache — using re-fetch value ({btc2:.2%})")
                     result = result2
@@ -170,8 +202,9 @@ def calculate_inventory():
             except Exception as e2:
                 print(f"Re-fetch failed ({e2}) — using first result ({btc_ratio:.2%})")
 
-        _save_cache(*result)
-        return result
+        # result = (btc_ratio, skew, btc_qty, usdc_qty, btc_price)
+        _save_cache(result[0], result[1], result[2], result[3], result[4])
+        return result[0], result[1]
     except Exception as e:
         cached_ratio, cached_skew = _load_cache()
         if cached_ratio is not None:
@@ -281,4 +314,4 @@ def _calculate_inventory_live():
         f"Skew: {skew:+.4f}"
     )
 
-    return btc_ratio, skew
+    return btc_ratio, skew, btc, quote_usd, btc_price

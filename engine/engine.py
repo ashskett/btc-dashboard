@@ -1,4 +1,4 @@
-from inventory import calculate_inventory
+from inventory import calculate_inventory, portfolio_snapshot
 from engine_state import EngineState
 import os
 import json
@@ -640,6 +640,25 @@ def run():
             }
             write_status(log_data)
             write_log_entry(log_data)
+
+            # ── Portfolio snapshot (balance-based P&L tracking) ──────────────
+            # Appends one line to portfolio_log.jsonl each cycle.
+            # Uses the raw balances already fetched by calculate_inventory() —
+            # no extra API calls. This is the only accurate P&L source because
+            # 3Commas bot P&L resets and orphans positions on every stop/start.
+            snap = portfolio_snapshot()
+            if snap:
+                snap["dt"] = log_data.get("dt", "")
+                snap["regime"] = log_data.get("regime", "")
+                snap["bots_on"] = [t["name"] for t in log_data.get("tiers", [])
+                                   if log_data.get(f"bot_{t['name']}_on")]
+                _pf_log = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "portfolio_log.jsonl")
+                try:
+                    with open(_pf_log, "a") as f:
+                        f.write(json.dumps(snap) + "\n")
+                except Exception as _e:
+                    print(f"Warning: could not write portfolio_log.jsonl: {_e}")
 
 schedule.every(5).minutes.do(run)
 
