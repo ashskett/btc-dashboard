@@ -547,14 +547,19 @@ def account_balance():
 
         btc_usd  = 0.0
         usdc_usd = 0.0
+        btc_qty  = 0.0
+        usdc_qty = 0.0
         for item in pie:
             code = (item.get("code") or item.get("currency_code") or "").upper()
             # API returns "usd_value" (string)
             val  = float(item.get("usd_value") or item.get("current_value_usd") or 0)
+            qty  = float(item.get("amount") or item.get("quantity") or 0)
             if code == "BTC":
                 btc_usd = val
+                btc_qty = qty
             elif code in ("USDC", "USDT", "USD"):
                 usdc_usd += val
+                usdc_qty += qty
 
         # Get bot configs to calculate deployed capital
         # investment_quote_currency = USDC held inside the bot
@@ -582,7 +587,9 @@ def account_balance():
 
         result = {
             "btc_usd":        btc_usd,
+            "btc_qty":        btc_qty,
             "usdc_usd":       usdc_usd,
+            "usdc_qty":       usdc_qty,
             "total_usd":      total_usd,
             "total_deployed": total_deployed,
             "usdc_idle":      usdc_idle,

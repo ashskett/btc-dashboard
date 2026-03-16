@@ -904,9 +904,17 @@
           <span class="rk">BTC (held)</span>
           <span class="rv" id="balBtc">—</span>
         </div>
-        <div class="row" style="margin-bottom:10px;">
+        <div class="row" style="margin-bottom:2px;">
+          <span class="rk" style="padding-left:8px;color:var(--muted);">≈ quantity</span>
+          <span class="rv" id="balBtcQty" style="color:var(--muted);font-size:10px;">—</span>
+        </div>
+        <div class="row">
           <span class="rk">USDC (total)</span>
           <span class="rv" id="balUsdc">—</span>
+        </div>
+        <div class="row" style="margin-bottom:10px;">
+          <span class="rk" style="padding-left:8px;color:var(--muted);">≈ quantity</span>
+          <span class="rv" id="balUsdcQty" style="color:var(--muted);font-size:10px;">—</span>
         </div>
 
         <!-- Stacked allocation bar -->
@@ -3779,7 +3787,9 @@ async function loadBalance(){
 
     document.getElementById('balTotal').textContent  = fmt(d.total_usd);
     document.getElementById('balBtc').textContent    = fmt(d.btc_usd);
+    document.getElementById('balBtcQty').textContent = d.btc_qty > 0 ? `${d.btc_qty.toFixed(6)} BTC` : '—';
     document.getElementById('balUsdc').textContent   = fmt(d.usdc_usd);
+    document.getElementById('balUsdcQty').textContent = d.usdc_qty > 0 ? `${d.usdc_qty.toLocaleString(undefined,{maximumFractionDigits:2})} USDC` : '—';
 
     // Header portfolio value
     const totalK = d.total_usd >= 1000
