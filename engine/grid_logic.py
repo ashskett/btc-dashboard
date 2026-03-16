@@ -38,7 +38,7 @@ TIERS = [
 
 def _build_tier(price, atr, regime, session, skew, df, support, resistance,
                 range_mult, base_levels, compression, wkd_fee_buffer=None,
-                compression_mult=1.5):
+                compression_mult=1.5, trend_tilt=0.0):
     """Build grid parameters for a single tier."""
     # Weekend ATR floor: quiet Sat/Sun can push ATR so low that the fee guard
     # collapses inner/mid to 2 levels with $500+ steps — no fills possible.
@@ -61,8 +61,12 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
         grid_low  = price - (grid_width * 0.5) - tilt
         grid_high = price + (grid_width * 1.5) - tilt
     else:
-        grid_low  = price - grid_width - tilt
-        grid_high = price + grid_width - tilt
+        # trend_tilt: fractional shift toward the trend direction (inner tier only).
+        # When trending_up in RANGE, shift the inner grid up so the upper boundary
+        # doesn't clip and idle the bot as price grinds higher.
+        trend_shift = trend_tilt * grid_width
+        grid_low  = price - grid_width - tilt + trend_shift
+        grid_high = price + grid_width - tilt + trend_shift
 
     # Level count — compression and session adjustments
     levels = base_levels
@@ -99,22 +103,28 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
     )
 
     return {
-        "center":     price,
-        "grid_low":   round(grid_low,  2),
-        "grid_high":  round(grid_high, 2),
-        "levels":     levels,
-        "step":       round(step, 2),
-        "grid_width": round(grid_width, 2),
-        "tilt":       round(tilt, 2),
+        "center":      price,
+        "grid_low":    round(grid_low,  2),
+        "grid_high":   round(grid_high, 2),
+        "levels":      levels,
+        "step":        round(step, 2),
+        "grid_width":  round(grid_width, 2),
+        "tilt":        round(tilt, 2),
+        "trend_tilt":  round(trend_tilt * grid_width, 2),
         "grid_levels": grid_levels,
-        "min_step":   round(min_step, 2),
-        "fee_ok":     bool(step >= min_step),
+        "min_step":    round(min_step, 2),
+        "fee_ok":      bool(step >= min_step),
     }
 
 
-def calculate_grid_parameters(price, atr, regime, session, skew, df):
+def calculate_grid_parameters(price, atr, regime, session, skew, df, trend_tilt=0.0):
     """Returns a single (mid-tier) grid for backwards compatibility,
-    plus a 'tiers' key with all three bot grids."""
+    plus a 'tiers' key with all three bot grids.
+
+    trend_tilt: fractional multiplier applied only to the inner tier when
+    regime == RANGE and trending_up. Shifts the inner grid toward the trend
+    so the upper boundary doesn't idle the bot during a slow grind up.
+    """
 
     volatility_ratio = atr / price
     compression = bool(volatility_ratio < 0.005)
@@ -122,7 +132,9 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df):
     support, resistance = find_liquidity_levels(df)
 
     tiers = []
-    for t in TIERS:
+    for i, t in enumerate(TIERS):
+        # trend_tilt only applies to the inner tier (index 0)
+        tier_trend_tilt = trend_tilt if i == 0 else 0.0
         tier_grid = _build_tier(
             price, atr, regime, session, skew, df,
             support, resistance,
@@ -131,6 +143,7 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df):
             compression=compression,
             wkd_fee_buffer=t.get("wkd_fee_buffer"),
             compression_mult=t.get("compression_mult", 1.5),
+            trend_tilt=tier_trend_tilt,
         )
         tier_grid["name"] = t["name"]
         tiers.append(tier_grid)

@@ -231,13 +231,20 @@ def run():
         # ===============================
         # GRID PARAMETERS
         # ===============================
+        # Asymmetric inner-tier tilt when price is grinding up inside RANGE.
+        # gap_ratio > 3.0 (trending_up) in RANGE = price well above trendline
+        # but no confirmed regime break. Without tilt the inner grid is symmetric
+        # and goes idle when price exits the upper boundary.
+        # 0.12 shifts the inner grid up by 12% of its width (~$340 at current ATR).
+        _trend_tilt = 0.12 if (state.regime == "RANGE" and state.trending_up) else 0.0
         grid = calculate_grid_parameters(
             state.price,
             state.atr,
             state.regime,
             state.session,
             state.skew,
-            df
+            df,
+            trend_tilt=_trend_tilt,
         )
 
         state.grid_width = grid["grid_width"]
