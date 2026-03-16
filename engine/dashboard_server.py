@@ -76,11 +76,25 @@ ACCOUNT_ID   = os.getenv("THREECOMMAS_ACCOUNT_ID")
 BASE_3C      = "https://api.3commas.io/public/api"
 
 
+def _fix_pem_line_endings(path: str) -> None:
+    """Strip Windows CRLF line endings from PEM file (silently no-ops if already clean)."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        if b"\r" in raw:
+            with open(path, "wb") as f:
+                f.write(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+            print(f"PEM fix: removed CR line endings from {path}")
+    except Exception as e:
+        print(f"Warning: could not fix PEM line endings for {path}: {e}")
+
+
 def _load_private_key():
     path = API_SECRET.strip() if API_SECRET else "/root/grid-engine/3commas_private.pem"
     if not os.path.exists(path):
         # Fall back to server default if configured path doesn't exist (e.g. stale Mac path in .env)
         path = "/root/grid-engine/3commas_private.pem"
+    _fix_pem_line_endings(path)
     with open(path, "rb") as f:
         pem = f.read()
     return serialization.load_pem_private_key(pem, password=None)
