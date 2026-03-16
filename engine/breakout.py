@@ -71,6 +71,11 @@ SPIKE_UP_MIN_MOVE   = 4.0    # Volatility-spike UP requires price to have moved 
 PROXIMITY_ATR_MULT  = 1.0    # proximity alert when within ATR × this of grid edge
 EXHAUSTION_AVG_MULT = 0.20   # 5-candle avg move < ATR×this → momentum stalling (was 0.05 — never triggered)
 EXHAUSTION_WINDOW   = 5      # candles to average for exhaustion check
+POST_CLEAR_COOLDOWN = 600    # seconds after exhaustion clear before spike layer can re-fire (2 engine cycles).
+                              # Prevents the exhaustion → immediate-re-fire loop: the spike layer sees the same
+                              # elevated ATR/BB that triggered the original breakout and re-fires on the very
+                              # next cycle before market conditions have changed.  Momentum layer is exempt —
+                              # a genuine 4-bar collapse should still fire even inside the cooldown window.
 
 
 def _load_state() -> dict:
@@ -214,6 +219,20 @@ def breakout_detected(df, atr_window: int = 30,
               f"no momentum confirmation (requires 4 bars × {MOMENTUM_ATR_MULT}×ATR)")
         spike_dir = None
 
+    # Guard 3: post-exhaustion cooldown — spike layer only.
+    # After exhaustion clears a breakout, the same elevated ATR/BB that triggered
+    # the original signal is still present on the next cycle.  Block spike re-fires
+    # for POST_CLEAR_COOLDOWN seconds (2 engine cycles ≈ 10 min).  Momentum is
+    # exempt: a genuine 4-bar collapse should still fire inside the window.
+    s3 = _load_state()
+    cleared_at = s3.get("cleared_at")
+    if cleared_at and spike_dir and (time.time() - cleared_at) < POST_CLEAR_COOLDOWN:
+        elapsed = int(time.time() - cleared_at)
+        remaining = POST_CLEAR_COOLDOWN - elapsed
+        print(f"BREAKOUT {spike_dir} (spike) suppressed — post-exhaustion cooldown "
+              f"({elapsed}s elapsed, {remaining}s remaining)")
+        spike_dir = None
+
     direction = mom_dir or spike_dir
 
     if direction:
@@ -257,12 +276,14 @@ def breakout_exhausting(df) -> bool:
             print(f"Breakout DOWN cancelled — price ${price:,.0f} recovered above fire ${fire:,.0f}")
             s["active"] = None; s["fire_price"] = None
             s["consec_up"] = 0; s["consec_down"] = 0
+            s["cleared_at"] = time.time()
             _save_state(s)
             return True
         if direction == "UP" and price < fire:
             print(f"Breakout UP cancelled — price ${price:,.0f} fell back below fire ${fire:,.0f}")
             s["active"] = None; s["fire_price"] = None
             s["consec_up"] = 0; s["consec_down"] = 0
+            s["cleared_at"] = time.time()
             _save_state(s)
             return True
 
@@ -279,6 +300,7 @@ def breakout_exhausting(df) -> bool:
         s["fire_price"]  = None
         s["consec_up"]   = 0
         s["consec_down"] = 0
+        s["cleared_at"]  = time.time()
         _save_state(s)
 
     return stalling
@@ -311,8 +333,10 @@ def clear_breakout_state():
     """
     Reset all breakout state.
     Call this after a successful grid redeployment at the new price level.
+    Stamps cleared_at so the post-exhaustion cooldown applies to the next cycle.
     """
     _save_state({
         "consec_up": 0, "consec_down": 0,
         "active": None, "fire_price": None,
+        "cleared_at": time.time(),
     })
