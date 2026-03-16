@@ -2989,11 +2989,29 @@ function _dcaModalHtml(title, bot){
     </div>
   </div>
 
-  <!-- MAX EXPOSURE — always visible -->
+  <!-- MAX EXPOSURE + USDC availability -->
   <div style="background:#080c10;border:1px solid #243044;border-radius:4px;padding:8px 10px;
-    margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">
+    margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;">
     <span style="font-size:9px;color:var(--muted);letter-spacing:.06em;">MAX TOTAL INVESTMENT</span>
     <span id="dcaExposure" style="font-size:12px;font-weight:700;color:var(--amber);">—</span>
+  </div>
+  <div id="dcaUsdcStrip" style="background:#060a0e;border:1px solid #1c2433;border-radius:4px;
+    padding:8px 10px;margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+      <span style="font-size:9px;color:var(--muted);letter-spacing:.06em;">USDC AVAILABLE
+        <span style="color:#2a3a55;font-size:8px;">excl. grid bots</span>
+      </span>
+      <span id="dcaUsdcAvail" style="font-size:11px;font-weight:700;color:#c9d4e0;">…</span>
+    </div>
+    <div style="background:#0a0f16;border-radius:3px;height:5px;overflow:hidden;">
+      <div id="dcaUsdcBarFill" style="height:100%;width:0%;border-radius:3px;
+        transition:width .3s,background .3s;background:var(--green);"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:3px;">
+      <span style="font-size:8px;color:#2a3a55;">$0</span>
+      <span id="dcaUsdcPct" style="font-size:8px;color:var(--muted);">—</span>
+      <span id="dcaUsdcMax" style="font-size:8px;color:#2a3a55;">—</span>
+    </div>
   </div>
   <!-- TP steps (shown when steps added) -->
   <div id="dcaTpSteps" style="display:none;margin-bottom:8px;">
@@ -3030,6 +3048,40 @@ function _dcaUpdateLadder(){
   el.innerHTML = rows;
 }
 
+let _dcaUsdcAvailable = null;
+
+function _dcaUpdateUsdcBar(){
+  const el_avail = document.getElementById('dcaUsdcAvail');
+  const el_fill  = document.getElementById('dcaUsdcBarFill');
+  const el_pct   = document.getElementById('dcaUsdcPct');
+  const el_max   = document.getElementById('dcaUsdcMax');
+  if(!el_avail) return;
+  if(_dcaUsdcAvailable === null){
+    el_avail.textContent = 'loading…';
+    return;
+  }
+  const avail = _dcaUsdcAvailable;
+  el_avail.textContent = `$${avail.toLocaleString(undefined,{maximumFractionDigits:0})}`;
+  // calc current exposure
+  const base  = parseFloat(document.getElementById('dca_base')?.value  || 500);
+  const so    = parseFloat(document.getElementById('dca_so')?.value    || 100);
+  const count = parseInt  (document.getElementById('dca_count')?.value || 5);
+  const mult  = parseFloat(document.getElementById('dca_mult')?.value  || 1.2);
+  let exposure = base, cur = so;
+  for(let i=0;i<count;i++){ exposure += cur; cur *= mult; }
+  const pct   = avail > 0 ? Math.min(exposure / avail * 100, 100) : 100;
+  const over  = exposure > avail;
+  const color = pct < 60 ? 'var(--green)' : pct < 90 ? 'var(--amber)' : 'var(--red)';
+  el_fill.style.width      = `${pct}%`;
+  el_fill.style.background = color;
+  el_pct.textContent = over
+    ? `⚠ $${(exposure-avail).toFixed(0)} over budget`
+    : `${pct.toFixed(0)}% of available`;
+  el_pct.style.color = color;
+  el_max.textContent = `$${exposure.toFixed(0)}`;
+  el_max.style.color = color;
+}
+
 function _dcaUpdateExposure(){
   const base  = parseFloat(document.getElementById('dca_base')?.value  || 500);
   const so    = parseFloat(document.getElementById('dca_so')?.value    || 100);
@@ -3042,6 +3094,7 @@ function _dcaUpdateExposure(){
   for(let i=0;i<count;i++){ total += cur; cur *= mult; }
   el.textContent = `$${total.toFixed(0)}`;
   _dcaUpdateLadder();
+  _dcaUpdateUsdcBar();
 }
 
 // ── DCA TP STEPS ──────────────────────────────────────────────
@@ -3145,7 +3198,21 @@ function showCreateDcaModal(){
     </div>`;
   document.body.appendChild(div);
   _dcaTpSteps = [];
-  setTimeout(() => { _dcaUpdateLadder(); _dcaRenderTpSteps(); }, 0);
+  _dcaUsdcAvailable = null;
+  setTimeout(() => { _dcaUpdateLadder(); _dcaUpdateExposure(); _dcaRenderTpSteps(); }, 0);
+  apiFetch(`${API}/account/balance`)
+    .then(r => r.json())
+    .then(data => {
+      _dcaUsdcAvailable = typeof data.usdc_idle === 'number' ? data.usdc_idle : null;
+      if(_dcaUsdcAvailable === null && typeof data.usdc_usd === 'number'){
+        _dcaUsdcAvailable = data.usdc_usd;
+      }
+      _dcaUpdateUsdcBar();
+    })
+    .catch(() => {
+      const el = document.getElementById('dcaUsdcAvail');
+      if(el) el.textContent = 'unavailable';
+    });
 }
 
 function showEditDcaModal(botId){
