@@ -160,13 +160,25 @@ def _check_volatility_spike(df, window: int = 30) -> str | None:
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
-def breakout_detected(df, atr_window: int = 30) -> str | None:
+def breakout_detected(df, atr_window: int = 30,
+                      regime: str = None, gap_ratio: float = 0.0) -> str | None:
     """
     Returns "UP", "DOWN", or None.
 
     Checks layers in priority order — first match wins.
     Does NOT re-fire while a breakout state is already active
     (call clear_breakout_state() after redeployment).
+
+    regime     — current engine regime string ("TREND_UP", "RANGE", etc.)
+    gap_ratio  — (price - trendline) / ATR; positive = price above trendline
+
+    Guards applied:
+      • regime == "TREND_UP"  → suppress ALL UP signals (already positioned; inner
+        already off via trending_up logic; stopping mid achieves nothing and costs fills)
+      • gap_ratio > 3.0       → suppress DOWN from volatility spike only. At this
+        distance above the trendline, elevated ATR/BB from the prior move generates
+        false DOWN signals. Layer 1 momentum still fires (needs 4 bars × 2.5×ATR ≈
+        $1,400 drop) — that's a genuine collapse, not noise.
 
     atr_window kept as param for backward-compat but not used by layer 1.
     """
@@ -178,7 +190,31 @@ def breakout_detected(df, atr_window: int = 30) -> str | None:
         _check_momentum(df)
         return None
 
-    direction = _check_momentum(df) or _check_volatility_spike(df, atr_window)
+    # Run both layers independently so guards can be applied selectively
+    mom_dir   = _check_momentum(df)
+    spike_dir = _check_volatility_spike(df, atr_window)
+
+    # Guard 1: in an established TREND_UP, UP breakouts are redundant.
+    # The engine is already in the correct posture (inner off, mid+outer on via
+    # trending_up logic). Re-firing stops mid for 5-15 min on every trend impulse.
+    if regime == "TREND_UP":
+        if mom_dir == "UP":
+            print(f"BREAKOUT_UP (momentum) suppressed — regime already TREND_UP")
+            mom_dir = None
+        if spike_dir == "UP":
+            print(f"BREAKOUT_UP (spike) suppressed — regime already TREND_UP")
+            spike_dir = None
+
+    # Guard 2: in a strong uptrend (gap_ratio > 3.0 = trending_up territory),
+    # suppress DOWN from the volatility spike layer.  After a sustained trend move
+    # ATR and BB width are naturally elevated — spike layer fires on normal pullbacks.
+    # Momentum layer still fires if there is a genuine 4-bar collapse.
+    if gap_ratio > 3.0 and spike_dir == "DOWN" and mom_dir != "DOWN":
+        print(f"BREAKOUT_DOWN (spike) suppressed — gap_ratio={gap_ratio:.1f}x, "
+              f"no momentum confirmation (requires 4 bars × {MOMENTUM_ATR_MULT}×ATR)")
+        spike_dir = None
+
+    direction = mom_dir or spike_dir
 
     if direction:
         s2 = _load_state()          # re-read after _check_momentum wrote

@@ -436,7 +436,7 @@ def run():
             return   # skip fresh breakout detection AND drift while target is live
 
         # Fresh breakout detection
-        _direction = breakout_detected(df)
+        _direction = breakout_detected(df, regime=state.regime, gap_ratio=state.gap_ratio)
         if _direction:
             print(f"BREAKOUT DETECTED — direction: {_direction}")
 
