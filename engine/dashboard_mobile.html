@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Grid Engine">
+<meta name="theme-color" content="#080c10">
+<title>Grid Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:      #080c10;
+  --panel:   #0d1117;
+  --border:  #1c2433;
+  --border2: #243044;
+  --text:    #c9d4e0;
+  --muted:   #4a5a72;
+  --accent:  #00d4ff;
+  --green:   #00e676;
+  --red:     #ff3d5a;
+  --amber:   #ffab00;
+  --purple:  #b388ff;
+  --bot0:    #00d4ff;
+  --bot1:    #ff6b35;
+  --bot2:    #b388ff;
+  --mono:    'Space Mono', monospace;
+  --ui:      'Syne', sans-serif;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bot: env(safe-area-inset-bottom, 0px);
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html, body { background:var(--bg); color:var(--text); font-family:var(--mono); font-size:13px; }
+body { padding-bottom:calc(16px + var(--safe-bot)); }
+
+/* ── TOP BAR ── */
+#topbar {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: calc(8px + var(--safe-top)) 16px 10px;
+  display: flex; align-items: center; gap: 12px;
+}
+.tb-logo  { font-family:var(--ui); font-size:12px; font-weight:800; color:var(--accent); letter-spacing:.1em; text-transform:uppercase; white-space:nowrap; flex-shrink:0; }
+.tb-price { font-family:var(--ui); font-size:22px; font-weight:800; color:#fff; letter-spacing:-.02em; flex:1; min-width:0; }
+.tb-chg   { font-size:11px; font-weight:700; padding:3px 8px; border-radius:4px; white-space:nowrap; }
+.tb-chg.up   { background:rgba(0,230,118,.15); color:var(--green); }
+.tb-chg.down { background:rgba(255,61,90,.15);  color:var(--red); }
+.tb-dot  { width:9px; height:9px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s ease-in-out infinite; flex-shrink:0; }
+.tb-dot.off { background:var(--red); box-shadow:0 0 8px var(--red); animation:none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+/* ── ALERTS ── */
+#boAlert {
+  display: none;
+  padding: 10px 16px;
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-align: center;
+  border-bottom: 2px solid;
+  line-height: 1.5;
+}
+#boAlert.show { display: block; }
+#boAlert .clr-btn {
+  display: inline-block; margin-top:6px;
+  font-size: 10px; padding: 3px 10px; border-radius: 4px;
+  background: rgba(255,255,255,.08); border: 1px solid currentColor;
+  color: inherit; cursor: pointer;
+}
+
+/* ── SECTIONS ── */
+.section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.sec-title {
+  font-family: var(--ui); font-size: 9px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+  margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;
+}
+
+/* ── STATUS GRID ── */
+.stat-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.stat-card {
+  background: rgba(255,255,255,.03); border: 1px solid var(--border);
+  border-radius: 7px; padding: 10px 12px;
+}
+.stat-lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+.stat-val { font-size: 15px; font-weight: 700; line-height: 1; }
+.stat-val.c  { color: var(--accent); }
+.stat-val.g  { color: var(--green); }
+.stat-val.r  { color: var(--red); }
+.stat-val.a  { color: var(--amber); }
+.stat-val.p  { color: var(--purple); }
+
+/* ── REGIME BADGE ── */
+.badge { display:inline-flex; align-items:center; padding:3px 10px; border-radius:5px; font-size:11px; font-weight:700; letter-spacing:.05em; }
+.RANGE       { background:rgba(0,212,255,.15); color:var(--accent); }
+.TREND_UP    { background:rgba(0,230,118,.15); color:var(--green); }
+.TREND_DOWN  { background:rgba(255,61,90,.15);  color:var(--red); }
+.COMPRESSION { background:rgba(255,171,0,.15);  color:var(--amber); }
+
+/* ── MACRO PILLS ── */
+.macro-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; -webkit-overflow-scrolling:touch; }
+.macro-row::-webkit-scrollbar { display:none; }
+.mpill {
+  flex-shrink: 0;
+  background: rgba(255,255,255,.03); border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px; min-width: 70px; text-align: center;
+}
+.mpill-lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 3px; }
+.mpill-val { font-size: 12px; font-weight: 700; }
+
+/* ── INVENTORY ── */
+.inv-bar-wrap { height: 8px; background: rgba(255,61,90,.25); border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
+.inv-bar-fill { height:100%; background:linear-gradient(90deg,var(--green),var(--accent)); border-radius:4px; transition:width .5s; }
+.inv-lbls { display:flex; justify-content:space-between; font-size:10px; color:var(--muted); margin-bottom:10px; }
+.inv-target-line { position:relative; }
+.inv-target-marker {
+  position: absolute; top: -12px; width: 2px; height: 22px;
+  background: var(--amber); opacity: .7;
+  transform: translateX(-50%);
+}
+
+/* ── MODE BUTTONS ── */
+.mode-row { display:flex; gap:6px; }
+.mbtn {
+  flex:1; padding:11px 4px; border-radius:6px; border:1px solid var(--border);
+  background: rgba(255,255,255,.04); color:var(--muted);
+  font-family:var(--mono); font-size:10px; font-weight:700;
+  cursor:pointer; text-align:center; transition:all .15s; letter-spacing:.04em;
+}
+.mbtn.on-b { background:rgba(0,212,255,.15);  border-color:var(--accent); color:var(--accent); }
+.mbtn.on-g { background:rgba(0,230,118,.15);  border-color:var(--green);  color:var(--green); }
+.mbtn.on-r { background:rgba(255,61,90,.15);   border-color:var(--red);    color:var(--red); }
+.mbtn.on-a { background:rgba(255,171,0,.15);   border-color:var(--amber);  color:var(--amber); }
+
+/* ── BOT CARDS ── */
+.bot-card {
+  background: rgba(255,255,255,.025); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 14px 12px 18px;
+  margin-bottom: 10px; position: relative; overflow: hidden;
+}
+.bot-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:4px; }
+.bot-card[data-i="0"]::before { background:var(--bot0); }
+.bot-card[data-i="1"]::before { background:var(--bot1); }
+.bot-card[data-i="2"]::before { background:var(--bot2); }
+.bot-hdr { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.bot-name { font-family:var(--ui); font-size:14px; font-weight:800; flex:1; }
+.bot-status { font-size:10px; font-weight:700; padding:3px 8px; border-radius:4px; }
+.bot-status.on  { background:rgba(0,230,118,.15); color:var(--green); }
+.bot-status.off { background:rgba(255,61,90,.12);  color:var(--red); }
+.bot-range { font-size:11px; color:var(--text); margin-bottom:4px; }
+.bot-range .muted { color:var(--muted); }
+.bot-inside { font-size:10px; margin-bottom:10px; }
+.bot-btns { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+.bot-btn {
+  padding: 11px; border-radius:6px; border:1px solid var(--border);
+  background:rgba(255,255,255,.03); color:var(--muted);
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  cursor:pointer; text-align:center; transition:all .15s;
+}
+.bot-btn.start:active,
+.bot-btn.start:hover { background:rgba(0,230,118,.15); border-color:var(--green); color:var(--green); }
+.bot-btn.stop:active,
+.bot-btn.stop:hover  { background:rgba(255,61,90,.15);  border-color:var(--red);   color:var(--red); }
+.bot-btn.start { border-color:rgba(0,230,118,.4); color:rgba(0,230,118,.7); }
+.bot-btn.stop  { border-color:rgba(255,61,90,.4);  color:rgba(255,61,90,.7); }
+
+/* ── ENGINE CONTROLS ── */
+.eng-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+.eng-btn {
+  padding: 13px; border-radius:7px; font-family:var(--mono); font-size:11px; font-weight:700;
+  border:1px solid; cursor:pointer; text-align:center; transition:all .15s;
+  letter-spacing:.04em;
+}
+.eng-btn.start { background:rgba(0,230,118,.12); border-color:var(--green); color:var(--green); }
+.eng-btn.stop  { background:rgba(255,61,90,.10);  border-color:var(--red);   color:var(--red); }
+.eng-btn:active { opacity:.7; }
+
+/* ── OVERRIDE SECTION ── */
+.collapse-btn {
+  width:100%; padding:10px; background:rgba(255,255,255,.03);
+  border:1px solid var(--border); border-radius:6px;
+  color:var(--muted); font-family:var(--mono); font-size:11px;
+  cursor:pointer; text-align:left; transition:all .15s;
+  display:flex; align-items:center; justify-content:space-between;
+}
+.collapse-btn:active { background:rgba(255,255,255,.06); }
+.collapse-inner { margin-top:12px; }
+.slider-wrap { margin-bottom:12px; }
+.slider-label { display:flex; justify-content:space-between; font-size:10px; color:var(--muted); margin-bottom:4px; }
+.slider-label .sv { font-weight:700; color:var(--accent); }
+input[type="range"] { width:100%; accent-color:var(--accent); height:22px; }
+input[type="range"].skew-range { accent-color:var(--purple); }
+.slider-label.skew .sv { color:var(--purple); }
+.apply-btn {
+  width:100%; padding:12px; border-radius:6px; font-family:var(--mono); font-size:11px;
+  font-weight:700; letter-spacing:.05em; cursor:pointer; transition:all .15s;
+  background:rgba(0,212,255,.12); border:1px solid var(--accent); color:var(--accent);
+}
+.apply-btn:active { background:rgba(0,212,255,.25); }
+.clear-btn {
+  width:100%; padding:10px; border-radius:6px; font-family:var(--mono); font-size:11px;
+  cursor:pointer; margin-top:6px;
+  background:rgba(255,61,90,.1); border:1px solid var(--red); color:var(--red);
+}
+
+/* ── TIER OVERVIEW ── */
+.tier-rows { margin-top:8px; }
+.tier-row {
+  display:flex; align-items:center; gap:8px;
+  padding:6px 0; border-bottom:1px solid rgba(255,255,255,.04);
+  font-size:11px;
+}
+.tier-row:last-child { border-bottom:none; }
+.tier-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.tier-name { width:36px; color:var(--muted); flex-shrink:0; font-size:10px; }
+.tier-info { flex:1; color:var(--text); }
+.tier-pip  { width:12px; text-align:center; font-size:12px; }
+
+/* ── META ROW ── */
+.meta-row { display:flex; justify-content:space-between; padding:5px 0; font-size:11px; border-bottom:1px solid rgba(255,255,255,.04); }
+.meta-row:last-child { border-bottom:none; }
+.mk { color:var(--muted); }
+.mv { font-weight:700; }
+
+/* ── TOAST ── */
+#toast {
+  position: fixed; bottom: calc(18px + var(--safe-bot)); left: 50%; transform:translateX(-50%) translateY(8px);
+  background:var(--panel); border:1px solid var(--border2); color:var(--text);
+  font-family:var(--mono); font-size:11px; padding:10px 18px; border-radius:8px;
+  z-index:9999; opacity:0; transition:all .2s; pointer-events:none;
+  white-space:nowrap; max-width:90vw; text-align:center;
+}
+#toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+#toast.ok  { border-color:var(--green); }
+#toast.err { border-color:var(--red); }
+
+/* ── DESKTOP LINK ── */
+.desk-link {
+  display:block; text-align:center; padding:14px; color:var(--muted);
+  font-size:10px; letter-spacing:.06em; text-decoration:none; text-transform:uppercase;
+}
+.desk-link:hover { color:var(--accent); }
+
+/* ── DRY RUN BANNER ── */
+#dryBanner {
+  display:none; background:rgba(255,171,0,.12); border-bottom:1px solid rgba(255,171,0,.3);
+  color:var(--amber); font-size:11px; text-align:center; padding:7px 16px; letter-spacing:.05em;
+}
+#dryBanner.show { display:block; }
+
+.section-no-pad { padding:0; border-bottom:1px solid var(--border); }
+.section-inner  { padding:14px 16px; }
+
+@keyframes flashRed { 0%,100%{opacity:1} 50%{opacity:.4} }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <span class="tb-logo">⬡ Grid</span>
+  <span class="tb-price" id="tbPrice">———</span>
+  <span class="tb-chg up" id="tbChg">—</span>
+  <span class="tb-dot" id="tbDot"></span>
+</div>
+
+<!-- DRY RUN BANNER -->
+<div id="dryBanner">DRY RUN MODE — no real trades</div>
+
+<!-- BREAKOUT ALERT -->
+<div id="boAlert">
+  <span id="boMsg"></span><br>
+  <span class="clr-btn" onclick="clearBreakout()">Clear ✕</span>
+</div>
+
+<!-- STATUS SECTION -->
+<div class="section">
+  <div class="sec-title">
+    Engine Status
+    <span style="font-size:9px;color:var(--muted)">Last sync: <span id="lastSync">—</span></span>
+  </div>
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-lbl">Regime</div>
+      <div class="stat-val" id="sRegime">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Session</div>
+      <div class="stat-val" id="sSession">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">ATR 1H</div>
+      <div class="stat-val c" id="sAtr">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Portfolio</div>
+      <div class="stat-val" id="sPortfolio" style="font-size:13px">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Grid Center</div>
+      <div class="stat-val c" id="sCenter" style="font-size:13px">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Engine</div>
+      <div class="stat-val" id="sEngine">—</div>
+    </div>
+  </div>
+
+  <!-- Tier overview -->
+  <div class="tier-rows" id="tierRows">
+    <div class="tier-row" id="tierRow0">
+      <span class="tier-dot" style="background:#00d4ff"></span>
+      <span class="tier-name">Inner</span>
+      <span class="tier-info" id="tierInfo0">—</span>
+      <span class="tier-pip" id="tierPip0">—</span>
+    </div>
+    <div class="tier-row" id="tierRow1">
+      <span class="tier-dot" style="background:#ff6b35"></span>
+      <span class="tier-name">Mid</span>
+      <span class="tier-info" id="tierInfo1">—</span>
+      <span class="tier-pip" id="tierPip1">—</span>
+    </div>
+    <div class="tier-row" id="tierRow2">
+      <span class="tier-dot" style="background:#b388ff"></span>
+      <span class="tier-name">Outer</span>
+      <span class="tier-info" id="tierInfo2">—</span>
+      <span class="tier-pip" id="tierPip2">—</span>
+    </div>
+  </div>
+</div>
+
+<!-- MACRO PILLS -->
+<div class="section">
+  <div class="sec-title">Macro</div>
+  <div class="macro-row">
+    <div class="mpill"><div class="mpill-lbl">F&amp;G</div><div class="mpill-val" id="mpFng">—</div></div>
+    <div class="mpill"><div class="mpill-lbl">Bias</div><div class="mpill-val" id="mpBias">—</div></div>
+    <div class="mpill"><div class="mpill-lbl">W.RSI</div><div class="mpill-val" id="mpRsi">—</div></div>
+    <div class="mpill"><div class="mpill-lbl">Funding</div><div class="mpill-val" id="mpFund">—</div></div>
+    <div class="mpill"><div class="mpill-lbl">Liq</div><div class="mpill-val" id="mpLiq">—</div></div>
+  </div>
+</div>
+
+<!-- INVENTORY -->
+<div class="section">
+  <div class="sec-title">
+    Inventory
+    <span id="overrideBadge" style="display:none;font-size:9px;padding:2px 7px;border-radius:3px;background:rgba(255,171,0,.15);color:var(--amber)">MANUAL</span>
+  </div>
+  <div class="inv-target-line">
+    <div class="inv-bar-wrap">
+      <div class="inv-bar-fill" id="invFill" style="width:50%"></div>
+    </div>
+    <!-- Target band markers -->
+    <div class="inv-target-marker" id="invLower" style="left:55%"></div>
+    <div class="inv-target-marker" id="invUpper" style="left:72%"></div>
+  </div>
+  <div class="inv-lbls"><span>USDC</span><span id="invPct" style="color:var(--accent);font-weight:700">—</span><span>BTC</span></div>
+  <div class="meta-row"><span class="mk">BTC ratio</span><span class="mv c" id="iBtcR">—</span></div>
+  <div class="meta-row"><span class="mk">Skew</span><span class="mv" id="iSkew">—</span></div>
+  <div class="meta-row"><span class="mk">Mode</span><span class="mv" id="iMode">—</span></div>
+  <div style="height:10px"></div>
+  <div class="mode-row">
+    <button class="mbtn" id="mNormal" onclick="setMode('NORMAL')">NORMAL</button>
+    <button class="mbtn" id="mBuy"    onclick="setMode('BUY_ONLY')">BUY ONLY</button>
+    <button class="mbtn" id="mSell"   onclick="setMode('SELL_ONLY')">SELL ONLY</button>
+  </div>
+</div>
+
+<!-- BOT CARDS -->
+<div class="section">
+  <div class="sec-title">Bots <span id="botCountLbl" style="color:var(--muted)">(—)</span></div>
+  <div id="botCards">
+    <div style="color:var(--muted);font-size:11px;padding:8px 0">Loading bots…</div>
+  </div>
+</div>
+
+<!-- ENGINE CONTROLS -->
+<div class="section">
+  <div class="sec-title">Engine Controls</div>
+  <div class="eng-row">
+    <button class="eng-btn start" onclick="engineStart()">▶ Start Engine</button>
+    <button class="eng-btn stop"  onclick="engineStop()">■ Stop Engine</button>
+  </div>
+  <div class="sec-title" style="margin-top:8px;">Dry Run</div>
+  <div class="mode-row">
+    <button class="mbtn" id="dryOn"  onclick="setDryMode(true)">ON — safe</button>
+    <button class="mbtn" id="dryOff" onclick="setDryMode(false)">OFF — live</button>
+  </div>
+</div>
+
+<!-- INVENTORY OVERRIDE -->
+<div class="section">
+  <button class="collapse-btn" onclick="toggleOverride()" id="overrideToggle">
+    <span>Override Inventory</span>
+    <span id="overrideArrow">▼</span>
+  </button>
+  <div class="collapse-inner" id="overrideInner" style="display:none">
+    <div class="slider-wrap">
+      <div class="slider-label">
+        <span>BTC %</span>
+        <span class="sv" id="btcSliderVal">50%</span>
+      </div>
+      <input type="range" id="btcSlider" min="0" max="100" step="1" value="50" oninput="onBtcSlider(this.value)">
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px;">
+        <span>0% BTC</span><span>100% BTC</span>
+      </div>
+    </div>
+    <div class="slider-wrap">
+      <div class="slider-label skew">
+        <span>Skew</span>
+        <span class="sv" id="skewSliderVal">0.00</span>
+      </div>
+      <input type="range" id="skewSlider" class="skew-range" min="-25" max="25" step="1" value="0" oninput="onSkewSlider(this.value)">
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px;">
+        <span>-0.25</span><span>+0.25</span>
+      </div>
+    </div>
+    <button class="apply-btn" onclick="applyOverride()">Apply Override</button>
+    <button class="clear-btn" id="clearOverrideBtn" style="display:none" onclick="clearOverride()">Clear Override</button>
+  </div>
+</div>
+
+<!-- FOOTER LINK -->
+<a href="/" class="desk-link">Open Full Terminal ↗</a>
+
+<div id="toast"></div>
+
+<script>
+// ── AUTH TOKEN ──────────────────────────────────────────────────────────────
+(function() {
+  const p = new URLSearchParams(window.location.search);
+  const t = p.get('token');
+  if (t) localStorage.setItem('dash_token', t);
+  const TOKEN = localStorage.getItem('dash_token') || '';
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function(url, opts = {}) {
+    if (TOKEN && typeof url === 'string' && (url.startsWith('/') || url.startsWith(window.location.origin))) {
+      opts = { ...opts, headers: { 'X-Dashboard-Token': TOKEN, ...(opts.headers || {}) } };
+    }
+    return _fetch(url, opts);
+  };
+}());
+
+// ── STATE ───────────────────────────────────────────────────────────────────
+let status = {};
+let bots   = [];
+let dryRun = false;
+let invOverrideActive = false;
+let prevPrice = null;
+let overrideOpen = false;
+
+const f = v => `$${Number(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}`;
+const f2 = v => `$${Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+
+// ── TOAST ───────────────────────────────────────────────────────────────────
+let _toastTimer;
+function toast(msg, type='ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `show ${type}`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.className = ''; }, 3000);
+}
+
+// ── STATUS POLL ─────────────────────────────────────────────────────────────
+async function pollStatus() {
+  try {
+    const r = await fetch('/status');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    if (d.error || d.no_status_file || d.parse_error) return;
+    status = d;
+
+    // Price + change
+    document.getElementById('tbPrice').textContent = f2(d.price);
+    if (prevPrice !== null) {
+      const chg = (d.price - prevPrice) / prevPrice * 100;
+      const el = document.getElementById('tbChg');
+      el.textContent = `${chg>=0?'+':''}${chg.toFixed(2)}%`;
+      el.className = `tb-chg ${chg>=0?'up':'down'}`;
+    }
+    prevPrice = d.price;
+
+    // Dry run
+    if (d.dry_run !== undefined) _applyDry(d.dry_run);
+
+    // Regime
+    const regime = d.regime || '—';
+    document.getElementById('sRegime').innerHTML = `<span class="badge ${regime}">${regime}</span>`;
+
+    // Session
+    const ses = d.session || '—';
+    const sesEl = document.getElementById('sSession');
+    if (ses.startsWith('WKD_')) {
+      sesEl.innerHTML = `<span style="color:var(--amber)">⚑ ${ses}</span>`;
+    } else {
+      sesEl.textContent = ses;
+      sesEl.style.color = '';
+    }
+
+    // ATR
+    document.getElementById('sAtr').textContent = `$${Math.round(d.atr || 0).toLocaleString()}`;
+
+    // Portfolio
+    if (d.portfolio_total != null) {
+      document.getElementById('sPortfolio').textContent = f2(d.portfolio_total);
+    }
+
+    // Center
+    if (d.center) document.getElementById('sCenter').textContent = f(d.center);
+
+    // Engine process status
+    fetchEngineStatus();
+
+    // Tier rows
+    if (d.tiers && d.tiers.length && d.price) {
+      d.tiers.forEach((t, i) => {
+        const infoEl = document.getElementById('tierInfo' + i);
+        const pipEl  = document.getElementById('tierPip' + i);
+        const rowEl  = document.getElementById('tierRow' + i);
+        if (!infoEl) return;
+        const inside = d.price >= t.grid_low && d.price <= t.grid_high;
+        const feeOk  = t.fee_ok !== false;
+        infoEl.innerHTML =
+          `${f(t.grid_low)} – ${f(t.grid_high)}`+
+          ` <span style="color:var(--muted)">·</span>`+
+          ` <span style="color:${feeOk?'var(--green)':'var(--red)'}">${f(t.step)} step</span>`;
+        pipEl.textContent = inside ? '●' : '○';
+        pipEl.style.color = inside ? 'var(--green)' : 'var(--muted)';
+        rowEl.style.opacity = inside ? '1' : '0.55';
+      });
+    }
+
+    // Inventory
+    if (!invOverrideActive) {
+      const pct = (d.btc_ratio * 100).toFixed(1);
+      document.getElementById('invFill').style.width = pct + '%';
+      document.getElementById('invPct').textContent  = pct + '%';
+      document.getElementById('iBtcR').textContent   = pct + '%';
+      const sk = d.skew ?? 0;
+      const skStr = `${sk>=0?'+':''}${sk.toFixed(4)}`;
+      document.getElementById('iSkew').textContent   = skStr;
+      document.getElementById('btcSlider').value     = Math.round(d.btc_ratio * 100);
+      document.getElementById('btcSliderVal').textContent = pct + '%';
+      const skewPct = Math.round(sk * 100);
+      document.getElementById('skewSlider').value    = skewPct;
+      document.getElementById('skewSliderVal').textContent = (skewPct/100).toFixed(2);
+    }
+
+    // Inventory mode
+    document.getElementById('iMode').textContent = d.inventory_mode || '—';
+    const modes = { NORMAL:['mNormal','on-b'], BUY_ONLY:['mBuy','on-g'], SELL_ONLY:['mSell','on-r'] };
+    Object.entries(modes).forEach(([k,[id,cls]]) => {
+      document.getElementById(id).className = `mbtn ${d.inventory_mode===k ? cls : ''}`;
+    });
+
+    // Breakout alert
+    const boEl = document.getElementById('boAlert');
+    if (d.breakout_active) {
+      const dir    = d.breakout_active;
+      const fire   = d.breakout_fire_price;
+      const move   = d.price - fire;
+      const isDown = dir === 'DOWN';
+      const col    = isDown ? 'var(--red)' : 'var(--green)';
+      const bg     = isDown ? 'rgba(255,61,90,.18)' : 'rgba(0,230,118,.12)';
+      boEl.style.background  = bg;
+      boEl.style.borderColor = col;
+      boEl.style.color       = col;
+      boEl.classList.add('show');
+      document.getElementById('boMsg').textContent =
+        `🚨 BREAKOUT ${dir}  fire: ${f2(fire)}  Δ${move>=0?'+':''}$${Math.round(move).toLocaleString()}  ${isDown?'all bots halted':'inner+mid paused'}`;
+    } else {
+      boEl.classList.remove('show');
+    }
+
+    document.getElementById('lastSync').textContent = new Date(d.timestamp).toLocaleTimeString();
+
+  } catch(e) {
+    document.getElementById('tbDot').className = 'tb-dot off';
+  }
+}
+
+async function fetchEngineStatus() {
+  try {
+    const r = await fetch('/engine/status');
+    if (!r.ok) return;
+    const d = await r.json();
+    const running = d.running === true;
+    const el = document.getElementById('sEngine');
+    el.textContent = running ? 'RUNNING' : 'STOPPED';
+    el.style.color = running ? 'var(--green)' : 'var(--red)';
+    document.getElementById('tbDot').className = `tb-dot${running?'':' off'}`;
+  } catch(e) {}
+}
+
+// ── BOTS ────────────────────────────────────────────────────────────────────
+const BOT_COLORS  = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
+const TIER_LABELS = ['Inner','Mid','Outer'];
+
+async function loadBots() {
+  try {
+    const r = await fetch('/bots');
+    if (!r.ok) throw new Error(r.status);
+    const data = await r.json();
+    if (!Array.isArray(data)) throw new Error('bad');
+    bots = data;
+    document.getElementById('botCountLbl').textContent = `(${bots.length})`;
+
+    const cont = document.getElementById('botCards');
+    if (!bots.length) {
+      cont.innerHTML = '<div style="color:var(--muted);font-size:11px">No bots in GRID_BOT_IDS</div>';
+      return;
+    }
+
+    cont.innerHTML = bots.map((b, i) => {
+      const on   = b.is_enabled;
+      const name = TIER_LABELS[i] || (b.name || `Bot ${b.id}`);
+      const col  = BOT_COLORS[i % BOT_COLORS.length];
+      const tier = (status.tiers && status.tiers[i]) || null;
+      const inside = tier && status.price &&
+                     status.price >= tier.grid_low && status.price <= tier.grid_high;
+      const rangeStr = tier
+        ? `${f(tier.grid_low)} – ${f(tier.grid_high)} · <span style="color:var(--muted)">${f(tier.step)} step</span>`
+        : (b.lower_price ? `${f(b.lower_price)} – ${f(b.upper_price)}` : '—');
+
+      return `
+      <div class="bot-card" data-i="${i}">
+        <div class="bot-hdr">
+          <span class="bot-name" style="color:${col}">${name}</span>
+          <span style="font-size:10px;color:var(--muted);flex:1;margin-left:4px">${b.name||''}</span>
+          <span class="bot-status ${on?'on':'off'}">${on?'ON':'OFF'}</span>
+        </div>
+        <div class="bot-range">${rangeStr}</div>
+        <div class="bot-inside" style="color:${inside?'var(--green)':'var(--muted)'}">
+          ${inside ? '● Price inside grid' : '○ Price outside grid'}
+        </div>
+        <div class="bot-btns">
+          <button class="bot-btn start" onclick="botAct(${b.id},'start')">▶ Start</button>
+          <button class="bot-btn stop"  onclick="botAct(${b.id},'stop')">■ Stop</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('botCards').innerHTML =
+      `<div style="color:var(--red);font-size:11px">Bot data unavailable</div>`;
+  }
+}
+
+async function botAct(id, action) {
+  if (dryRun) { toast(`[DRY RUN] Would ${action} bot ${id}`); return; }
+  try {
+    await fetch(`/bots/${id}/${action}`, { method:'POST' });
+    toast(`Bot ${id} ${action}ed`, 'ok');
+    setTimeout(loadBots, 1400);
+  } catch(e) { toast(`Error: ${e.message}`, 'err'); }
+}
+
+// ── INVENTORY MODE ───────────────────────────────────────────────────────────
+async function setMode(mode) {
+  try {
+    await fetch('/inventory/mode', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode}),
+    });
+    toast(`Mode → ${mode}`, 'ok');
+  } catch(e) { toast(`Error: ${e.message}`, 'err'); }
+}
+
+// ── ENGINE CONTROLS ──────────────────────────────────────────────────────────
+async function engineStart() {
+  try {
+    const r = await fetch('/engine/start', { method:'POST' });
+    const d = await r.json();
+    toast(d.message || 'Engine starting…', 'ok');
+    setTimeout(fetchEngineStatus, 2000);
+  } catch(e) { toast('Could not start engine', 'err'); }
+}
+
+async function engineStop() {
+  if (!confirm('Stop the engine? Bots will keep running but no new redeployments.')) return;
+  try {
+    const r = await fetch('/engine/stop', { method:'POST' });
+    const d = await r.json();
+    toast(d.message || 'Engine stopped', 'ok');
+    setTimeout(fetchEngineStatus, 1000);
+  } catch(e) { toast('Could not stop engine', 'err'); }
+}
+
+// ── DRY RUN ──────────────────────────────────────────────────────────────────
+// dry_run is a client-side gate read from /status — no server endpoint to toggle.
+// Matches desktop dashboard behaviour: gates bot actions in this browser session.
+function _applyDry(v) {
+  dryRun = v;
+  document.getElementById('dryOn').className  = `mbtn ${v ? 'on-a' : ''}`;
+  document.getElementById('dryOff').className = `mbtn ${!v ? 'on-r' : ''}`;
+  document.getElementById('dryBanner').className = v ? 'show' : '';
+}
+
+function setDryMode(v) {
+  if (!v && !confirm('Turn OFF dry run? Real bot orders will fire.')) return;
+  _applyDry(v);
+  toast(v ? 'DRY RUN on — no real actions' : '⚠ LIVE MODE — real orders will fire', v ? 'ok' : 'err');
+}
+
+// ── OVERRIDE ─────────────────────────────────────────────────────────────────
+function toggleOverride() {
+  overrideOpen = !overrideOpen;
+  document.getElementById('overrideInner').style.display = overrideOpen ? 'block' : 'none';
+  document.getElementById('overrideArrow').textContent   = overrideOpen ? '▲' : '▼';
+}
+
+function onBtcSlider(v) {
+  document.getElementById('btcSliderVal').textContent = v + '%';
+}
+
+function onSkewSlider(v) {
+  document.getElementById('skewSliderVal').textContent = (v/100).toFixed(2);
+}
+
+async function applyOverride() {
+  const btcRatio = parseFloat(document.getElementById('btcSlider').value) / 100;
+  const skew     = parseFloat(document.getElementById('skewSlider').value) / 100;
+  try {
+    await fetch('/inventory/override', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({btc_ratio: btcRatio, skew}),
+    });
+    invOverrideActive = true;
+    document.getElementById('overrideBadge').style.display = '';
+    document.getElementById('clearOverrideBtn').style.display = '';
+    toast(`Override set — BTC ${(btcRatio*100).toFixed(0)}% skew ${skew>=0?'+':''}${skew.toFixed(2)}`, 'ok');
+  } catch(e) { toast(`Error: ${e.message}`, 'err'); }
+}
+
+async function clearOverride() {
+  try {
+    await fetch('/inventory/override', { method:'DELETE' });
+    invOverrideActive = false;
+    document.getElementById('overrideBadge').style.display = 'none';
+    document.getElementById('clearOverrideBtn').style.display = 'none';
+    toast('Override cleared', 'ok');
+  } catch(e) { toast(`Error: ${e.message}`, 'err'); }
+}
+
+// ── BREAKOUT ─────────────────────────────────────────────────────────────────
+async function clearBreakout() {
+  try {
+    await fetch('/breakout/clear', { method:'POST' });
+    document.getElementById('boAlert').classList.remove('show');
+    toast('Breakout state cleared', 'ok');
+  } catch(e) { toast(`Error: ${e.message}`, 'err'); }
+}
+
+// ── MACRO ────────────────────────────────────────────────────────────────────
+function sigCol(s) {
+  return s==='bull'?'#00e676': s==='bear'?'#ff3d5a': '#ffab00';
+}
+function set(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+
+async function fetchMacro() {
+  // Fear & Greed
+  try {
+    const r = await fetch('https://api.alternative.me/fng/?limit=1');
+    const d = await r.json();
+    const score = parseInt(d?.data?.[0]?.value);
+    const lbl   = d?.data?.[0]?.value_classification || '';
+    if (!isNaN(score)) {
+      const sig = score < 30 ? 'bull' : score > 65 ? 'bear' : 'neutral';
+      const c   = sigCol(sig);
+      set('mpFng', `<span style="color:${c}">${score}</span>`);
+    }
+  } catch(e) {}
+
+  // Binance funding rate
+  try {
+    const r = await fetch('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT');
+    const d = await r.json();
+    const rate = parseFloat(d?.lastFundingRate);
+    if (!isNaN(rate)) {
+      const ann = (rate * 3 * 365 * 100).toFixed(1);
+      const c   = rate > 0.01 ? 'var(--red)' : rate < -0.005 ? 'var(--green)' : 'var(--text)';
+      set('mpFund', `<span style="color:${c}">${ann}%</span>`);
+    }
+  } catch(e) {}
+
+  // Weekly RSI from Binance weekly candles
+  try {
+    const r = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1w&limit=20');
+    const d = await r.json();
+    if (Array.isArray(d) && d.length >= 15) {
+      const closes = d.map(c => parseFloat(c[4]));
+      const gains = [], losses = [];
+      for (let i = 1; i < closes.length; i++) {
+        const diff = closes[i] - closes[i-1];
+        gains.push(diff > 0 ? diff : 0);
+        losses.push(diff < 0 ? -diff : 0);
+      }
+      const avg = arr => arr.reduce((a,b) => a+b, 0) / arr.length;
+      const ag = avg(gains.slice(-14)), al = avg(losses.slice(-14));
+      const rsi = al === 0 ? 100 : Math.round(100 - 100 / (1 + ag/al));
+      const c = rsi > 70 ? 'var(--red)' : rsi < 30 ? 'var(--green)' : 'var(--text)';
+      set('mpRsi', `<span style="color:${c}">${rsi}</span>`);
+    }
+  } catch(e) {}
+
+  // Bias + Liquidity: fetch from macro dashboard server endpoint if available
+  try {
+    const r = await fetch('/macro-signals');
+    if (r.ok) {
+      const d = await r.json();
+      if (d.bias) {
+        const c = d.bias === 'BULLISH' ? 'var(--green)' : d.bias === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
+        set('mpBias', `<span style="color:${c}">${d.bias}</span>`);
+      }
+      if (d.liquidity) {
+        const c = d.liquidity === 'GREEN' ? 'var(--green)' : d.liquidity === 'RED' ? 'var(--red)' : 'var(--amber)';
+        set('mpLiq', `<span style="color:${c}">${d.liquidity}</span>`);
+      }
+    }
+  } catch(e) {}
+}
+
+// ── INIT ─────────────────────────────────────────────────────────────────────
+pollStatus();
+loadBots();
+fetchMacro();
+
+setInterval(pollStatus, 30000);
+setInterval(loadBots,  60000);
+setInterval(fetchMacro, 300000);
+</script>
+</body>
+</html>

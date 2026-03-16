@@ -175,6 +175,10 @@ def macro_desktop():
 def macro_mobile():
     return send_from_directory('.', 'btc_macro_dashboard_mobile.html')
 
+@app.route("/mobile")
+def mobile_dashboard():
+    return send_from_directory('.', 'dashboard_mobile.html')
+
 
 # ── Engine status ─────────────────────────────────────────
 @app.route("/status")
@@ -1315,6 +1319,7 @@ def engine_stop():
 # ── Self-deploy endpoint ────────────────────────────────────────────────────
 _DEPLOY_FILES = [
     "dashboard.html",
+    "dashboard_mobile.html",
     "dashboard_server.py",
     "threecommas.py",
     "threecommas_dca.py",
@@ -1489,7 +1494,7 @@ if __name__ == "__main__":
         import time as _t, urllib.request as _ur
         _t.sleep(20)
         _sd = os.path.dirname(os.path.abspath(__file__))
-        _heal_files = ["dashboard.html", "btc_macro_dashboard.html", "btc_macro_dashboard_mobile.html"]
+        _heal_files = ["dashboard.html", "dashboard_mobile.html", "btc_macro_dashboard.html", "btc_macro_dashboard_mobile.html"]
         for _f in _heal_files:
             _url = f"{_DEPLOY_BASE}/{_f}"
             _dst = os.path.join(_sd, _f)
