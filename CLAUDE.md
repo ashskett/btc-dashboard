@@ -269,7 +269,7 @@ The macro dashboard will be served as static files by the Flask server and linke
 
 ---
 
-## Pending Work (as of Mar 15 2026)
+## Pending Work (as of Mar 16 2026)
 
 ### Immediate / infrastructure
 1. **Fix PEM line endings** (immediate if not done): `sed -i 's/\r//' /root/grid-engine/3commas_private.pem`
@@ -345,6 +345,13 @@ The macro dashboard will be served as static files by the Flask server and linke
     - Approximate grid P&L per candle: `ATR × grid_step_count × fee_savings` when bot is ON
     - Output: % time each bot ON, estimated total P&L, regime breakdown, breakout false positive rate, comparison vs always-on baseline
     - Key limitation: actual 3Commas fills are intra-candle; treat output as directional signal not precise P&L
+
+### Grid positioning improvements (for consideration)
+18. **Grid tilt on redeploy** — when `trending_up` is active, shift the inner grid asymmetrically toward the trend at the next drift-triggered redeploy. The `tilt` parameter exists in `grid_logic.py` but is always `0.0`. A tilt of 0.10–0.15 would place more levels above current price in an uptrend, reducing near-miss fills at the upper boundary. Low risk — only activates on proper drift events, not reactively. Implement by passing `tilt = 0.12 if trending_up else (-0.12 if trending_down else 0.0)` from `engine.py` into `grid_logic.calculate_tiers()`.
+
+19. **Tighten drift threshold for inner bot** — currently 75% of grid width (~$964 on inner). During slow grinds, inner can spend hours with price stuck near its upper edge getting zero fills. Reducing to 60% (~$771) would recentre more aggressively and increase fill frequency. Downside: more stop/restart cycles. Gather data on how often inner hits 60–75% drift before deciding.
+
+20. **True P&L tracking (balance-based)** — see note below. 3Commas bot P&L is unreliable across stop/start cycles. The only accurate measure is portfolio value snapshots: `(BTC_qty × price) + USDC_qty` at fixed intervals. Implement as a lightweight logger in `engine.py` that appends `{ts, btc_qty, usdc_qty, price, portfolio_usd}` to `portfolio_log.jsonl` each cycle. Dashboard P&L tab should show this curve, not 3Commas bot P&L.
 
 ### Liquidity monitoring (future cycle — after backtesting data gathered)
 15. **Micro-liquidity: bid-ask spread guard**
