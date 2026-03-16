@@ -23,7 +23,7 @@ Schema per target:
         "trigger_price":        73000,
         "direction":            "UP",         # "UP" or "DOWN"
         "price_target":         82000,        # optional: where you expect the move to end
-        "reversal_atr_mult":    2.0,          # clear if price reverses 2×ATR from fire price
+        "reversal_atr_mult":    1.2,          # clear if price reverses 1.2×ATR from fire price
         "confirm_closes":       2,            # consecutive closes needed before firing
         "rearm_cooldown_h":     4,            # hours before re-arm after reversal
         "active":               true,
@@ -118,7 +118,7 @@ def check_targets(price: float, atr: float) -> dict | None:
             # ── Already active: check for completion or reversal ──────────
             fire_price   = float(t.get("fired_price") or trigger)
             price_target = t.get("price_target")
-            rev_mult     = float(t.get("reversal_atr_mult", 2.0))
+            rev_mult     = float(t.get("reversal_atr_mult", 1.2))
 
             completed = bool(
                 (direction == "UP"   and price_target and price >= price_target) or
@@ -208,7 +208,7 @@ def add_target(
     trigger_price: float,
     direction: str = "UP",
     price_target: float = None,
-    reversal_atr_mult: float = 2.0,
+    reversal_atr_mult: float = 1.2,
     confirm_closes: int = 2,
     rearm_cooldown_h: float = 4.0,
     dca_enabled: bool = False,
