@@ -334,9 +334,11 @@ function App(){
     const oiVals=oiHist?.map(x=>parseFloat(x.sumOpenInterest)*(btcPrice||0))??[];
     const oiChg=oiVals.length>=2?(oiVals[oiVals.length-1]-oiVals[0])/oiVals[0]*100:null;
     const oiTrend=oiChg!=null?(oiChg>3?"rising":oiChg<-3?"falling":"flat"):null;
+    // Strip current incomplete weekly candle (c[6] = close time; future = not yet closed)
+    const completedWkly=wklyCandles?wklyCandles.filter(c=>parseInt(c[6])<Date.now()):[];
     // OBV
-    const wklyCloses=wklyCandles?.map(c=>parseFloat(c[4]))??[];
-    const wklyObvArr=wklyCandles?calcOBV(wklyCandles):[];
+    const wklyCloses=completedWkly.map(c=>parseFloat(c[4]));
+    const wklyObvArr=completedWkly.length?calcOBV(completedWkly):[];
     const obvEMAArr=wklyObvArr.length>10?emaCalc(wklyObvArr,10):[];
     const obvLast=wklyObvArr[wklyObvArr.length-1], obvEMALast=obvEMAArr[obvEMAArr.length-1];
     const priceNow=wklyCloses[wklyCloses.length-1], price4w=wklyCloses[wklyCloses.length-5];
@@ -347,10 +349,10 @@ function App(){
     const rsiHistory=[];
     if(wklyCloses.length>26)for(let i=wklyCloses.length-12;i<wklyCloses.length;i++)rsiHistory.push(rsiCalc(wklyCloses.slice(0,i+1)));
     // Volume
-    const wklyVols=wklyCandles?.map(c=>parseFloat(c[5]))??[];
+    const wklyVols=completedWkly.map(c=>parseFloat(c[5]));
     const volMA20=wklyVols.length>=20?wklyVols.slice(-20).reduce((a,b)=>a+b,0)/20:null;
     const lastVol=wklyVols[wklyVols.length-1];
-    const lastCdl=wklyCandles?parseFloat(wklyCandles[wklyCandles.length-1][4])-parseFloat(wklyCandles[wklyCandles.length-1][1]):0;
+    const lastCdl=completedWkly.length?parseFloat(completedWkly[completedWkly.length-1][4])-parseFloat(completedWkly[completedWkly.length-1][1]):0;
     const volCapit=volMA20!=null&&lastVol>volMA20*1.5&&lastCdl<0;
     const volDist=volMA20!=null&&lastVol>volMA20*1.5&&lastCdl>0;
     const volRatio=volMA20!=null?lastVol/volMA20:null;

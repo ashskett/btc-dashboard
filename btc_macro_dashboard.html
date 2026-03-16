@@ -351,9 +351,16 @@ function App() {
     const oiChg   = oiVals.length>=2 ? (oiVals[oiVals.length-1]-oiVals[0])/oiVals[0]*100 : null;
     const oiTrend = oiChg!=null ? (oiChg>3?"rising":oiChg<-3?"falling":"flat") : null;
 
+    // ── Strip current incomplete weekly candle ──
+    // Binance includes the open (not yet closed) week as the last entry.
+    // c[6] = close time (ms). If it's in the future the candle hasn't closed yet.
+    const completedWkly = wklyCandles
+      ? wklyCandles.filter(c => parseInt(c[6]) < Date.now())
+      : [];
+
     // ── Weekly OBV ──
-    const wklyCloses = wklyCandles?.map(c => parseFloat(c[4])) ?? [];
-    const wklyObvArr = wklyCandles ? calcOBV(wklyCandles) : [];
+    const wklyCloses = completedWkly.map(c => parseFloat(c[4]));
+    const wklyObvArr = completedWkly.length ? calcOBV(completedWkly) : [];
     const obvEMAArr  = wklyObvArr.length>10 ? emaCalc(wklyObvArr, 10) : [];
     const obvLast    = wklyObvArr[wklyObvArr.length-1];
     const obvEMALast = obvEMAArr[obvEMAArr.length-1];
@@ -372,10 +379,10 @@ function App() {
     }
 
     // ── Weekly Volume ──
-    const wklyVols = wklyCandles?.map(c => parseFloat(c[5])) ?? [];
+    const wklyVols = completedWkly.map(c => parseFloat(c[5]));
     const volMA20  = wklyVols.length>=20 ? wklyVols.slice(-20).reduce((a,b)=>a+b,0)/20 : null;
     const lastVol  = wklyVols[wklyVols.length-1];
-    const lastCdl  = wklyCandles ? parseFloat(wklyCandles[wklyCandles.length-1][4])-parseFloat(wklyCandles[wklyCandles.length-1][1]) : 0;
+    const lastCdl  = completedWkly.length ? parseFloat(completedWkly[completedWkly.length-1][4])-parseFloat(completedWkly[completedWkly.length-1][1]) : 0;
     const volCapit = volMA20!=null && lastVol>volMA20*1.5 && lastCdl<0;
     const volDist  = volMA20!=null && lastVol>volMA20*1.5 && lastCdl>0;
     const volRatio = volMA20!=null ? lastVol/volMA20 : null;
