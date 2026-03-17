@@ -13,7 +13,7 @@ import logging
 import filecmp
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "grid-engine-deploy")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "grid-engine-deploy").strip()
 REPO_DIR       = "/root/btc-dashboard"
 ENGINE_DIR     = "/root/grid-engine"
 LOG_FILE       = "/root/grid-engine/deploy.log"
