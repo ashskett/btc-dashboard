@@ -10,6 +10,7 @@ import hmac
 import hashlib
 import subprocess
 import logging
+import filecmp
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "grid-engine-deploy")
@@ -18,7 +19,6 @@ ENGINE_DIR     = "/root/grid-engine"
 LOG_FILE       = "/root/grid-engine/deploy.log"
 
 AI_OS_REPO_DIR = "/root/ai-os"
-AI_OS_LOG_FILE = "/root/ai-os/deploy.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,6 +75,14 @@ def deploy():
     )
     run(restart)
 
+    # 5. Self-update: if webhook_server.py changed, copy and schedule restart
+    new_wh = f"{REPO_DIR}/scripts/webhook_server.py"
+    cur_wh = "/root/webhook_server.py"
+    if os.path.exists(new_wh) and not filecmp.cmp(new_wh, cur_wh, shallow=False):
+        log.info("Webhook server updated — scheduling restart in 3s...")
+        run(f"cp {new_wh} {cur_wh}")
+        run("nohup bash -c 'sleep 3 && systemctl restart grid-webhook' >/dev/null 2>&1 &")
+
     log.info("=== Grid Engine Deploy complete ===")
 
 
@@ -85,7 +93,7 @@ def deploy_ai_os():
         log.error(f"{AI_OS_REPO_DIR} does not exist — run ai-os-setup.sh first")
         return
 
-    # 1. Pull latest from main
+    # 1. Pull latest from current branch
     branch = subprocess.run(
         "git rev-parse --abbrev-ref HEAD", shell=True, cwd=AI_OS_REPO_DIR,
         capture_output=True, text=True
