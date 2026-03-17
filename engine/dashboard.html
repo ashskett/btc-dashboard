@@ -4023,12 +4023,14 @@ function _exitPtPickMode(){
     }
 
     // ── OBV trend (weekly) — matches macro dashboard: OBV vs 10-EMA + divergence ──
+    // Filter out the current incomplete weekly candle (close time still in the future)
     let obvSig = 'neutral';
-    if(klines && klines.length >= 12){
-      const wklyCloses = klines.map(c=>parseFloat(c[4]));
+    const completedWkly = (klines||[]).filter(c=>parseInt(c[6])<Date.now());
+    if(completedWkly.length >= 12){
+      const wklyCloses = completedWkly.map(c=>parseFloat(c[4]));
       const obvSeries = [0];
-      for(let i=1;i<klines.length;i++){
-        const c=parseFloat(klines[i][4]),pc=parseFloat(klines[i-1][4]),v=parseFloat(klines[i][5]);
+      for(let i=1;i<completedWkly.length;i++){
+        const c=parseFloat(completedWkly[i][4]),pc=parseFloat(completedWkly[i-1][4]),v=parseFloat(completedWkly[i][5]);
         obvSeries.push(obvSeries[obvSeries.length-1]+(c>pc?v:c<pc?-v:0));
       }
       // 10-period EMA of OBV
