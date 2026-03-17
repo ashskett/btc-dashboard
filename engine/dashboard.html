@@ -4022,27 +4022,27 @@ function _exitPtPickMode(){
       set('mpRsi',`${rsiVal.toFixed(1)} <span style="font-size:9px;color:${c}">${lbl}</span>`);
     }
 
-    // ── OBV trend (weekly) ──
+    // ── OBV trend (weekly) — matches macro dashboard: OBV vs 10-EMA + divergence ──
     let obvSig = 'neutral';
-    if(klines && klines.length >= 10){
-      const obvSeries = [];
-      let obv = 0;
+    if(klines && klines.length >= 12){
+      const wklyCloses = klines.map(c=>parseFloat(c[4]));
+      const obvSeries = [0];
       for(let i=1;i<klines.length;i++){
-        const c   = parseFloat(klines[i][4]);
-        const pc  = parseFloat(klines[i-1][4]);
-        const vol = parseFloat(klines[i][5]);
-        obv += c > pc ? vol : c < pc ? -vol : 0;
-        obvSeries.push(obv);
+        const c=parseFloat(klines[i][4]),pc=parseFloat(klines[i-1][4]),v=parseFloat(klines[i][5]);
+        obvSeries.push(obvSeries[obvSeries.length-1]+(c>pc?v:c<pc?-v:0));
       }
-      const last   = obvSeries[obvSeries.length-1];
-      const window = Math.min(5, obvSeries.length);
-      const sma    = obvSeries.slice(-window).reduce((a,v)=>a+v,0) / window;
-      const prev5  = obvSeries[obvSeries.length-6] ?? obvSeries[0];
-      const chg    = last - prev5;
-      obvSig = chg > 0 ? 'bull' : chg < 0 ? 'bear' : 'neutral';
-      const aboveMA = last > sma;
+      // 10-period EMA of OBV
+      const k10=2/11; let ema=obvSeries[0];
+      const obvEMA = obvSeries.map((v,i)=>i===0?v:(ema=v*k10+ema*(1-k10)));
+      const obvLast=obvSeries[obvSeries.length-1], obvEMALast=obvEMA[obvEMA.length-1];
+      const aboveMA = obvLast > obvEMALast;
+      const priceNow  = wklyCloses[wklyCloses.length-1];
+      const price4wAgo= wklyCloses[wklyCloses.length-5] ?? wklyCloses[0];
+      const bullDiv = aboveMA && priceNow < price4wAgo;
+      const bearDiv = !aboveMA && priceNow > price4wAgo;
+      obvSig = bullDiv ? 'bull' : bearDiv ? 'bear' : aboveMA ? 'bull' : 'neutral';
       const c  = obvSig==='bull' ? '#00e5a0' : obvSig==='bear' ? '#ff4d6d' : '#8892a4';
-      const lbl = obvSig==='bull' ? 'RISING' : obvSig==='bear' ? 'FALLING' : 'FLAT';
+      const lbl = bullDiv?'BULL DIV':bearDiv?'BEAR DIV':aboveMA?'↑EMA':'↓EMA';
       const maTxt = aboveMA ? '↑MA' : '↓MA';
       setIc('icObv', obvSig);
       set('mpObv',`<span style="color:${c};font-weight:700">${lbl}</span> <span style="font-size:9px;color:var(--muted)">${maTxt}</span>`);
