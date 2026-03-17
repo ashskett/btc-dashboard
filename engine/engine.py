@@ -397,8 +397,18 @@ def run():
                     _act(bot, i >= 2, f"{tier_name} (target: {_pt_label})")
 
                 # ── DCA bot launch ─────────────────────────────────────────
+                # Sweep guard: hold DCA launch for DCA_LAUNCH_HOLD_SECS after the
+                # target fires.  A liquidity sweep that triggers the level and
+                # reverses within a few minutes will clear the target before the
+                # hold expires, so the DCA bot is never launched on fake moves.
+                DCA_LAUNCH_HOLD_SECS = 360   # 6 minutes
+                _fired_at   = _pt_state.get("fired_at") or 0
+                _hold_secs  = max(0, DCA_LAUNCH_HOLD_SECS - (time.time() - _fired_at))
+                if _hold_secs > 0:
+                    print(f"  DCA launch held — sweep guard active ({_hold_secs:.0f}s remaining)")
+
                 # Only on the first cycle after firing (dca_bot_id not yet set)
-                if _pt_state.get("dca_enabled") and not _pt_state.get("dca_bot_id") and _pt_tp:
+                if _pt_state.get("dca_enabled") and not _pt_state.get("dca_bot_id") and _pt_tp and _hold_secs == 0:
                     bo_usd    = float(_pt_state.get("dca_base_order_usd", 500))
                     so_usd    = round(bo_usd * 0.5, 2)
                     tp_pct    = round((_pt_tp - state.price) / state.price * 100, 2)
