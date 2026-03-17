@@ -2096,21 +2096,26 @@ function showAddTargetModal(pickedPrice){
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
-        <div>
-          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TAKE PROFIT %</div>
-          <input id="pt_dca_tp" type="number" value="2.0" min="0.1" step="0.1"
-            style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
-            font-family:'Space Mono',monospace;font-size:10px;font-weight:700;padding:5px 7px;border-radius:4px;"/>
+      <div style="margin-bottom:10px;">
+        <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">PAIR</div>
+        <select id="pt_dca_pair" style="width:100%;background:#080c10;border:1px solid #243044;
+          color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;">
+          <option value="USDC_BTC">USDC_BTC</option>
+          <option value="USDT_BTC">USDT_BTC</option>
+          <option value="USD_BTC">USD_BTC</option>
+        </select>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <div style="font-size:9px;color:var(--muted);">TAKE PROFIT LEVELS</div>
+          <button onclick="_ptAddTpRow()"
+            style="background:rgba(86,211,100,.08);border:1px solid rgba(86,211,100,.3);color:var(--green);
+            font-family:'Space Mono',monospace;font-size:9px;padding:3px 8px;border-radius:3px;cursor:pointer;">
+            + ADD LEVEL</button>
         </div>
-        <div>
-          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">PAIR</div>
-          <select id="pt_dca_pair" style="width:100%;background:#080c10;border:1px solid #243044;
-            color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;">
-            <option value="USDC_BTC">USDC_BTC</option>
-            <option value="USDT_BTC">USDT_BTC</option>
-            <option value="USD_BTC">USD_BTC</option>
-          </select>
+        <div id="ptTpRows"></div>
+        <div style="font-size:8px;color:var(--muted);margin-top:4px;opacity:.6;">
+          Close % must sum to 100 · Profit % must be ascending
         </div>
       </div>
     </div>
@@ -2134,6 +2139,51 @@ function showAddTargetModal(pickedPrice){
 
 function _ptToggleDca(on){
   document.getElementById('ptDcaFields').style.display = on ? 'block' : 'none';
+  if(on && document.getElementById('ptTpRows').children.length === 0) _ptAddTpRow(2.0, 100);
+}
+
+function _ptAddTpRow(profit, close){
+  const c = document.getElementById('ptTpRows');
+  const div = document.createElement('div');
+  div.setAttribute('data-tp-row','');
+  div.style.cssText = 'display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-bottom:5px;align-items:flex-end;';
+  div.innerHTML = `
+    <div>
+      <div style="font-size:8px;color:var(--muted);margin-bottom:3px;">PROFIT %</div>
+      <input type="number" class="pt-tp-profit" value="${profit!=null?profit:''}" placeholder="e.g. 2.0"
+        min="0.1" step="0.1"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
+        font-family:'Space Mono',monospace;font-size:10px;font-weight:700;padding:5px 7px;border-radius:4px;"/>
+    </div>
+    <div>
+      <div style="font-size:8px;color:var(--muted);margin-bottom:3px;">CLOSE %</div>
+      <input type="number" class="pt-tp-close" value="${close!=null?close:''}" placeholder="e.g. 100"
+        min="1" max="100" step="1"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+        font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+    </div>
+    <button onclick="_ptRemoveTpRow(this)"
+      style="background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.25);color:#f85149;
+      font-family:'Space Mono',monospace;font-size:12px;padding:5px 9px;border-radius:4px;
+      cursor:pointer;line-height:1;">×</button>`;
+  c.appendChild(div);
+}
+
+function _ptRemoveTpRow(btn){
+  const c = document.getElementById('ptTpRows');
+  if(c.children.length <= 1){ toast('At least one TP level required','err'); return; }
+  btn.closest('[data-tp-row]').remove();
+}
+
+function _ptGetTpSteps(){
+  const steps = [];
+  for(const row of document.querySelectorAll('#ptTpRows [data-tp-row]')){
+    const profit = parseFloat(row.querySelector('.pt-tp-profit').value);
+    const close  = parseFloat(row.querySelector('.pt-tp-close').value);
+    if(isNaN(profit) || isNaN(close)) return null;
+    steps.push({profit_pct: profit, close_pct: close});
+  }
+  return steps;
 }
 
 async function confirmAddTarget(){
@@ -2153,12 +2203,20 @@ async function confirmAddTarget(){
     price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h, dca_enabled };
 
   if(dca_enabled){
-    body.dca_base_order_usd      = parseFloat(document.getElementById('pt_dca_base').value) || 500;
-    body.dca_safety_count        = parseInt  (document.getElementById('pt_dca_count').value) || 5;
-    body.dca_safety_step_pct     = parseFloat(document.getElementById('pt_dca_step').value) || 1.5;
-    body.dca_safety_volume_mult  = parseFloat(document.getElementById('pt_dca_mult').value) || 1.2;
-    body.dca_tp_pct              = parseFloat(document.getElementById('pt_dca_tp').value)   || 2.0;
-    body.dca_pair                = document.getElementById('pt_dca_pair').value || 'USDC_BTC';
+    body.dca_base_order_usd     = parseFloat(document.getElementById('pt_dca_base').value) || 500;
+    body.dca_safety_count       = parseInt  (document.getElementById('pt_dca_count').value) || 5;
+    body.dca_safety_step_pct    = parseFloat(document.getElementById('pt_dca_step').value) || 1.5;
+    body.dca_safety_volume_mult = parseFloat(document.getElementById('pt_dca_mult').value) || 1.2;
+    body.dca_pair               = document.getElementById('pt_dca_pair').value || 'USDC_BTC';
+
+    const tpSteps = _ptGetTpSteps();
+    if(!tpSteps || tpSteps.length === 0){ toast('Add at least one TP level','err'); return; }
+    const totalClose = tpSteps.reduce((s,r) => s + r.close_pct, 0);
+    if(Math.abs(totalClose - 100) > 0.5){ toast(`Close % must sum to 100 (got ${totalClose.toFixed(0)}%)`,'err'); return; }
+    for(let i=1;i<tpSteps.length;i++){
+      if(tpSteps[i].profit_pct <= tpSteps[i-1].profit_pct){ toast('TP profit levels must be ascending','err'); return; }
+    }
+    body.dca_tp_steps = tpSteps;
   }
 
   try{

@@ -120,8 +120,6 @@ def create_dca_bot(
         "base_order_volume_type":          "quote_currency",
         "safety_order_volume":             str(round(safety_order_usd, 2)),
         "safety_order_volume_type":        "quote_currency",
-        "take_profit_type":                "total",
-        "take_profit":                     str(round(take_profit_pct, 2)),
         "safety_order_step_percentage":    str(round(safety_order_step_pct, 2)),
         "martingale_volume_coefficient":   str(round(safety_order_volume_mult, 2)),
         "martingale_step_coefficient":     "1.0",
@@ -131,8 +129,21 @@ def create_dca_bot(
         "strategy_list":                   [{"strategy": "manual", "options": {}}],
         "leverage_type":                   "not_specified",
     }
-    if take_profit_steps:
-        body["take_profit_steps"] = take_profit_steps
+    if take_profit_steps and len(take_profit_steps) > 0:
+        # Step mode: each step closes a portion of the position at a different profit %.
+        # API fields: amount_percentage (share to close) + profit_percentage (target %).
+        # amount_percentage values must sum to 100.
+        body["take_profit_type"]  = "step"
+        body["take_profit_steps"] = [
+            {
+                "amount_percentage": round(s["close_pct"], 2),
+                "profit_percentage": round(s["profit_pct"], 2),
+            }
+            for s in take_profit_steps
+        ]
+    else:
+        body["take_profit_type"] = "total"
+        body["take_profit"]      = str(round(take_profit_pct, 2))
     r = _signed_request("POST", "/ver1/bots/create_bot", body=body)
     if not r.ok:
         raise ValueError(f"3Commas {r.status_code}: {r.text[:500]}")

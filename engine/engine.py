@@ -423,21 +423,31 @@ def run():
                 if _hold_secs > 0:
                     print(f"  DCA launch held — sweep guard active ({_hold_secs:.0f}s remaining)")
 
-                # Only on the first cycle after firing (dca_bot_id not yet set)
-                if _pt_state.get("dca_enabled") and not _pt_state.get("dca_bot_id") and _pt_tp and _hold_secs == 0:
-                    bo_usd    = float(_pt_state.get("dca_base_order_usd", 500))
-                    so_usd    = round(bo_usd * 0.5, 2)
-                    tp_pct    = round((_pt_tp - state.price) / state.price * 100, 2)
-                    so_count  = int(_pt_state.get("dca_safety_count", 5))
-                    so_step   = float(_pt_state.get("dca_safety_step_pct", 1.5))
-                    so_mult   = float(_pt_state.get("dca_safety_volume_mult", 1.2))
-                    max_exp   = estimate_max_exposure(bo_usd, so_usd, so_count, so_mult)
+                # Only on the first cycle after firing (dca_bot_id not yet set).
+                # DCA bot launches if either dca_tp_steps (multi-level TP) is set
+                # or a price_target is set (single TP derived from the absolute $target).
+                _tp_steps = _pt_state.get("dca_tp_steps") or []
+                _has_tp   = bool(_tp_steps) or bool(_pt_tp)
+                if _pt_state.get("dca_enabled") and not _pt_state.get("dca_bot_id") and _has_tp and _hold_secs == 0:
+                    bo_usd   = float(_pt_state.get("dca_base_order_usd", 500))
+                    so_usd   = round(bo_usd * 0.5, 2)
+                    so_count = int(_pt_state.get("dca_safety_count", 5))
+                    so_step  = float(_pt_state.get("dca_safety_step_pct", 1.5))
+                    so_mult  = float(_pt_state.get("dca_safety_volume_mult", 1.2))
+                    max_exp  = estimate_max_exposure(bo_usd, so_usd, so_count, so_mult)
+
+                    # TP config: prefer explicit steps; fall back to single % from price_target
+                    if _tp_steps:
+                        tp_desc = " | ".join(f"{s['profit_pct']}%→close {s['close_pct']}%" for s in _tp_steps)
+                    else:
+                        tp_pct  = round((_pt_tp - state.price) / state.price * 100, 2)
+                        tp_desc = f"{tp_pct:.1f}%"
 
                     if DRY_RUN:
                         print(f"  [SIM] Would create DCA bot '{_pt_label}' | "
                               f"base=${bo_usd} SO=${so_usd}×{so_count} "
                               f"step={so_step}% mult={so_mult}× | "
-                              f"TP={tp_pct:.1f}% | max_exposure=${max_exp:,.0f}")
+                              f"TP={tp_desc} | max_exposure=${max_exp:,.0f}")
                     elif _can_act():
                         _record_action()
                         try:
@@ -445,7 +455,8 @@ def run():
                                 label=_pt_label,
                                 base_order_usd=bo_usd,
                                 safety_order_usd=so_usd,
-                                take_profit_pct=tp_pct,
+                                take_profit_pct=tp_pct if not _tp_steps else 2.0,
+                                take_profit_steps=_tp_steps if _tp_steps else None,
                                 safety_order_count=so_count,
                                 safety_order_step_pct=so_step,
                                 safety_order_volume_mult=so_mult,

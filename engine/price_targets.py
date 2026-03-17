@@ -216,6 +216,7 @@ def add_target(
     dca_safety_count: int = 5,
     dca_safety_step_pct: float = 1.5,
     dca_safety_volume_mult: float = 1.2,
+    dca_tp_steps: list = None,
 ) -> dict:
     targets = load_targets()
     target = {
@@ -238,6 +239,7 @@ def add_target(
         "dca_safety_count":       dca_safety_count,
         "dca_safety_step_pct":    dca_safety_step_pct,
         "dca_safety_volume_mult": dca_safety_volume_mult,
+        "dca_tp_steps":           dca_tp_steps or [],
         "dca_bot_id":             None,
     }
     targets.append(target)

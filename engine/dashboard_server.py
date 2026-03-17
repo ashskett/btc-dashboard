@@ -1128,6 +1128,15 @@ def create_target():
         if direction not in ("UP", "DOWN"):
             return jsonify({"ok": False, "msg": "direction must be UP or DOWN"}), 400
 
+        raw_steps = body.get("dca_tp_steps")
+        dca_tp_steps = None
+        if isinstance(raw_steps, list) and raw_steps:
+            dca_tp_steps = [
+                {"profit_pct": float(s["profit_pct"]), "close_pct": float(s["close_pct"])}
+                for s in raw_steps
+                if "profit_pct" in s and "close_pct" in s
+            ] or None
+
         t = add_target(
             label=label,
             trigger_price=float(trigger_price),
@@ -1141,6 +1150,7 @@ def create_target():
             dca_safety_count=int(body.get("dca_safety_count", 5)),
             dca_safety_step_pct=float(body.get("dca_safety_step_pct", 1.5)),
             dca_safety_volume_mult=float(body.get("dca_safety_volume_mult", 1.2)),
+            dca_tp_steps=dca_tp_steps,
         )
         return jsonify({"ok": True, "target": t})
     except Exception as e:
