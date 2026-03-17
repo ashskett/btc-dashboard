@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Webhook server for auto-deploy on GitHub push.
-Listens on port 9001 for POST /deploy from GitHub.
-Runs: git pull → rsync engine files → restart engine.
+Listens on port 9001 for:
+  POST /deploy        — deploys grid engine (btc-dashboard repo)
+  POST /deploy-ai-os  — deploys AI OS API (ai-os repo)
 """
 import os
 import hmac
@@ -12,9 +13,12 @@ import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "grid-engine-deploy")
-REPO_DIR = "/root/btc-dashboard"
-ENGINE_DIR = "/root/grid-engine"
-LOG_FILE = "/root/grid-engine/deploy.log"
+REPO_DIR       = "/root/btc-dashboard"
+ENGINE_DIR     = "/root/grid-engine"
+LOG_FILE       = "/root/grid-engine/deploy.log"
+
+AI_OS_REPO_DIR = "/root/ai-os"
+AI_OS_LOG_FILE = "/root/ai-os/deploy.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,7 +44,7 @@ def run(cmd, cwd=None):
 
 
 def deploy():
-    log.info("=== Deploy started ===")
+    log.info("=== Grid Engine Deploy started ===")
 
     # 1. Pull latest code from whichever branch is currently checked out
     branch = subprocess.run(
@@ -71,12 +75,44 @@ def deploy():
     )
     run(restart)
 
-    log.info("=== Deploy complete ===")
+    log.info("=== Grid Engine Deploy complete ===")
+
+
+def deploy_ai_os():
+    log.info("=== AI OS Deploy started ===")
+
+    if not os.path.isdir(AI_OS_REPO_DIR):
+        log.error(f"{AI_OS_REPO_DIR} does not exist — run ai-os-setup.sh first")
+        return
+
+    # 1. Pull latest from main
+    branch = subprocess.run(
+        "git rev-parse --abbrev-ref HEAD", shell=True, cwd=AI_OS_REPO_DIR,
+        capture_output=True, text=True
+    ).stdout.strip() or "main"
+    rc = run(f"git pull origin {branch}", cwd=AI_OS_REPO_DIR)
+    if rc != 0:
+        log.error("git pull failed for ai-os — aborting")
+        return
+
+    # 2. Install/update Python dependencies
+    run(f"{AI_OS_REPO_DIR}/venv/bin/pip install -r {AI_OS_REPO_DIR}/requirements.txt -q")
+
+    # 3. Restart AI OS in tmux session ai-os
+    restart = (
+        "tmux send-keys -t ai-os C-c Enter; sleep 2; "
+        "tmux send-keys -t ai-os "
+        "'cd /root/ai-os && source venv/bin/activate && "
+        "uvicorn main:app --host 0.0.0.0 --port 8080' Enter"
+    )
+    run(restart)
+
+    log.info("=== AI OS Deploy complete ===")
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if self.path not in ("/deploy", "/"):
+        if self.path not in ("/deploy", "/", "/deploy-ai-os"):
             self.send_response(404)
             self.end_headers()
             return
@@ -101,7 +137,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"Deploy triggered\n")
 
         import threading
-        threading.Thread(target=deploy, daemon=True).start()
+        if self.path == "/deploy-ai-os":
+            threading.Thread(target=deploy_ai_os, daemon=True).start()
+        else:
+            threading.Thread(target=deploy, daemon=True).start()
 
     def log_message(self, fmt, *args):
         log.info(f"{self.client_address[0]} - {fmt % args}")
