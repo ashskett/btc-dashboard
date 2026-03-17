@@ -77,6 +77,27 @@ POST_CLEAR_COOLDOWN = 600    # seconds after exhaustion clear before spike layer
                               # next cycle before market conditions have changed.  Momentum layer is exempt —
                               # a genuine 4-bar collapse should still fire even inside the cooldown window.
 
+# ── Liquidity sweep guard ──────────────────────────────────────────────────────
+# A breakout fires as PENDING_UP / PENDING_DOWN first.  The engine takes NO action
+# on a pending state.  Confirmation requires a NEW 1H candle to have closed (tracked
+# via candle timestamp) with price still on the correct side of fire_price.
+# A 5-minute liquidity sweep will reverse before the next hourly close; a real
+# breakout will still be above/below fire_price when the new candle prints.
+#
+# SWEEP_CONFIRM_ATR_MARGIN — how far price may retrace from fire_price and still
+# confirm.  0.5×ATR ≈ ~$150 at current levels; covers normal noise without letting
+# a genuine reversal through.
+SWEEP_GUARD_ENABLED       = True   # set False to revert to immediate-fire behaviour
+SWEEP_CONFIRM_ATR_MARGIN  = 0.50   # price may pull back at most this many ATRs from
+                                    # fire_price before the pending state is cancelled
+
+# Wick quality filter for the volatility-spike layer.
+# For BREAKOUT_UP: the triggering candle must close in the upper WICK_BODY_MIN_RATIO
+# of its high-low range.  Liquidity sweeps produce a spike wick that closes well
+# below the high; genuine breakout candles close near their highs.
+# Symmetric check applied to DOWN sweeps.
+WICK_BODY_CLOSE_RATIO = 0.45   # close must be in top/bottom 45 % of candle range
+
 
 def _load_state() -> dict:
     try:
@@ -151,6 +172,29 @@ def _check_volatility_spike(df, window: int = 30) -> str | None:
     if atr > atr_avg * VOLATILITY_MULT or bb > bb_avg * BB_MULT:
         price = df.close.iloc[-1]
         mid   = df.close.tail(5).mean()
+
+        # Wick quality check — liquidity sweeps leave long wicks; real breakout
+        # candles close near their extreme.  If the candle has a meaningful range,
+        # require the close to be in the upper (UP) or lower (DOWN) portion.
+        try:
+            candle_hi = float(df.high.iloc[-1])
+            candle_lo = float(df.low.iloc[-1])
+            candle_range = candle_hi - candle_lo
+            if candle_range > 0:
+                close_pos = (price - candle_lo) / candle_range  # 0 = low, 1 = high
+                if price > mid and close_pos < WICK_BODY_CLOSE_RATIO:
+                    # Spike UP but close is in bottom half of candle — wick, likely sweep
+                    print(f"BREAKOUT_UP (spike) suppressed — wick close "
+                          f"({close_pos:.2f} of range, need >{WICK_BODY_CLOSE_RATIO:.2f})")
+                    return None
+                if price <= mid and close_pos > (1 - WICK_BODY_CLOSE_RATIO):
+                    # Spike DOWN but close is in top half of candle — wick, likely sweep
+                    print(f"BREAKOUT_DOWN (spike) suppressed — wick close "
+                          f"({close_pos:.2f} of range, need <{1-WICK_BODY_CLOSE_RATIO:.2f})")
+                    return None
+        except Exception:
+            pass  # df.high/low may not exist on older test data; skip silently
+
         if price > mid:
             # UP: only fire if price has moved a large distance from recent lows.
             # Filters out single-candle spikes that elevate ATR without a real breakout.
@@ -161,6 +205,76 @@ def _check_volatility_spike(df, window: int = 30) -> str | None:
         return "DOWN"
 
     return None
+
+
+# ── Sweep guard: pending-state confirmation ────────────────────────────────────
+
+def _pending_direction(active: str | None) -> str | None:
+    """Return 'UP' or 'DOWN' if active is a PENDING state, else None."""
+    if isinstance(active, str) and active.startswith("PENDING_"):
+        return active.split("_", 1)[1]
+    return None
+
+
+def _try_confirm_pending(df) -> str | None:
+    """
+    Called when active state is PENDING_UP or PENDING_DOWN.
+
+    Waits for a NEW 1H candle to close (detected via candle timestamp stored at
+    fire time) then checks whether price is still on the correct side of fire_price
+    within SWEEP_CONFIRM_ATR_MARGIN × ATR.
+
+    Returns the confirmed direction ("UP"/"DOWN") on success, None if still waiting
+    or if the move was a liquidity sweep (price reversed).
+    """
+    s = _load_state()
+    direction = _pending_direction(s.get("active"))
+    if not direction:
+        return None
+
+    fire_price = s.get("fire_price", 0.0)
+    atr        = float(df.atr.iloc[-1])
+    price_now  = float(df.close.iloc[-1])
+
+    # Candle-timestamp gate — only confirm once a new 1H candle has closed.
+    # This ensures a sub-hourly liquidity sweep can't confirm itself on the same
+    # candle that triggered the detection.
+    try:
+        current_ts = int(df.index[-1].timestamp())
+    except Exception:
+        current_ts = int(time.time())
+
+    pending_ts = s.get("pending_candle_ts", 0)
+    if current_ts <= pending_ts:
+        # Same candle still open — keep waiting
+        return None
+
+    # New candle has closed — check price is still on the right side
+    margin = atr * SWEEP_CONFIRM_ATR_MARGIN
+    if direction == "UP":
+        confirmed = price_now >= fire_price - margin
+    else:  # DOWN
+        confirmed = price_now <= fire_price + margin
+
+    if confirmed:
+        print(f"Breakout {direction} CONFIRMED after sweep guard "
+              f"(fire=${fire_price:,.0f}, now=${price_now:,.0f}, "
+              f"margin=±${margin:,.0f})")
+        s["active"] = direction
+        _save_state(s)
+        return direction
+    else:
+        print(f"Breakout {direction} CANCELLED — liquidity sweep detected "
+              f"(fire=${fire_price:,.0f}, now=${price_now:,.0f}, "
+              f"reversed by ${abs(price_now - fire_price):,.0f}, "
+              f"allowance=${margin:,.0f})")
+        s["active"]     = None
+        s["fire_price"] = None
+        s["consec_up"]  = 0
+        s["consec_down"] = 0
+        s["cleared_at"] = time.time()
+        _save_state(s)
+        return None
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -189,7 +303,16 @@ def breakout_detected(df, atr_window: int = 30,
     """
     s = _load_state()
 
-    # Don't re-fire while already in an active breakout
+    # ── Sweep guard: handle PENDING state ──────────────────────────────────────
+    # A pending breakout is waiting for one confirming 1H candle close.
+    # Keep updating momentum counters so we don't lose the streak count while
+    # waiting.  Return the confirmed direction (or None) without running new
+    # detection — we already committed to the signal, just confirming it held.
+    if _pending_direction(s.get("active")):
+        _check_momentum(df)
+        return _try_confirm_pending(df)
+
+    # Don't re-fire while already in a confirmed active breakout
     if s.get("active") in ("UP", "DOWN"):
         # Still update momentum counters so we don't lose the count
         _check_momentum(df)
@@ -237,12 +360,32 @@ def breakout_detected(df, atr_window: int = 30,
 
     if direction:
         s2 = _load_state()          # re-read after _check_momentum wrote
-        s2["active"]     = direction
-        s2["fire_price"] = float(df.close.iloc[-1])
-        s2["fired_at"]   = time.time()
-        s2["consec_up"]  = 0
-        s2["consec_down"] = 0
-        _save_state(s2)
+        fire_price = float(df.close.iloc[-1])
+
+        if SWEEP_GUARD_ENABLED:
+            # Park in PENDING — engine takes no bot action until confirmed
+            try:
+                candle_ts = int(df.index[-1].timestamp())
+            except Exception:
+                candle_ts = int(time.time())
+
+            s2["active"]            = f"PENDING_{direction}"
+            s2["fire_price"]        = fire_price
+            s2["fired_at"]          = time.time()
+            s2["pending_candle_ts"] = candle_ts
+            s2["consec_up"]         = 0
+            s2["consec_down"]       = 0
+            _save_state(s2)
+            print(f"Breakout {direction} PENDING sweep guard "
+                  f"(fire=${fire_price:,.0f}) — awaiting next 1H close to confirm")
+            return None   # engine holds bots; confirmation fires on next new candle
+        else:
+            s2["active"]     = direction
+            s2["fire_price"] = fire_price
+            s2["fired_at"]   = time.time()
+            s2["consec_up"]  = 0
+            s2["consec_down"] = 0
+            _save_state(s2)
 
     return direction
 
@@ -259,6 +402,7 @@ def breakout_exhausting(df) -> bool:
     Automatically clears active breakout state when exhaustion is confirmed.
     """
     s = _load_state()
+    # PENDING states are handled by _try_confirm_pending; exhaustion doesn't apply
     if s.get("active") not in ("UP", "DOWN"):
         return False
 
