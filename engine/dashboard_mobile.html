@@ -307,6 +307,14 @@ input[type="range"].skew-range { accent-color:var(--purple); }
       <div class="stat-lbl">Engine</div>
       <div class="stat-val" id="sEngine">—</div>
     </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Trendline</div>
+      <div class="stat-val a" id="sTrendline" style="font-size:13px">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Key Level</div>
+      <div class="stat-val" id="sKeyLevel" style="font-size:13px">—</div>
+    </div>
   </div>
 
   <!-- Tier overview -->
@@ -362,7 +370,9 @@ input[type="range"].skew-range { accent-color:var(--purple); }
   <div class="meta-row"><span class="mk">BTC ratio</span><span class="mv c" id="iBtcR">—</span></div>
   <div class="meta-row"><span class="mk">Skew</span><span class="mv" id="iSkew">—</span></div>
   <div class="meta-row"><span class="mk">Mode</span><span class="mv" id="iMode">—</span></div>
+  <div class="meta-row"><span class="mk">BTC held</span><span class="mv g" id="iBtcQty">—</span></div>
   <div class="meta-row"><span class="mk">BTC value</span><span class="mv" id="iBtcUsd">—</span></div>
+  <div class="meta-row"><span class="mk">USDC held</span><span class="mv" id="iUsdcQty">—</span></div>
   <div class="meta-row"><span class="mk">USDC value</span><span class="mv" id="iUsdcUsd">—</span></div>
   <div class="meta-row"><span class="mk">Total</span><span class="mv" id="iTotalUsd" style="color:var(--accent)">—</span></div>
   <div style="height:10px"></div>
@@ -455,6 +465,8 @@ let dryRun = false;
 let invOverrideActive = false;
 let prevPrice = null;
 let overrideOpen = false;
+let trendlines = [];
+const KEY_LEVEL = 74000;
 
 const f = v => `$${Number(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}`;
 const f2 = v => `$${Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
@@ -467,6 +479,45 @@ function toast(msg, type='ok') {
   el.className = `show ${type}`;
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => { el.className = ''; }, 3000);
+}
+
+// ── TRENDLINE HELPERS ────────────────────────────────────────────────────────
+function tlLevelNow(tl) {
+  const now = Date.now();
+  const dt  = tl.t2 - tl.t1;
+  const slope = dt === 0 ? 0 : (tl.p2 - tl.p1) / dt;
+  return tl.p1 + slope * (now - tl.t1);
+}
+
+function updateTrendlineDisplay() {
+  const active = trendlines.find(t => t.active);
+  const tlEl   = document.getElementById('sTrendline');
+  if (active) {
+    const level = Math.round(tlLevelNow(active));
+    tlEl.textContent  = '$' + level.toLocaleString();
+    tlEl.style.color  = 'var(--amber)';
+  } else {
+    tlEl.textContent = 'None';
+    tlEl.style.color = 'var(--muted)';
+  }
+
+  const klEl = document.getElementById('sKeyLevel');
+  klEl.textContent = '$' + KEY_LEVEL.toLocaleString();
+  if (status.price) {
+    klEl.style.color = status.price >= KEY_LEVEL ? 'var(--green)' : 'var(--red)';
+  } else {
+    klEl.style.color = 'var(--text)';
+  }
+}
+
+async function loadTrendlines() {
+  try {
+    const r = await fetch('/trendlines/load');
+    if (!r.ok) return;
+    const data = await r.json();
+    if (Array.isArray(data)) trendlines = data;
+    updateTrendlineDisplay();
+  } catch(e) {}
 }
 
 // ── STATUS POLL ─────────────────────────────────────────────────────────────
@@ -584,6 +635,9 @@ async function pollStatus() {
 
     document.getElementById('lastSync').textContent = new Date(d.timestamp).toLocaleTimeString();
 
+    // Refresh trendline level and key level color on each price update
+    updateTrendlineDisplay();
+
   } catch(e) {
     document.getElementById('tbDot').className = 'tb-dot off';
   }
@@ -600,17 +654,26 @@ async function fetchBalance() {
     const d = await r.json();
     if (d.error) return;
 
-    const fmt = v => v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${Math.round(v).toLocaleString()}`;
-    document.getElementById('iBtcUsd').textContent  = d.btc_usd  > 0 ? fmt(d.btc_usd)  : '—';
-    document.getElementById('iUsdcUsd').textContent = d.usdc_usd > 0 ? fmt(d.usdc_usd) : '—';
-    document.getElementById('iTotalUsd').textContent = d.total_usd > 0 ? fmt(d.total_usd) : '—';
+    const fmtUsd = v => v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${Math.round(v).toLocaleString()}`;
 
-    // Override btc_ratio from live balance when engine status has null/fallback value
+    // Raw holdings
+    if (d.btc_qty > 0)  document.getElementById('iBtcQty').textContent  = d.btc_qty.toFixed(5) + ' BTC';
+    if (d.usdc_qty > 0) document.getElementById('iUsdcQty').textContent = '$' + Math.round(d.usdc_qty).toLocaleString();
+
+    // USD values
+    document.getElementById('iBtcUsd').textContent   = d.btc_usd  > 0 ? fmtUsd(d.btc_usd)   : '—';
+    document.getElementById('iUsdcUsd').textContent  = d.usdc_usd > 0 ? fmtUsd(d.usdc_usd)  : '—';
+    document.getElementById('iTotalUsd').textContent = d.total_usd > 0 ? fmtUsd(d.total_usd) : '—';
+
+    // Always override btc_ratio from live balance — more accurate than engine status
+    // (engine falls back to 50/50 when pie_chart_data call fails)
     if (!invOverrideActive && d.total_usd > 0) {
       const livePct = (d.btc_usd / d.total_usd * 100).toFixed(1);
       document.getElementById('invFill').style.width = livePct + '%';
       document.getElementById('invPct').textContent  = livePct + '%';
       document.getElementById('iBtcR').textContent   = livePct + '%';
+      document.getElementById('btcSlider').value     = Math.round(d.btc_usd / d.total_usd * 100);
+      document.getElementById('btcSliderVal').textContent = livePct + '%';
     }
   } catch(e) {}
 }
@@ -865,11 +928,14 @@ pollStatus();
 loadBots();
 fetchBalance();
 fetchMacro();
+loadTrendlines();
 
-setInterval(pollStatus,   30000);
-setInterval(loadBots,     60000);
-setInterval(fetchBalance, 60000);
-setInterval(fetchMacro,  300000);
+setInterval(pollStatus,           30000);
+setInterval(loadBots,             60000);
+setInterval(fetchBalance,         60000);
+setInterval(fetchMacro,          300000);
+setInterval(loadTrendlines,       60000);  // refresh trendline from server each minute
+setInterval(updateTrendlineDisplay, 5000); // tick level every 5s (slope moves it over time)
 </script>
 </body>
 </html>
