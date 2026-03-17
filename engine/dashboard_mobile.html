@@ -483,7 +483,7 @@ function toast(msg, type='ok') {
 
 // ── TRENDLINE HELPERS ────────────────────────────────────────────────────────
 function tlLevelNow(tl) {
-  const now = Date.now();
+  const now = Date.now() / 1000;  // trendline timestamps are Unix seconds
   const dt  = tl.t2 - tl.t1;
   const slope = dt === 0 ? 0 : (tl.p2 - tl.p1) / dt;
   return tl.p1 + slope * (now - tl.t1);
@@ -664,6 +664,11 @@ async function fetchBalance() {
     document.getElementById('iBtcUsd').textContent   = d.btc_usd  > 0 ? fmtUsd(d.btc_usd)   : '—';
     document.getElementById('iUsdcUsd').textContent  = d.usdc_usd > 0 ? fmtUsd(d.usdc_usd)  : '—';
     document.getElementById('iTotalUsd').textContent = d.total_usd > 0 ? fmtUsd(d.total_usd) : '—';
+
+    // Portfolio card in stat grid
+    if (d.total_usd > 0) {
+      document.getElementById('sPortfolio').textContent = f2(d.total_usd);
+    }
 
     // Always override btc_ratio from live balance — more accurate than engine status
     // (engine falls back to 50/50 when pie_chart_data call fails)
