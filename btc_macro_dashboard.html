@@ -47,6 +47,7 @@ const fmt   = (n, d=0) => n==null ? "—" : Number(n).toLocaleString("en-US", {m
 const pct   = (n, d=2) => n==null ? "—" : (n>=0?"+":"")+Number(n).toFixed(d)+"%";
 const bil   = n => n==null ? "—" : "$"+(n/1e9).toFixed(2)+"B";
 const REFRESH = 60000;
+const KEY_LEVEL = 74000; // ← update this to the level you're watching
 
 function calcOBV(candles) {
   if (!candles || candles.length < 2) return [];
@@ -173,7 +174,7 @@ function ManualLink({ label, url, hint }) {
 
 
 // ── Candlestick chart (SVG) ─────────────────────────────────
-function CandleChart({ candles, height=160 }) {
+function CandleChart({ candles, height=160, keyLevel=null }) {
   if (!candles || candles.length < 2) return (
     <div style={{height,display:"flex",alignItems:"center",justifyContent:"center",
       color:"rgba(255,255,255,0.2)",fontSize:11}}>Loading chart…</div>
@@ -256,12 +257,29 @@ function CandleChart({ candles, height=160 }) {
         </g>
       )}
 
+      {/* Key level line */}
+      {keyLevel && keyLevel > minP && keyLevel < maxP && (
+        <g>
+          <line x1={padL} y1={scY(keyLevel)} x2={W-padR-30} y2={scY(keyLevel)}
+            stroke="#facc15" strokeWidth="1.2" strokeDasharray="5,3" opacity="0.75"/>
+          <text x={W-padR-28} y={scY(keyLevel)-3} fill="#facc15"
+            fontSize="7" fontFamily="monospace" opacity="0.85">${Math.round(keyLevel/1000)}k</text>
+        </g>
+      )}
+
       {/* Legend */}
       <rect x={padL} y={padT} width={6} height={6} fill="#facc15" rx="1"/>
       <text x={padL+9} y={padT+6} fill="rgba(255,255,255,0.4)" fontSize="7" fontFamily="sans-serif">EMA 20</text>
       <rect x={padL+50} y={padT} width={6} height={6} fill="#818cf8" rx="1"/>
       <text x={padL+59} y={padT+6} fill="rgba(255,255,255,0.4)" fontSize="7" fontFamily="sans-serif">EMA 50</text>
-      <text x={padL+105} y={padT+6} fill="rgba(255,255,255,0.25)" fontSize="7" fontFamily="sans-serif">60-day · 1D · volume bars below</text>
+      {keyLevel && (
+        <React.Fragment>
+          <line x1={padL+105} y1={padT+3} x2={padL+116} y2={padT+3} stroke="#facc15" strokeWidth="1.2" strokeDasharray="3,2" opacity="0.75"/>
+          <text x={padL+119} y={padT+6} fill="rgba(250,204,21,0.6)" fontSize="7" fontFamily="sans-serif">${Math.round(keyLevel/1000)}k level</text>
+          <text x={padL+165} y={padT+6} fill="rgba(255,255,255,0.25)" fontSize="7" fontFamily="sans-serif">· 60-day · 1D</text>
+        </React.Fragment>
+      )}
+      {!keyLevel && <text x={padL+105} y={padT+6} fill="rgba(255,255,255,0.25)" fontSize="7" fontFamily="sans-serif">60-day · 1D · volume bars below</text>}
     </svg>
   );
 }
@@ -462,13 +480,55 @@ function App() {
     allSigs.forEach(s=>sc[s]++);
     const ovr = sc.bull>=4?"bull":sc.bear>=4?"bear":sc.bull>sc.bear?"bull":sc.bear>sc.bull?"bear":"neutral";
 
+    // ── Key Level Analysis ──
+    let klConsecClosesAbove = 0, klConsecClosesBelow = 0;
+    let klVolConfirmed = false, klRetestDetected = false, klWeeklyCloseAbove = false;
+    let klStatus = "NO DATA", klDailyVolRatio = null, klSig = "neutral";
+    if (dailyCandles && dailyCandles.length >= 5) {
+      const dlCloses = dailyCandles.map(c => parseFloat(c[4]));
+      const dlLows   = dailyCandles.map(c => parseFloat(c[3]));
+      const dlVols   = dailyCandles.map(c => parseFloat(c[5]));
+      // Consecutive closes above KEY_LEVEL (most recent first)
+      for (let i = dlCloses.length-1; i >= 0; i--) {
+        if (dlCloses[i] > KEY_LEVEL) klConsecClosesAbove++; else break;
+      }
+      // Consecutive closes below KEY_LEVEL
+      for (let i = dlCloses.length-1; i >= 0; i--) {
+        if (dlCloses[i] < KEY_LEVEL) klConsecClosesBelow++; else break;
+      }
+      // Volume: last daily candle vs 20d MA
+      const dlVolMA20 = dlVols.length >= 20 ? dlVols.slice(-20).reduce((a,b)=>a+b,0)/20 : null;
+      klDailyVolRatio = dlVolMA20 ? dlVols[dlVols.length-1] / dlVolMA20 : null;
+      klVolConfirmed  = klDailyVolRatio != null && klDailyVolRatio > 1.2;
+      // Retest: any of last 14 completed daily candles wicked to within 1.5% of KEY_LEVEL but closed above
+      if (klConsecClosesAbove >= 1) {
+        const retestSlice = dailyCandles.slice(-15, -1);
+        for (const c of retestSlice) {
+          const lo = parseFloat(c[3]), cl = parseFloat(c[4]);
+          if (lo <= KEY_LEVEL * 1.015 && cl > KEY_LEVEL) { klRetestDetected = true; break; }
+        }
+      }
+      // Weekly close
+      if (completedWkly.length > 0)
+        klWeeklyCloseAbove = parseFloat(completedWkly[completedWkly.length-1][4]) > KEY_LEVEL;
+      // Status
+      if (klConsecClosesAbove >= 3 && klRetestDetected) klStatus = "CONFIRMED";
+      else if (klConsecClosesAbove >= 3)                 klStatus = "HOLDING";
+      else if (klConsecClosesAbove >= 1)                 klStatus = "WATCH — "+klConsecClosesAbove+"/3";
+      else if (klConsecClosesBelow >= 1)                 klStatus = "BELOW";
+      else                                               klStatus = "AT LEVEL";
+      klSig = (klStatus==="CONFIRMED"||klStatus==="HOLDING")?"bull":klStatus==="BELOW"?"bear":"neutral";
+    }
+
     setD({btcPrice,btcChg,btcVol,dom,fngVals,fngCur,fngLbl,fundRates,fundLast,fund8h,
       oiVals,oiChg,oiTrend,domSig,fngSig,fundSig,oiSig,
       wklyObvArr,obvEMAArr,obvEMALast,obvLast,obvAboveMA,obvBullDiv,obvBearDiv,obvSig,
       wklyRSI,rsiSig,rsiHistory,wklyVols,volCapit,volDist,volSig,volRatio,
       wklyCandles,dailyCandles,
       etfDailyFlows,etfLatest,etfSig,etfAvg7,
-      reservesHistory,reservesLatest,reservesTrend,reservesSig,reservesChg14});
+      reservesHistory,reservesLatest,reservesTrend,reservesSig,reservesChg14,
+      klConsecClosesAbove,klConsecClosesBelow,klVolConfirmed,klRetestDetected,
+      klWeeklyCloseAbove,klStatus,klDailyVolRatio,klSig});
     setOverall(ovr);
     setLastUp(new Date());
     setLoading(false);
@@ -571,8 +631,97 @@ function App() {
             <span style={{color:"rgba(255,255,255,0.3)"}}>vol bars below candles</span>
           </div>
         </div>
-        <CandleChart candles={d.dailyCandles} height={170}/>
+        <CandleChart candles={d.dailyCandles} height={170} keyLevel={KEY_LEVEL}/>
       </div>
+
+      {/* Key Level Watch */}
+      {(() => {
+        const klColor = d.klStatus==="CONFIRMED"?"#00e5a0":d.klStatus==="HOLDING"?"#4ade80":d.klStatus==="BELOW"?"#ff4d6d":"#facc15";
+        const closesColor = d.klConsecClosesAbove>=3?"#00e5a0":d.klConsecClosesAbove>=1?"#facc15":"rgba(255,255,255,0.3)";
+        return (
+          <div style={{background:`rgba(250,204,21,0.03)`,border:`1px solid rgba(250,204,21,0.14)`,
+            borderRadius:13,padding:"14px 20px",marginBottom:11,animation:"fadein 0.4s ease"}}>
+            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:14}}>
+              {/* Label + status */}
+              <div style={{minWidth:130}}>
+                <div style={{fontSize:9,letterSpacing:"0.14em",color:"rgba(255,255,255,0.3)",textTransform:"uppercase",marginBottom:4}}>
+                  Key Level Watch
+                </div>
+                <div style={{fontSize:13,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"rgba(255,255,255,0.7)",marginBottom:3}}>
+                  ${fmt(KEY_LEVEL)}
+                </div>
+                <div style={{fontSize:15,fontWeight:700,color:klColor,letterSpacing:"0.05em"}}>
+                  {d.klStatus??"—"}
+                </div>
+              </div>
+              {/* Metrics row */}
+              <div style={{display:"flex",gap:22,flexWrap:"wrap",alignItems:"flex-start",flex:1}}>
+                {/* Daily closes */}
+                <div>
+                  <div style={{fontSize:8.5,color:"rgba(255,255,255,0.28)",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:4}}>Daily Closes Above</div>
+                  <div style={{fontSize:20,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:closesColor,lineHeight:1}}>
+                    {d.klConsecClosesAbove??0}<span style={{fontSize:11,color:"rgba(255,255,255,0.3)",fontWeight:400}}> / 3</span>
+                  </div>
+                  <div style={{marginTop:4,display:"flex",gap:3}}>
+                    {[0,1,2].map(i=>(
+                      <div key={i} style={{width:18,height:4,borderRadius:2,
+                        background:(d.klConsecClosesAbove??0)>i?closesColor:"rgba(255,255,255,0.1)"}}/>
+                    ))}
+                  </div>
+                  <div style={{fontSize:8,color:"rgba(255,255,255,0.2)",marginTop:3}}>need 3 to confirm</div>
+                </div>
+                {/* Volume */}
+                <div>
+                  <div style={{fontSize:8.5,color:"rgba(255,255,255,0.28)",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:4}}>Volume vs 20d Avg</div>
+                  <div style={{fontSize:20,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",
+                    color:d.klVolConfirmed?"#00e5a0":"rgba(255,255,255,0.35)",lineHeight:1}}>
+                    {d.klDailyVolRatio!=null?d.klDailyVolRatio.toFixed(2)+"×":"—"}
+                  </div>
+                  <div style={{fontSize:8,color:"rgba(255,255,255,0.2)",marginTop:7}}>
+                    {d.klVolConfirmed?"↑ confirmed":"need >1.2×"}
+                  </div>
+                </div>
+                {/* Retest */}
+                <div>
+                  <div style={{fontSize:8.5,color:"rgba(255,255,255,0.28)",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:4}}>Retest &amp; Hold</div>
+                  <div style={{fontSize:13,fontWeight:700,
+                    color:d.klRetestDetected?"#00e5a0":"rgba(255,255,255,0.3)",lineHeight:1,marginTop:5}}>
+                    {d.klRetestDetected?"ABSORBED ✓":"NONE YET"}
+                  </div>
+                  <div style={{fontSize:8,color:"rgba(255,255,255,0.2)",marginTop:5}}>
+                    {d.klRetestDetected?"resistance → support flip":"strongest confirmation"}
+                  </div>
+                </div>
+                {/* Weekly close */}
+                <div>
+                  <div style={{fontSize:8.5,color:"rgba(255,255,255,0.28)",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:4}}>Weekly Close</div>
+                  <div style={{fontSize:13,fontWeight:700,
+                    color:d.klWeeklyCloseAbove?"#00e5a0":"#ff4d6d",lineHeight:1,marginTop:5}}>
+                    {d.klWeeklyCloseAbove?"ABOVE ✓":"BELOW ✗"}
+                  </div>
+                  <div style={{fontSize:8,color:"rgba(255,255,255,0.2)",marginTop:5}}>last completed weekly</div>
+                </div>
+                {/* Signal */}
+                <div>
+                  <div style={{fontSize:8.5,color:"rgba(255,255,255,0.28)",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:4}}>Signal</div>
+                  <div style={{marginTop:5}}><SigBadge sig={d.klSig??"neutral"}/></div>
+                  <div style={{fontSize:8,color:"rgba(255,255,255,0.2)",marginTop:5}}>
+                    {d.klSig==="bull"?"avg in ✓":d.klSig==="bear"?"wait":"watch"}
+                  </div>
+                </div>
+              </div>
+            </div>
+            {/* Footer note */}
+            <div style={{fontSize:8.5,color:"rgba(255,255,255,0.18)",borderTop:"1px solid rgba(255,255,255,0.05)",
+              paddingTop:7,marginTop:10,lineHeight:1.7}}>
+              <strong style={{color:"rgba(255,255,255,0.3)"}}>Confirmation ladder:</strong>
+              {" "}1 daily close above = watch · 3 consecutive = holding · 3 closes + retest absorbed = <strong style={{color:"#00e5a0"}}>CONFIRMED</strong> · weekly close above = structural hold.
+              Volume &gt;1.2× avg on holding candles = institutional conviction.
+              Level line shown on chart above.
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Grid */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(255px,1fr))",gap:11,marginBottom:11}}>
