@@ -357,6 +357,7 @@ input[type="range"].skew-range { accent-color:var(--purple); }
   <div class="sec-title">
     Inventory
     <span id="overrideBadge" style="display:none;font-size:9px;padding:2px 7px;border-radius:3px;background:rgba(255,171,0,.15);color:var(--amber)">MANUAL</span>
+    <span id="invStaleBadge" style="display:none;font-size:9px;padding:2px 7px;border-radius:3px;background:rgba(255,61,90,.15);color:var(--red)">STALE</span>
   </div>
   <div class="inv-target-line">
     <div class="inv-bar-wrap">
@@ -683,6 +684,24 @@ async function fetchBalance() {
   } catch(e) {}
 }
 
+async function fetchInventoryStatus() {
+  // Check inventory cache age and show STALE badge if the engine's live feed
+  // has not refreshed from 3Commas in the last 30 minutes.
+  try {
+    const r = await fetch('/inventory/status');
+    if (!r.ok) return;
+    const d = await r.json();
+    const badge = document.getElementById('invStaleBadge');
+    if (d.stale) {
+      const age = d.live_age_min != null ? ` (${Math.round(d.live_age_min)}m)` : '';
+      badge.textContent = `STALE${age}`;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch(e) {}
+}
+
 async function fetchEngineStatus() {
   try {
     const r = await fetch('/engine/status');
@@ -932,15 +951,17 @@ async function fetchMacro() {
 pollStatus();
 loadBots();
 fetchBalance();
+fetchInventoryStatus();
 fetchMacro();
 loadTrendlines();
 
-setInterval(pollStatus,           30000);
-setInterval(loadBots,             60000);
-setInterval(fetchBalance,         60000);
-setInterval(fetchMacro,          300000);
-setInterval(loadTrendlines,       60000);  // refresh trendline from server each minute
-setInterval(updateTrendlineDisplay, 5000); // tick level every 5s (slope moves it over time)
+setInterval(pollStatus,             30000);
+setInterval(loadBots,               60000);
+setInterval(fetchBalance,           60000);
+setInterval(fetchInventoryStatus,  120000);
+setInterval(fetchMacro,           300000);
+setInterval(loadTrendlines,         60000);  // refresh trendline from server each minute
+setInterval(updateTrendlineDisplay,  5000); // tick level every 5s (slope moves it over time)
 </script>
 </body>
 </html>

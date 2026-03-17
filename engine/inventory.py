@@ -60,11 +60,21 @@ def _load_cache():
     return None, None
 
 
+def cache_age_seconds() -> float:
+    """Return age of the inventory cache in seconds, or infinity if missing."""
+    try:
+        data = json.load(open(_CACHE_FILE))
+        return time.time() - data.get("live_ts", data.get("ts", 0))
+    except Exception:
+        return float("inf")
+
+
 def _save_cache(btc_ratio: float, skew: float, btc_qty: float = 0.0,
                 usdc_qty: float = 0.0, btc_price: float = 0.0):
     try:
         json.dump({
             "btc_ratio": btc_ratio, "skew": skew, "ts": time.time(),
+            "live_ts": time.time(),  # timestamp of last SUCCESSFUL live fetch
             "btc_qty": btc_qty, "usdc_qty": usdc_qty, "btc_price": btc_price,
         }, open(_CACHE_FILE, "w"))
     except Exception:
@@ -228,14 +238,29 @@ def _calculate_inventory_live():
             "THREECOMMAS_ACCOUNT_ID is not set in your .env file."
         )
 
-    # Step 1: trigger balance sync (fire-and-continue — don't abort if this fails)
-    try:
-        _signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
-    except Exception as e:
-        print(f"Warning: load_balances failed ({e}) — proceeding with cached data")
-    time.sleep(8)  # give 3Commas time to refresh its balance cache
-    # (8s — was 3s. Stale snapshots observed during high fill activity; longer wait
-    # reduces the window where pie_chart_data returns pre-fill balance data.)
+    # Step 1: trigger balance sync — retry up to 3× with backoff.
+    # If load_balances keeps failing, 3Commas serves its OWN stale cache via
+    # pie_chart_data, which can be hours old.  Retrying gives the API a chance
+    # to accept the request even under transient 5xx / rate-limit conditions.
+    load_ok = False
+    for attempt in range(1, 4):
+        try:
+            _signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
+            load_ok = True
+            break
+        except Exception as e:
+            wait = attempt * 4
+            if attempt < 3:
+                print(f"Warning: load_balances attempt {attempt}/3 failed ({e}) "
+                      f"— retrying in {wait}s")
+                time.sleep(wait)
+            else:
+                print(f"Warning: load_balances failed after 3 attempts ({e}) "
+                      f"— pie_chart_data may return stale 3Commas balance")
+    if load_ok:
+        time.sleep(8)  # give 3Commas time to refresh its balance cache
+    else:
+        time.sleep(3)  # shorter wait — balance won't be fresh anyway
 
     # Step 2: fetch per-currency breakdown.
     # 3Commas occasionally returns 204/empty immediately after load_balances

@@ -53,7 +53,7 @@ def _ensure_secret():
 
 _ensure_secret()
 
-_PUBLIC_PATHS = {"/", "/ping", "/deploy", "/account/balance/raw", "/macro", "/macro/mobile"}
+_PUBLIC_PATHS = {"/", "/ping", "/deploy", "/account/balance/raw", "/macro", "/macro/mobile", "/mobile"}
 
 @app.before_request
 def check_token():
@@ -786,6 +786,36 @@ def inventory_override():
             json.dump(existing, f, indent=2)
 
         return jsonify({"ok": True, "btc_ratio": btc_ratio, "skew": skew})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Inventory status / debug ─────────────────────────────
+@app.route("/inventory/status")
+def inventory_status():
+    """Return current inventory cache state — useful for diagnosing stale data."""
+    try:
+        cache_file = os.path.join(os.path.dirname(__file__), "inventory_cache.json")
+        now = time.time()
+        if not os.path.exists(cache_file):
+            return jsonify({"error": "no cache file", "stale": True})
+        data = json.load(open(cache_file))
+        live_ts  = data.get("live_ts", data.get("ts", 0))
+        write_ts = data.get("ts", 0)
+        live_age_s  = now - live_ts
+        write_age_s = now - write_ts
+        stale = live_age_s > 1800  # flag as stale if last live fetch > 30 min ago
+        return jsonify({
+            "btc_ratio":      data.get("btc_ratio"),
+            "skew":           data.get("skew"),
+            "btc_qty":        data.get("btc_qty"),
+            "usdc_qty":       data.get("usdc_qty"),
+            "btc_price":      data.get("btc_price"),
+            "live_age_min":   round(live_age_s / 60, 1),
+            "write_age_min":  round(write_age_s / 60, 1),
+            "stale":          stale,
+            "live_ts":        live_ts,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
