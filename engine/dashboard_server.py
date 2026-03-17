@@ -1378,6 +1378,7 @@ _DEPLOY_FILES = [
     "breakout.py",
     "inventory.py",
     "indicators.py",
+    "price_targets.py",
 ]
 # Macro dashboard HTML lives in repo root, not engine/
 _DEPLOY_FILES_ROOT = [
