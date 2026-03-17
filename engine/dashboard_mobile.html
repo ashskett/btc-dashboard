@@ -362,6 +362,9 @@ input[type="range"].skew-range { accent-color:var(--purple); }
   <div class="meta-row"><span class="mk">BTC ratio</span><span class="mv c" id="iBtcR">—</span></div>
   <div class="meta-row"><span class="mk">Skew</span><span class="mv" id="iSkew">—</span></div>
   <div class="meta-row"><span class="mk">Mode</span><span class="mv" id="iMode">—</span></div>
+  <div class="meta-row"><span class="mk">BTC value</span><span class="mv" id="iBtcUsd">—</span></div>
+  <div class="meta-row"><span class="mk">USDC value</span><span class="mv" id="iUsdcUsd">—</span></div>
+  <div class="meta-row"><span class="mk">Total</span><span class="mv" id="iTotalUsd" style="color:var(--accent)">—</span></div>
   <div style="height:10px"></div>
   <div class="mode-row">
     <button class="mbtn" id="mNormal" onclick="setMode('NORMAL')">NORMAL</button>
@@ -535,19 +538,21 @@ async function pollStatus() {
       });
     }
 
-    // Inventory
-    if (!invOverrideActive) {
+    // Inventory — btc_ratio may be null when engine hasn't run or inventory
+    // fetch failed; fetchBalance() provides the authoritative live value.
+    if (!invOverrideActive && d.btc_ratio != null) {
       const pct = (d.btc_ratio * 100).toFixed(1);
       document.getElementById('invFill').style.width = pct + '%';
       document.getElementById('invPct').textContent  = pct + '%';
       document.getElementById('iBtcR').textContent   = pct + '%';
-      const sk = d.skew ?? 0;
-      const skStr = `${sk>=0?'+':''}${sk.toFixed(4)}`;
-      document.getElementById('iSkew').textContent   = skStr;
       document.getElementById('btcSlider').value     = Math.round(d.btc_ratio * 100);
       document.getElementById('btcSliderVal').textContent = pct + '%';
+    }
+    if (!invOverrideActive) {
+      const sk = d.skew ?? 0;
+      document.getElementById('iSkew').textContent = `${sk>=0?'+':''}${sk.toFixed(4)}`;
       const skewPct = Math.round(sk * 100);
-      document.getElementById('skewSlider').value    = skewPct;
+      document.getElementById('skewSlider').value = skewPct;
       document.getElementById('skewSliderVal').textContent = (skewPct/100).toFixed(2);
     }
 
@@ -582,6 +587,32 @@ async function pollStatus() {
   } catch(e) {
     document.getElementById('tbDot').className = 'tb-dot off';
   }
+}
+
+// ── ACCOUNT BALANCE ──────────────────────────────────────────────────────────
+// Fetches live BTC/USDC balances from 3Commas and uses them as the authoritative
+// source for btc_ratio — more accurate than the engine's internal calculation
+// which can fall back to 50/50 when the pie_chart_data call fails.
+async function fetchBalance() {
+  try {
+    const r = await fetch('/account/balance');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.error) return;
+
+    const fmt = v => v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${Math.round(v).toLocaleString()}`;
+    document.getElementById('iBtcUsd').textContent  = d.btc_usd  > 0 ? fmt(d.btc_usd)  : '—';
+    document.getElementById('iUsdcUsd').textContent = d.usdc_usd > 0 ? fmt(d.usdc_usd) : '—';
+    document.getElementById('iTotalUsd').textContent = d.total_usd > 0 ? fmt(d.total_usd) : '—';
+
+    // Override btc_ratio from live balance when engine status has null/fallback value
+    if (!invOverrideActive && d.total_usd > 0) {
+      const livePct = (d.btc_usd / d.total_usd * 100).toFixed(1);
+      document.getElementById('invFill').style.width = livePct + '%';
+      document.getElementById('invPct').textContent  = livePct + '%';
+      document.getElementById('iBtcR').textContent   = livePct + '%';
+    }
+  } catch(e) {}
 }
 
 async function fetchEngineStatus() {
@@ -832,11 +863,13 @@ async function fetchMacro() {
 // ── INIT ─────────────────────────────────────────────────────────────────────
 pollStatus();
 loadBots();
+fetchBalance();
 fetchMacro();
 
-setInterval(pollStatus, 30000);
-setInterval(loadBots,  60000);
-setInterval(fetchMacro, 300000);
+setInterval(pollStatus,   30000);
+setInterval(loadBots,     60000);
+setInterval(fetchBalance, 60000);
+setInterval(fetchMacro,  300000);
 </script>
 </body>
 </html>
