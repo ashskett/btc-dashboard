@@ -14,6 +14,8 @@ from breakout import (
     proximity_alert,
     get_breakout_state,
     clear_breakout_state,
+    increment_active_cycles,
+    breakout_inner_ready,
 )
 from session import get_session
 from grid_logic import (
@@ -352,13 +354,27 @@ def run():
                     print(f"Rate limit reached — skipping exhaustion redeploy")
                 return   # redeploy done (or skipped) — don't fall through to bot-stop logic
 
-            # During active UP breakout: inner+mid off, outer stays running
-            # During active DOWN breakout: all bots off (already stopped at fire)
+            # During active UP breakout: inner+mid off, outer stays running.
+            # After INNER_REENTRY_CYCLES cycles with momentum fading (price still
+            # elevated), bring inner back online — mid stays off, outer stays on.
+            # Full exhaustion still fires later and triggers the normal grid redeploy.
+            # During active DOWN breakout: all bots off (capital protection).
             if _active_dir == "UP":
-                print(f"BREAKOUT_UP active — inner+mid paused, outer running")
-                for i, bot in enumerate(GRID_BOTS[:3]):
-                    tier_name = ["inner", "mid", "outer"][i]
-                    _act(bot, i >= 2, f"{tier_name} (breakout UP)")
+                increment_active_cycles()
+                _cycles = _bo_state.get("cycles_active", 0) + 1  # +1 = value after increment
+                _inner_ready = breakout_inner_ready(df)
+                if _inner_ready:
+                    print(f"BREAKOUT_UP active ({_cycles} cycles) — momentum fading, "
+                          f"restarting inner bot (mid still off, outer running)")
+                    for i, bot in enumerate(GRID_BOTS[:3]):
+                        tier_name = ["inner", "mid", "outer"][i]
+                        # inner (i=0) ON, mid (i=1) OFF, outer (i=2) ON
+                        _act(bot, i != 1, f"{tier_name} (breakout UP, inner reentry)")
+                else:
+                    print(f"BREAKOUT_UP active ({_cycles} cycles) — inner+mid paused, outer running")
+                    for i, bot in enumerate(GRID_BOTS[:3]):
+                        tier_name = ["inner", "mid", "outer"][i]
+                        _act(bot, i >= 2, f"{tier_name} (breakout UP)")
             else:
                 print(f"BREAKOUT_DOWN active — all bots off (capital protection)")
                 for bot in GRID_BOTS:
@@ -645,8 +661,9 @@ def run():
                 "dry_run":        DRY_RUN,
                 "tiers":          state.tiers,
                 # Breakout state
-                "breakout_active":     _bo_state.get("active"),
-                "breakout_fire_price": _bo_state.get("fire_price"),
+                "breakout_active":        _bo_state.get("active"),
+                "breakout_fire_price":    _bo_state.get("fire_price"),
+                "breakout_cycles_active": _bo_state.get("cycles_active", 0),
                 "proximity_alert":     _prox,
                 # Price target state
                 "price_target_active":  bool(_pt_state),

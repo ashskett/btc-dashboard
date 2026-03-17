@@ -72,6 +72,14 @@ PROXIMITY_ATR_MULT  = 1.0    # proximity alert when within ATR × this of grid e
 EXHAUSTION_AVG_MULT = 0.20   # 5-candle avg move < ATR×this → momentum stalling (was 0.05 — never triggered)
 EXHAUSTION_WINDOW   = 5      # candles to average for exhaustion check
 POST_CLEAR_COOLDOWN = 600    # seconds after exhaustion clear before spike layer can re-fire (2 engine cycles).
+
+# Delayed inner reentry during sustained BREAKOUT_UP
+# After INNER_REENTRY_CYCLES active cycles (price still elevated, momentum fading but not yet
+# fully exhausted), the inner bot is brought back online while mid stays off and outer keeps running.
+# This recovers fills during the consolidation phase before full exhaustion triggers a redeploy.
+INNER_REENTRY_CYCLES   = 3    # min cycles of active BREAKOUT_UP before inner is eligible (≈15 min)
+INNER_REENTRY_AVG_MULT = 0.5  # 5-candle avg move < ATR×this → momentum fading enough for inner reentry
+                               # (softer than EXHAUSTION_AVG_MULT=0.20; reentry fires before full stall)
                               # Prevents the exhaustion → immediate-re-fire loop: the spike layer sees the same
                               # elevated ATR/BB that triggered the original breakout and re-fires on the very
                               # next cycle before market conditions have changed.  Momentum layer is exempt —
@@ -117,6 +125,7 @@ def _load_state() -> dict:
             "consec_down":  0,
             "active":       None,   # None / "UP" / "DOWN"
             "fire_price":   None,
+            "cycles_active": 0,
         }
 
 
@@ -268,11 +277,12 @@ def _try_confirm_pending(df) -> str | None:
               f"(fire=${fire_price:,.0f}, now=${price_now:,.0f}, "
               f"reversed by ${abs(price_now - fire_price):,.0f}, "
               f"allowance=${margin:,.0f})")
-        s["active"]     = None
-        s["fire_price"] = None
-        s["consec_up"]  = 0
-        s["consec_down"] = 0
-        s["cleared_at"] = time.time()
+        s["active"]        = None
+        s["fire_price"]    = None
+        s["consec_up"]     = 0
+        s["consec_down"]   = 0
+        s["cycles_active"] = 0
+        s["cleared_at"]    = time.time()
         _save_state(s)
         return None
 
@@ -419,14 +429,14 @@ def breakout_exhausting(df) -> bool:
         if direction == "DOWN" and price > fire:
             print(f"Breakout DOWN cancelled — price ${price:,.0f} recovered above fire ${fire:,.0f}")
             s["active"] = None; s["fire_price"] = None
-            s["consec_up"] = 0; s["consec_down"] = 0
+            s["consec_up"] = 0; s["consec_down"] = 0; s["cycles_active"] = 0
             s["cleared_at"] = time.time()
             _save_state(s)
             return True
         if direction == "UP" and price < fire:
             print(f"Breakout UP cancelled — price ${price:,.0f} fell back below fire ${fire:,.0f}")
             s["active"] = None; s["fire_price"] = None
-            s["consec_up"] = 0; s["consec_down"] = 0
+            s["consec_up"] = 0; s["consec_down"] = 0; s["cycles_active"] = 0
             s["cleared_at"] = time.time()
             _save_state(s)
             return True
@@ -440,11 +450,12 @@ def breakout_exhausting(df) -> bool:
     stalling  = avg_move < atr * EXHAUSTION_AVG_MULT
 
     if stalling:
-        s["active"]      = None
-        s["fire_price"]  = None
-        s["consec_up"]   = 0
-        s["consec_down"] = 0
-        s["cleared_at"]  = time.time()
+        s["active"]        = None
+        s["fire_price"]    = None
+        s["consec_up"]     = 0
+        s["consec_down"]   = 0
+        s["cycles_active"] = 0
+        s["cleared_at"]    = time.time()
         _save_state(s)
 
     return stalling
@@ -482,5 +493,62 @@ def clear_breakout_state():
     _save_state({
         "consec_up": 0, "consec_down": 0,
         "active": None, "fire_price": None,
+        "cycles_active": 0,
         "cleared_at": time.time(),
     })
+
+
+def increment_active_cycles():
+    """
+    Increment cycles_active counter in breakout state.
+    Called each engine cycle while BREAKOUT_UP is confirmed active.
+    Used to gate the delayed inner-bot reentry check.
+    """
+    s = _load_state()
+    s["cycles_active"] = s.get("cycles_active", 0) + 1
+    _save_state(s)
+
+
+def breakout_inner_ready(df) -> bool:
+    """
+    Returns True when it is safe to re-enable the inner bot during a sustained
+    BREAKOUT_UP, before full exhaustion triggers a grid redeploy.
+
+    Conditions (all must hold):
+      1. cycles_active >= INNER_REENTRY_CYCLES  — breakout has been active long enough
+         to rule out a short squeeze / fake-out.  Default 3 cycles ≈ 15 minutes.
+      2. price >= fire_price  — still elevated.  If price has fallen back below the
+         original fire level the move has reversed; inner should stay off until the
+         full exhaustion path handles the redeploy.
+      3. 5-candle avg_move < ATR × INNER_REENTRY_AVG_MULT  — momentum is fading.
+         Default mult 0.5 (softer than the EXHAUSTION_AVG_MULT=0.20 full-stall check),
+         so reentry fires while the market is consolidating, not yet dead.
+
+    If all three hold the engine sets inner=ON, mid=OFF, outer=ON.
+    Full exhaustion (breakout_exhausting()) still fires later and triggers the
+    normal grid redeploy at the new price level.
+    """
+    s = _load_state()
+    if s.get("active") != "UP":
+        return False
+
+    cycles = s.get("cycles_active", 0)
+    if cycles < INNER_REENTRY_CYCLES:
+        return False
+
+    fire_price = s.get("fire_price") or 0.0
+    price_now  = float(df.close.iloc[-1])
+    if fire_price and price_now < fire_price:
+        # Price fell back below fire — not the right time; let exhaustion handle it
+        return False
+
+    if len(df) < EXHAUSTION_WINDOW + 1:
+        return False
+
+    moves = [
+        abs(df.close.iloc[-i] - df.close.iloc[-i - 1])
+        for i in range(1, EXHAUSTION_WINDOW + 1)
+    ]
+    avg_move = statistics.mean(moves)
+    atr      = float(df.atr.iloc[-1])
+    return avg_move < atr * INNER_REENTRY_AVG_MULT
