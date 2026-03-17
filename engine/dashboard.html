@@ -79,6 +79,7 @@
   .mp:first-child { padding-left:0; }
   .mp-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; white-space:nowrap; }
   .mp-val { font-size:11px; font-weight:700; color:var(--text); white-space:nowrap; }
+  .mp-ic  { font-size:10px; color:var(--muted); flex-shrink:0; transition:color .3s; }
   .macro-link {
     margin-left:auto; font-family:var(--ui); font-size:10px; font-weight:600;
     color:var(--accent); text-decoration:none; letter-spacing:.06em; text-transform:uppercase;
@@ -413,12 +414,13 @@
 </header>
 
 <div id="macro-bar">
-  <div class="mp"><span class="mp-lbl">F&amp;G</span><span class="mp-val" id="mpFng">—</span></div>
-  <div class="mp"><span class="mp-lbl">Macro Bias</span><span class="mp-val" id="mpBias">—</span></div>
-  <div class="mp"><span class="mp-lbl">W.RSI</span><span class="mp-val" id="mpRsi">—</span></div>
-  <div class="mp"><span class="mp-lbl">OBV</span><span class="mp-val" id="mpObv">—</span></div>
-  <div class="mp"><span class="mp-lbl">Funding</span><span class="mp-val" id="mpFund">—</span></div>
-  <div class="mp"><span class="mp-lbl">Liquidity</span><span class="mp-val" id="mpLiq">—</span></div>
+  <div class="mp"><span class="mp-ic" id="icFng">●</span><span class="mp-lbl">F&amp;G</span><span class="mp-val" id="mpFng">—</span></div>
+  <div class="mp"><span class="mp-ic" id="icBias">●</span><span class="mp-lbl">Macro Bias</span><span class="mp-val" id="mpBias">—</span></div>
+  <div class="mp"><span class="mp-ic" id="icRsi">●</span><span class="mp-lbl">W.RSI</span><span class="mp-val" id="mpRsi">—</span></div>
+  <div class="mp"><span class="mp-ic" id="icObv">●</span><span class="mp-lbl">OBV</span><span class="mp-val" id="mpObv">—</span></div>
+  <div class="mp"><span class="mp-ic" id="icFund">●</span><span class="mp-lbl">Funding</span><span class="mp-val" id="mpFund">—</span></div>
+  <div class="mp"><span class="mp-ic" id="icLiq">●</span><span class="mp-lbl">Liquidity</span><span class="mp-val" id="mpLiq">—</span></div>
+  <div class="mp"><span class="mp-ic" id="icLevel">●</span><span class="mp-lbl">$74k</span><span class="mp-val" id="mpLevel">—</span></div>
   <a href="/macro" target="_blank" class="macro-link">Full Macro Dashboard ↗</a>
 </div>
 
@@ -3959,6 +3961,7 @@ function _exitPtPickMode(){
 
 // ── Macro Indicator Strip ─────────────────────────────────────────────────
 (function macroStrip(){
+  const KEY_LEVEL = 74000; // ← update to match macro dashboard
   // RSI(14) over an array of closes
   function rsi14(c){
     if(c.length<15)return null;
@@ -3977,12 +3980,14 @@ function _exitPtPickMode(){
   }
   const sigCol=s=>s==='bull'?'#00e5a0':s==='bear'?'#ff4d6d':'#8892a4';
   function set(id,html,col){const e=document.getElementById(id);if(!e)return;e.innerHTML=html;if(col)e.style.color=col;}
+  function setIc(id,sig){const e=document.getElementById(id);if(!e)return;e.textContent=sig==='bull'?'▲':sig==='bear'?'▼':'●';e.style.color=sigCol(sig);}
 
   async function run(){
-    const [fng,fund,klines,dxyRaw,vixRaw]=await Promise.all([
+    const [fng,fund,klines,dailyKlines,dxyRaw,vixRaw]=await Promise.all([
       sf('https://api.alternative.me/fng/?limit=1'),
       sf('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1'),
       sf('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1w&limit=30'),
+      sf('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=30'),
       sf('https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d'),
       sf('https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=5d'),
     ]);
@@ -3991,6 +3996,7 @@ function _exitPtPickMode(){
     const fngScore = fng?.data?.[0] ? parseInt(fng.data[0].value) : null;
     const fngLbl   = fng?.data?.[0]?.value_classification ?? '';
     const fngSig   = fngScore!=null ? (fngScore<30?'bull':fngScore>65?'bear':'neutral') : 'neutral';
+    setIc('icFng', fngSig);
     if(fngScore!=null){
       const c=sigCol(fngSig);
       set('mpFng',`${fngScore} <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:${c}22;color:${c}">${fngLbl}</span>`);
@@ -3999,6 +4005,7 @@ function _exitPtPickMode(){
     // ── Funding Rate ──
     const rate    = fund?.[0]?.fundingRate!=null ? parseFloat(fund[0].fundingRate)*100 : null;
     const fundSig = rate!=null ? (rate<-0.005?'bull':rate>0.01?'bear':'neutral') : 'neutral';
+    setIc('icFund', fundSig);
     if(rate!=null){
       const ann=(rate*3*365), c=sigCol(fundSig);
       set('mpFund',`${rate>=0?'+':''}${rate.toFixed(4)}% <span style="font-size:9px;color:${c}">${ann>=0?'+':''}${ann.toFixed(1)}%pa</span>`,c);
@@ -4008,6 +4015,7 @@ function _exitPtPickMode(){
     const closes = klines?.map(c=>parseFloat(c[4]))??[];
     const rsiVal = rsi14(closes);
     const rsiSig = rsiVal!=null ? (rsiVal<40?'bull':rsiVal>65?'bear':'neutral') : 'neutral';
+    setIc('icRsi', rsiSig);
     if(rsiVal!=null){
       const c=sigCol(rsiSig);
       const lbl=rsiVal<30?'OVERSOLD':rsiVal>70?'OVERBOUGHT':rsiVal<40?'WEAK':rsiVal>65?'STRONG':'MID';
@@ -4036,6 +4044,7 @@ function _exitPtPickMode(){
       const c  = obvSig==='bull' ? '#00e5a0' : obvSig==='bear' ? '#ff4d6d' : '#8892a4';
       const lbl = obvSig==='bull' ? 'RISING' : obvSig==='bear' ? 'FALLING' : 'FLAT';
       const maTxt = aboveMA ? '↑MA' : '↓MA';
+      setIc('icObv', obvSig);
       set('mpObv',`<span style="color:${c};font-weight:700">${lbl}</span> <span style="font-size:9px;color:var(--muted)">${maTxt}</span>`);
     }
 
@@ -4046,6 +4055,7 @@ function _exitPtPickMode(){
     const biasSig   = bulls>=3?'bull':bears>=3?'bear':bulls>=2&&bears<=1?'bull':bears>=2&&bulls<=1?'bear':'neutral';
     const biasLabel = biasSig==='bull'?'BULLISH':biasSig==='bear'?'BEARISH':'NEUTRAL';
     const biasC = sigCol(biasSig);
+    setIc('icBias', biasSig);
     set('mpBias',`<span style="color:${biasC};font-weight:800">${biasLabel}</span> <span style="font-size:9px;color:var(--muted)">${bulls}↑${bears}↓</span>`);
 
     // ── Liquidity: DXY + VIX ──
@@ -4056,10 +4066,38 @@ function _exitPtPickMode(){
       const vixSig = vix ? (vix>25?'bear':vix<15?'bull':'neutral') : 'neutral';
       const regime = (dxySig==='bear'||vixSig==='bear') ? 'RED' : (dxySig==='bull'&&vixSig==='bull') ? 'GREEN' : 'AMBER';
       const rc = regime==='GREEN'?'#00e5a0':regime==='RED'?'#ff4d6d':'#ffab00';
+      const liqSig = regime==='GREEN'?'bull':regime==='RED'?'bear':'neutral';
+      setIc('icLiq', liqSig);
       let html=`<span style="font-weight:800;color:${rc}">${regime}</span>`;
       if(dxy!=null) html+=` <span style="font-size:9px;color:var(--muted)">DXY ${dxy.toFixed(1)}</span>`;
       if(vix!=null) html+=` <span style="font-size:9px;color:var(--muted)">VIX ${vix.toFixed(1)}</span>`;
       set('mpLiq',html);
+    }
+
+    // ── $74k Key Level ──
+    if(dailyKlines && dailyKlines.length >= 5){
+      const dlC = dailyKlines.map(c=>parseFloat(c[4]));
+      const dlL = dailyKlines.map(c=>parseFloat(c[3]));
+      const dlV = dailyKlines.map(c=>parseFloat(c[5]));
+      let consec = 0;
+      for(let i=dlC.length-1;i>=0;i--){ if(dlC[i]>KEY_LEVEL) consec++; else break; }
+      const vMA = dlV.length>=20 ? dlV.slice(-20).reduce((a,b)=>a+b,0)/20 : null;
+      const vRat = vMA ? dlV[dlV.length-1]/vMA : null;
+      let retest = false;
+      if(consec>=1){ for(const c of dailyKlines.slice(-15,-1)){ if(parseFloat(c[3])<=KEY_LEVEL*1.015&&parseFloat(c[4])>KEY_LEVEL){retest=true;break;} } }
+      const wklyClose = closes.length>0 ? closes[closes.length-1] : null;
+      const wklyAbove = wklyClose!=null ? wklyClose>KEY_LEVEL : false;
+      let klStatus, klSig;
+      if(consec>=3&&retest)      { klStatus='CONFIRMED'; klSig='bull'; }
+      else if(consec>=3)         { klStatus='HOLDING';   klSig='bull'; }
+      else if(consec>=1)         { klStatus=consec+'/3'; klSig='neutral'; }
+      else                       { klStatus='BELOW';     klSig='bear'; }
+      setIc('icLevel', klSig);
+      const kc = sigCol(klSig);
+      let klHtml = `<span style="color:${kc};font-weight:700">${klStatus}</span>`;
+      if(vRat!=null) klHtml+=` <span style="font-size:9px;color:var(--muted)">${vRat.toFixed(1)}×vol</span>`;
+      klHtml+=` <span style="font-size:9px;color:${wklyAbove?'#00e5a0':'#ff4d6d'}">${wklyAbove?'W↑':'W↓'}</span>`;
+      set('mpLevel', klHtml);
     }
   }
 
