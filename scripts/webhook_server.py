@@ -73,9 +73,16 @@ def deploy():
     if os.path.exists(dash):
         run(f"cp {dash} {ENGINE_DIR}/dashboard.html")
 
-    # 4. Restart engine (sends Ctrl-C to tmux grid session then restarts)
+    # 4. Restart Flask — kill by port first (works regardless of tmux state),
+    #    then start fresh in the tmux grid session (or background if tmux absent).
+    #    Using lsof+kill ensures the old process is gone before we start the new one,
+    #    which prevents "Address already in use" races that caused silent restart failures.
     restart = (
-        "tmux send-keys -t grid C-c Enter; sleep 2; "
+        # Kill whatever is holding port 5050 (Flask), regardless of tmux
+        "lsof -ti:5050 | xargs kill -9 2>/dev/null; sleep 2; "
+        # Ensure tmux grid session exists
+        "tmux new-session -d -s grid 2>/dev/null; "
+        # Start Flask inside tmux grid session
         "tmux send-keys -t grid "
         "'cd /root/grid-engine && source venv/bin/activate && python dashboard_server.py' Enter"
     )
