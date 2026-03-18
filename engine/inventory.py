@@ -284,6 +284,7 @@ def _calculate_inventory_live():
         raise ValueError(f"Unexpected pie_chart_data response: {str(assets)[:300]}")
 
     btc = 0.0
+    btc_value = 0.0
     quote_usd = 0.0
 
     for asset in assets:
@@ -294,17 +295,21 @@ def _calculate_inventory_live():
 
         if currency == "BTC":
             btc += amount
+            btc_value += usd_value  # use 3Commas valuation (reflects total incl. locked in bots)
 
         elif currency in QUOTE_CURRENCIES:
             quote_usd += usd_value
 
-    # Convert BTC to USD
+    # Fetch live price for cache/display purposes only (not used in ratio calculation)
     price_r = requests.get("https://api.coinbase.com/v2/prices/BTC-USD/spot")
     price_r.raise_for_status()
 
     btc_price = float(price_r.json()["data"]["amount"])
 
-    btc_value = btc * btc_price
+    # If 3Commas returned zero usd_value for BTC, fall back to live price calculation
+    if btc_value == 0 and btc > 0:
+        btc_value = btc * btc_price
+
     total = btc_value + quote_usd
 
     if total == 0:
@@ -332,7 +337,9 @@ def _calculate_inventory_live():
         zone = "IN BAND"
 
     print(
-        f"Inventory → BTC: {btc_ratio:.2%} | "
+        f"Inventory → BTC: {btc:.6f} (${btc_value:,.0f}) | "
+        f"USDC: ${quote_usd:,.0f} | "
+        f"Ratio: {btc_ratio:.2%} | "
         f"Target: {TARGET_BTC:.0%} | "
         f"Band: {LOWER_BAND:.0%}–{UPPER_BAND:.0%} | "
         f"Zone: {zone} | "
