@@ -111,9 +111,9 @@ def portfolio_snapshot() -> dict | None:
         return None
 
 
-TARGET_BTC = 0.55   # ideal BTC allocation
-LOWER_BAND = 0.45   # below here: grid tilts to buy
-UPPER_BAND = 0.62   # above here: grid tilts to sell
+TARGET_BTC = 0.40   # ideal BTC allocation
+LOWER_BAND = 0.30   # below here: grid tilts to buy
+UPPER_BAND = 0.47   # above here: grid tilts to sell
 TAPER_ZONE = 0.03   # ramp width on each side of the band edge
 
 
