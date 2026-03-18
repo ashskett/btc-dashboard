@@ -1056,6 +1056,7 @@ let dryRun=false;   // synced from engine status on first poll; default false (l
 let prevPrice=null;
 let prevPortfolioTotal=null;
 let connected=false;
+let _everConnected=false;  // suppress banner on initial load before first success
 
 // Infinite-scroll-left: track all loaded candle data so we can prepend older bars
 let _candleData = [];
@@ -1835,13 +1836,16 @@ function setConnected(ok){
   const dot = document.getElementById('dot');
   const banner = document.getElementById('connBanner');
   if(ok){
+    _everConnected=true;
     dot.style.background='var(--green)';
     dot.style.boxShadow='0 0 8px var(--green)';
     banner.classList.remove('show');
   } else {
     dot.style.background='var(--red)';
     dot.style.boxShadow='0 0 8px var(--red)';
-    banner.classList.add('show');
+    // Only show banner after first successful connection — suppresses false red
+    // on initial page load before the first status poll returns.
+    if(_everConnected) banner.classList.add('show');
   }
 }
 

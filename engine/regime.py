@@ -86,10 +86,11 @@ def trend_strength(price, trendline, atr):
                    consolidation at gap_ratio 4.8–5.8 — too conservative. 5.5x only
                    parks inner on a genuine acceleration, not normal ranging drift.
 
-    trending_down: price < trendline - 1.5×ATR — meaningful downside pressure.
-                   1.5x is tight enough to catch real dumps but the hysteresis
-                   in detect_regime already filters single-candle noise, so these
-                   two layers work together rather than duplicating each other.
+    trending_down: price < trendline - 2.0×ATR — meaningful downside pressure.
+                   Raised from 1.5× (Mar 18): -1.5× fired too aggressively on
+                   normal pullbacks when the trendline was slightly optimistic.
+                   The TREND_DOWN hysteresis (2-cycle, ATR×0.15) already guards
+                   real downtrends; -2.0× avoids shutting inner off unnecessarily.
 
     Design principle: bots stay ON unless there is strong, confirmed evidence
     they are fighting the market. A false positive (unnecessary shutdown) costs
@@ -104,7 +105,7 @@ def trend_strength(price, trendline, atr):
     return {
         "gap_ratio":     round(gap_ratio, 3),
         "trending_up":   bool(gap_ratio >  5.5),
-        "trending_down": bool(gap_ratio < -1.5),
+        "trending_down": bool(gap_ratio < -2.0),
     }
 
 
@@ -116,34 +117,47 @@ def compression_exit_fast(df_5m, atr_1h):
     justify exiting compression immediately — without waiting for the
     1H BB/ATR to catch up (which takes 1-3 hours).
 
-    Triggers on either:
-      (a) ATR expansion: 5m ATR > 1.5× its own rolling mean
-          (volatility picked up on short timeframe)
-      (b) Price run: abs move over last 6 5m-candles (30 min) > 0.5× 1H ATR
-          (price already travelled half a normal 1H range in under 30 min)
+    Triggers on any of:
+      (a) Single large-candle body > 0.4× 1H ATR — fires within one engine cycle
+      (b) Volume spike: last 5m candle volume > 2.5× rolling 20-period mean
+      (c-1) ATR expansion: 5m ATR > 1.3× its own rolling mean (was 1.5×)
+      (c-2) Price run: abs move over last 6 5m-candles > 0.35× 1H ATR (was 0.5×)
 
-    Both thresholds are deliberately conservative so we don't false-exit
-    on normal noise, only genuine directional moves.
+    (a) is highest priority — a single decisive candle exits compression in <5 min.
+    (b) catches high-conviction moves on thin-candle structure.
+    (c) lowered thresholds ensure the rolling checks don't lag behind the move.
     """
     if df_5m is None or len(df_5m) < 14:
         return False
 
     import ta as _ta
-    atr_5m = _ta.volatility.average_true_range(
-        df_5m["high"], df_5m["low"], df_5m["close"], window=14
-    ).iloc[-1]
-    atr_5m_mean = _ta.volatility.average_true_range(
-        df_5m["high"], df_5m["low"], df_5m["close"], window=14
-    ).mean()
 
-    # (a) Short-term ATR expansion
-    if atr_5m_mean > 0 and atr_5m > atr_5m_mean * 1.5:
+    # (a) Single large-candle body trigger
+    if atr_1h and atr_1h > 0:
+        candle_body = abs(df_5m["close"].iloc[-1] - df_5m["open"].iloc[-1])
+        if candle_body > atr_1h * 0.4:
+            return True
+
+    # (b) Volume spike trigger
+    if len(df_5m) >= 20:
+        vol_mean = df_5m["volume"].rolling(20).mean().iloc[-1]
+        if vol_mean > 0 and df_5m["volume"].iloc[-1] > vol_mean * 2.5:
+            return True
+
+    atr_series = _ta.volatility.average_true_range(
+        df_5m["high"], df_5m["low"], df_5m["close"], window=14
+    )
+    atr_5m = atr_series.iloc[-1]
+    atr_5m_mean = atr_series.mean()
+
+    # (c-1) Short-term ATR expansion (lowered from 1.5× to 1.3×)
+    if atr_5m_mean > 0 and atr_5m > atr_5m_mean * 1.3:
         return True
 
-    # (b) Significant price run in last 30 minutes (6 × 5m candles)
+    # (c-2) Significant price run in last 30 minutes (lowered from 0.5× to 0.35×)
     if len(df_5m) >= 6 and atr_1h and atr_1h > 0:
         move_30m = abs(df_5m["close"].iloc[-1] - df_5m["close"].iloc[-6])
-        if move_30m > atr_1h * 0.5:
+        if move_30m > atr_1h * 0.35:
             return True
 
     return False
