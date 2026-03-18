@@ -39,6 +39,26 @@ from threecommas_dca import (
     estimate_max_exposure,
 )
 
+# ── One-shot server fix (remove after first run) ──────────────────────────
+# If fix_server.py is present (deployed by webhook), spawn it as a fully
+# detached process, then remove it so it only ever runs once.  fix_server.py
+# kills the old Flask process by port, copies the new webhook_server.py into
+# place, restarts the webhook, and starts fresh Flask — all without needing SSH.
+import subprocess as _subprocess, sys as _sys
+_fix_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fix_server.py")
+if os.path.exists(_fix_path):
+    try:
+        _subprocess.Popen(
+            [_sys.executable, _fix_path, str(os.getpid())],
+            start_new_session=True,
+            close_fds=True,
+        )
+        os.remove(_fix_path)
+        print("[engine] fix_server.py spawned — server restart in ~5s", flush=True)
+    except Exception as _fe:
+        print(f"[engine] fix_server.py spawn failed: {_fe}", flush=True)
+# ── End one-shot fix ──────────────────────────────────────────────────────
+
 DRY_RUN = False
 MAX_ACTIONS_PER_HOUR = 3
 
