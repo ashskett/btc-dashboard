@@ -54,12 +54,12 @@ BREAKOUT_MAX_AGE = 4 * 3600   # auto-expire active breakout state after 4 hours
 
 # ── Tuning constants ───────────────────────────────────────────────────────────
 MOMENTUM_STREAK     = 4      # consecutive same-direction closes required
-MOMENTUM_ATR_MULT   = 2.5    # total move over those N bars must exceed ATR × this
-                              # 1.5 fired on a 4H $455 grind (1.71×ATR, 0.7% move) —
-                              # inner grid half-width is ~2.7×ATR so price hadn't even
-                              # threatened the grid boundary. 2.5 requires ~$755 at current
-                              # ATR; a normal ranging day won't reach it. Mar 12-13 $3,392
-                              # dump (~8×ATR total) fires with ease.
+MOMENTUM_ATR_MULT   = 3.5    # total move over those N bars must exceed ATR × this
+                              # 2.5 was firing on normal ~$600-800 range oscillations
+                              # (Mar 18 false-positive loop: bots stopped 3h in a clean RANGE).
+                              # 3.5 requires ~$1,050 at current ATR; filters ranging noise
+                              # while still catching real dumps — Mar 12-13 $3,392 dump
+                              # (~8×ATR total) fires with ease at any threshold below 8.
 VOLATILITY_MULT     = 1.7    # ATR spike multiplier (was 1.8, tested 1.5)
 BB_MULT             = 2.0    # BB width spike multiplier (unchanged)
 SPIKE_UP_MIN_MOVE   = 4.0    # Volatility-spike UP requires price to have moved at least
