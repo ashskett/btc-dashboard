@@ -111,10 +111,58 @@ def portfolio_snapshot() -> dict | None:
         return None
 
 
-TARGET_BTC = 0.40   # ideal BTC allocation
-LOWER_BAND = 0.30   # below here: grid tilts to buy
-UPPER_BAND = 0.47   # above here: grid tilts to sell
-TAPER_ZONE = 0.03   # ramp width on each side of the band edge
+# ── Inventory band settings ───────────────────────────────────────────────────
+# Defaults — overridden by inventory_settings.json when present.
+# Edit via the dashboard Inventory → Band Settings panel, or POST /inventory/settings.
+_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_settings.json")
+
+_DEFAULT_SETTINGS = {
+    "target_btc":  0.40,   # ideal BTC allocation
+    "lower_band":  0.30,   # below here: grid tilts to buy
+    "upper_band":  0.47,   # above here: grid tilts to sell
+    "taper_zone":  0.03,   # ramp width on each side of the band edge
+}
+
+# Module-level fallbacks — kept for backwards compatibility with any code that
+# imports these names directly.  Always use get_inventory_settings() at call time
+# so dashboard changes take effect without an engine restart.
+TARGET_BTC = _DEFAULT_SETTINGS["target_btc"]
+LOWER_BAND = _DEFAULT_SETTINGS["lower_band"]
+UPPER_BAND = _DEFAULT_SETTINGS["upper_band"]
+TAPER_ZONE = _DEFAULT_SETTINGS["taper_zone"]
+
+
+def get_inventory_settings() -> dict:
+    """Return current band settings, merging file overrides over defaults."""
+    try:
+        if os.path.exists(_SETTINGS_FILE):
+            saved = json.load(open(_SETTINGS_FILE))
+            return {**_DEFAULT_SETTINGS, **saved}
+    except Exception as e:
+        print(f"Warning: could not load inventory_settings.json: {e}")
+    return dict(_DEFAULT_SETTINGS)
+
+
+def save_inventory_settings(settings: dict) -> dict:
+    """
+    Validate and persist band settings.  Returns the saved dict.
+    Raises ValueError on bad values so the caller can return a 400.
+    """
+    target = float(settings.get("target_btc", _DEFAULT_SETTINGS["target_btc"]))
+    lower  = float(settings.get("lower_band",  _DEFAULT_SETTINGS["lower_band"]))
+    upper  = float(settings.get("upper_band",  _DEFAULT_SETTINGS["upper_band"]))
+    taper  = float(settings.get("taper_zone",  _DEFAULT_SETTINGS["taper_zone"]))
+
+    if not (0.0 < lower < upper < 1.0):
+        raise ValueError(f"lower_band ({lower}) must be < upper_band ({upper}), both in (0,1)")
+    if not (lower <= target <= upper):
+        raise ValueError(f"target_btc ({target}) must be within [lower_band, upper_band]")
+    if not (0.001 <= taper <= 0.15):
+        raise ValueError(f"taper_zone ({taper}) must be between 0.001 and 0.15")
+
+    data = {"target_btc": target, "lower_band": lower, "upper_band": upper, "taper_zone": taper}
+    json.dump(data, open(_SETTINGS_FILE, "w"), indent=2)
+    return data
 
 
 def _signed_request(method: str, path: str, body=None) -> requests.Response:
@@ -157,17 +205,23 @@ def _calculate_skew(btc_ratio: float) -> float:
     Eliminates the 0.10 cliff-edge jump that previously caused the grid
     tilt to flip on a ~$50 BTC price move crossing the band boundary.
     """
-    if LOWER_BAND <= btc_ratio <= UPPER_BAND:
+    s = get_inventory_settings()
+    target = s["target_btc"]
+    lower  = s["lower_band"]
+    upper  = s["upper_band"]
+    taper_zone = s["taper_zone"]
+
+    if lower <= btc_ratio <= upper:
         return 0.0
 
-    if btc_ratio < LOWER_BAND:
-        distance  = LOWER_BAND - btc_ratio           # positive, grows as ratio falls
-        taper     = min(distance / TAPER_ZONE, 1.0)  # 0→1 over TAPER_ZONE width
-        full_skew = btc_ratio - TARGET_BTC            # negative here
+    if btc_ratio < lower:
+        distance  = lower - btc_ratio
+        taper     = min(distance / taper_zone, 1.0)
+        full_skew = btc_ratio - target            # negative here
     else:
-        distance  = btc_ratio - UPPER_BAND            # positive, grows as ratio rises
-        taper     = min(distance / TAPER_ZONE, 1.0)
-        full_skew = btc_ratio - TARGET_BTC            # positive here
+        distance  = btc_ratio - upper
+        taper     = min(distance / taper_zone, 1.0)
+        full_skew = btc_ratio - target            # positive here
 
     return max(-MAX_SKEW, min(MAX_SKEW, full_skew * taper))
 
@@ -325,13 +379,15 @@ def _calculate_inventory_live():
     skew = _calculate_skew(btc_ratio)
 
     # Zone label for debug output
-    if btc_ratio < LOWER_BAND - TAPER_ZONE:
+    s = get_inventory_settings()
+    lb, ub, tz = s["lower_band"], s["upper_band"], s["taper_zone"]
+    if btc_ratio < lb - tz:
         zone = "BELOW TAPER"
-    elif btc_ratio < LOWER_BAND:
+    elif btc_ratio < lb:
         zone = "LOWER TAPER"
-    elif btc_ratio > UPPER_BAND + TAPER_ZONE:
+    elif btc_ratio > ub + tz:
         zone = "ABOVE TAPER"
-    elif btc_ratio > UPPER_BAND:
+    elif btc_ratio > ub:
         zone = "UPPER TAPER"
     else:
         zone = "IN BAND"
@@ -340,8 +396,8 @@ def _calculate_inventory_live():
         f"Inventory → BTC: {btc:.6f} (${btc_value:,.0f}) | "
         f"USDC: ${quote_usd:,.0f} | "
         f"Ratio: {btc_ratio:.2%} | "
-        f"Target: {TARGET_BTC:.0%} | "
-        f"Band: {LOWER_BAND:.0%}–{UPPER_BAND:.0%} | "
+        f"Target: {s['target_btc']:.0%} | "
+        f"Band: {lb:.0%}–{ub:.0%} | "
         f"Zone: {zone} | "
         f"Skew: {skew:+.4f}"
     )

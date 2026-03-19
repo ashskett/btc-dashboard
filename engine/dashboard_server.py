@@ -864,6 +864,21 @@ def inventory_override():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Inventory band settings ─────────────────────────────
+@app.route("/inventory/settings", methods=["GET", "POST"])
+def inventory_settings():
+    try:
+        from inventory import get_inventory_settings, save_inventory_settings
+        if request.method == "GET":
+            return jsonify(get_inventory_settings())
+        data = save_inventory_settings(request.json)
+        return jsonify({"ok": True, **data})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Inventory status / debug ─────────────────────────────
 @app.route("/inventory/status")
 def inventory_status():

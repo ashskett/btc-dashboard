@@ -553,6 +553,41 @@
       <button class="cbtn" onclick="applyInvOverride()">Apply Override</button>
       <button class="cbtn on-r" id="clearInvBtn" style="display:none;" onclick="clearInvOverride()">Clear</button>
     </div>
+    <div class="hr"></div>
+    <span class="ctl-lbl">Band Settings</span>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;">
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">TARGET BTC %</div>
+        <input type="number" id="bsTarget" min="1" max="99" step="1" value="40"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:var(--accent);
+          font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:5px 6px;border-radius:4px;box-sizing:border-box;">
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">TAPER ZONE %</div>
+        <input type="number" id="bsTaper" min="0.5" max="15" step="0.5" value="3"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:var(--fg);
+          font-family:'Space Mono',monospace;font-size:11px;padding:5px 6px;border-radius:4px;box-sizing:border-box;">
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">LOWER BAND %</div>
+        <input type="number" id="bsLower" min="1" max="99" step="1" value="30"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
+          font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:5px 6px;border-radius:4px;box-sizing:border-box;">
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">UPPER BAND %</div>
+        <input type="number" id="bsUpper" min="1" max="99" step="1" value="47"
+          style="width:100%;background:#080c10;border:1px solid #243044;color:var(--red);
+          font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:5px 6px;border-radius:4px;box-sizing:border-box;">
+      </div>
+    </div>
+    <div style="font-size:9px;color:var(--muted);margin-top:5px;margin-bottom:6px;line-height:1.5;">
+      Skew = 0 inside band. Ramps ±skew outside over taper zone.<br>
+      Changes take effect next engine cycle — no restart needed.
+    </div>
+    <div class="btn-row">
+      <button class="cbtn" onclick="saveBandSettings()" style="border-color:var(--accent);color:var(--accent);">Save Band Settings</button>
+    </div>
   </div>
 
   <!-- MASTER CONTROLS -->
@@ -1736,6 +1771,37 @@ async function setMode(mode){
 
 
 
+// ── BAND SETTINGS ────────────────────────────────────────
+
+async function loadBandSettings(){
+  try{
+    const r = await fetch(`${API}/inventory/settings`);
+    const d = await r.json();
+    if(d.error) return;
+    document.getElementById('bsTarget').value = Math.round(d.target_btc * 100);
+    document.getElementById('bsLower').value  = Math.round(d.lower_band  * 100);
+    document.getElementById('bsUpper').value  = Math.round(d.upper_band  * 100);
+    document.getElementById('bsTaper').value  = +(d.taper_zone * 100).toFixed(1);
+  } catch(e){ console.warn('Could not load band settings:', e); }
+}
+
+async function saveBandSettings(){
+  const target = parseFloat(document.getElementById('bsTarget').value) / 100;
+  const lower  = parseFloat(document.getElementById('bsLower').value)  / 100;
+  const upper  = parseFloat(document.getElementById('bsUpper').value)  / 100;
+  const taper  = parseFloat(document.getElementById('bsTaper').value)  / 100;
+  try{
+    const r = await fetch(`${API}/inventory/settings`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ target_btc: target, lower_band: lower, upper_band: upper, taper_zone: taper })
+    });
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    toast(`Band settings saved — target ${Math.round(target*100)}%, band ${Math.round(lower*100)}%–${Math.round(upper*100)}%`, 'ok');
+  } catch(e){ toast(`Error: ${e.message}`, 'err'); }
+}
+
 // ── BREAKOUT CLEAR ───────────────────────────────────────
 async function clearBreakout(){
   try{
@@ -2800,6 +2866,7 @@ pollStatus();
 loadBots();
 loadFills();
 loadOverrideState();
+loadBandSettings();
 loadBotIds();
 pollEngineProc();
 loadTrendlines();
