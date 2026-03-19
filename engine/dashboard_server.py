@@ -1587,31 +1587,14 @@ def deploy_endpoint():
 
 
 if __name__ == "__main__":
-    # ── Startup self-update ────────────────────────────────────────────────────
-    # Download the latest dashboard_server.py from the canonical branch and
-    # restart via os.execv if it differs from the running file.  This makes
-    # every Flask restart self-healing: even if an old webhook deploys an older
-    # dashboard_server.py, the next startup immediately replaces it with the
-    # correct version without any manual intervention.
-    def _self_update():
-        import urllib.request as _ur, hashlib as _hs
-        _url = f"{_DEPLOY_BASE}/dashboard_server.py"
-        _self_path = os.path.abspath(__file__)
-        try:
-            with _ur.urlopen(_url, timeout=15) as _r:
-                _remote = _r.read()
-            with open(_self_path, "rb") as _f:
-                _local = _f.read()
-            if _remote != _local:
-                print(f"[startup] New dashboard_server.py available — updating and restarting...", flush=True)
-                _tmp = _self_path + ".new"
-                with open(_tmp, "wb") as _f:
-                    _f.write(_remote)
-                os.replace(_tmp, _self_path)
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-        except Exception as _e:
-            print(f"[startup] self-update check failed (continuing with current version): {_e}", flush=True)
-    _self_update()
+    # Startup self-update removed.
+    # It created a CDN race condition: GitHub's Fastly CDN can serve stale
+    # content for several minutes after a push.  The self-update would then
+    # download the old version, overwrite the freshly-deployed file, and
+    # restart — silently reverting every deploy.
+    #
+    # The /deploy endpoint (POST /deploy?token=grid-deploy-2026) is the
+    # authoritative update mechanism and is unaffected by this change.
 
     # Auto-start engine on server startup
     if not _engine_running():

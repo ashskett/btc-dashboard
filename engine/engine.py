@@ -756,16 +756,17 @@ def run():
         if state.regime is not None:
             _prev_regime = state.regime
 
-schedule.every(5).minutes.do(run)
+if __name__ == "__main__":
+    schedule.every(5).minutes.do(run)
 
-# Run once immediately
-run()
+    # Run once immediately on startup
+    run()
 
-print("Engine running...")
+    print("Engine running...")
 
-try:
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-except KeyboardInterrupt:
-    print("\nEngine stopped safely.")
+    try:
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nEngine stopped safely.")
