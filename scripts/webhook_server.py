@@ -12,7 +12,20 @@ import subprocess
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "grid-engine-deploy")
+def _load_secret():
+    """Read WEBHOOK_SECRET from .env file first (beats systemd override.conf), then env."""
+    env_file = "/root/grid-engine/.env"
+    try:
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("WEBHOOK_SECRET=") and not line.startswith("#"):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return os.environ.get("WEBHOOK_SECRET", "grid-engine-deploy")
+
+WEBHOOK_SECRET = _load_secret()
 DEPLOY_BRANCH  = os.environ.get("DEPLOY_BRANCH", "claude/grid-engine-chat-review-hEEGu")
 REPO_DIR = "/root/btc-dashboard"
 ENGINE_DIR = "/root/grid-engine"
