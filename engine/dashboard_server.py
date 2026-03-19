@@ -525,6 +525,80 @@ def redeploy_bot_endpoint(bot_id):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ── Force redeploy all bots at current price ──────────────
+@app.route("/grid/force-redeploy", methods=["POST"])
+def force_redeploy_all():
+    """Force stop, re-range, and restart all grid bots using the latest engine status tiers.
+    Resets grid_state.json center to the current price so drift detection stays accurate."""
+    try:
+        status_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), STATUS_FILE)
+        with open(status_path) as f:
+            status = json.load(f)
+
+        tiers      = status.get("tiers", [])
+        price      = status.get("price")
+        grid_width = status.get("grid_width")
+
+        if not tiers or not price:
+            return jsonify({"ok": False, "error": "No tier data in engine status yet"}), 503
+
+        ids = [b.strip() for b in os.getenv("GRID_BOT_IDS", "").split(",") if b.strip()]
+        if not ids:
+            return jsonify({"ok": False, "error": "GRID_BOT_IDS not configured"}), 503
+
+        results = []
+        for i, bot_id in enumerate(ids[:3]):
+            tier_idx = min(i, len(tiers) - 1)
+            tier     = tiers[tier_idx]
+            lower    = round(float(tier["grid_low"]),  2)
+            upper    = round(float(tier["grid_high"]), 2)
+            levels   = int(tier["levels"])
+
+            r = signed_request("GET", f"/ver1/grid_bots/{bot_id}")
+            if r.status_code != 200:
+                results.append({"bot_id": bot_id, "ok": False, "error": f"GET {r.status_code}"})
+                continue
+            current  = r.json()
+            orig_qty = float(current.get("quantity_per_grid") or 0)
+
+            signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
+            time.sleep(2)
+
+            patch = {
+                "name":              current.get("name", f"Grid Bot {bot_id}"),
+                "upper_price":       upper,
+                "lower_price":       lower,
+                "grids_quantity":    levels,
+                "quantity_per_grid": orig_qty,
+                "grid_type":         current.get("grid_type", "arithmetic"),
+                "ignore_warnings":   True,
+            }
+            rp = signed_request("PATCH", f"/ver1/grid_bots/{bot_id}/manual", body=patch)
+            if rp.status_code not in (200, 201):
+                signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
+                results.append({"bot_id": bot_id, "ok": False, "error": f"PATCH {rp.status_code}: {rp.text[:200]}"})
+                continue
+
+            time.sleep(1)
+            signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
+            results.append({
+                "bot_id": bot_id,
+                "ok":     True,
+                "tier":   tier["name"],
+                "lower":  lower,
+                "upper":  upper,
+                "levels": levels,
+            })
+
+        # Reset grid center to current price so drift detection stays accurate
+        from grid_logic import update_grid_center
+        update_grid_center(price, grid_width=grid_width)
+
+        return jsonify({"ok": True, "price": price, "center": price, "bots": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── Account balance + capital allocation ─────────────────
 _balance_cache = {"data": None, "ts": 0.0}
 

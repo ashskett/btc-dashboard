@@ -136,9 +136,10 @@ MIN_BTC = 0.20   # hard stop — staggered below inventory.py LOWER_BAND (0.55)
 
 
 _last_run_ts = 0
+_prev_regime  = None   # regime from previous cycle — detects transitions for redeploy
 
 def run():
-    global _last_run_ts
+    global _last_run_ts, _prev_regime
     now = time.time()
     if now - _last_run_ts < 240:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
@@ -659,9 +660,35 @@ def run():
                 print("TREND_UP — all bots running")
             elif state.compression:
                 print("Mild compression — all bots running (compression not confirmed)")
-            for i, bot in enumerate(GRID_BOTS):
-                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
-                _act(bot, True, tier_name)
+
+            # Regime-change redeploy: if we're transitioning from a forced-stop regime
+            # (TREND_DOWN / COMPRESSION), bots may be deployed at a stale price level
+            # (or manually restarted at the wrong center).  Force a full redeploy at
+            # current price on the first RANGE/TREND_UP cycle after the transition.
+            _stopped_regimes = ("TREND_DOWN", "COMPRESSION")
+            if _prev_regime in _stopped_regimes and not DRY_RUN:
+                print(f"Regime transition {_prev_regime} → {state.regime} — "
+                      f"forcing grid redeploy at ${state.price:,.0f} "
+                      f"(bots may be at stale center from stopped period)")
+                if _can_act():
+                    _record_action()
+                    redeploy_all_bots(GRID_BOTS, state.tiers)
+                    update_grid_center(state.price, grid_width=state.grid_width)
+                else:
+                    print(f"  Rate limit reached — falling back to start_bot on regime transition")
+                    for i, bot in enumerate(GRID_BOTS):
+                        tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                        _act(bot, True, tier_name)
+            elif _prev_regime in _stopped_regimes and DRY_RUN:
+                print(f"[SIMULATION] Regime transition {_prev_regime} → {state.regime} — "
+                      f"would force redeploy at ${state.price:,.0f}")
+                for i, bot in enumerate(GRID_BOTS):
+                    tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                    _act(bot, True, tier_name)
+            else:
+                for i, bot in enumerate(GRID_BOTS):
+                    tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                    _act(bot, True, tier_name)
 
     finally:
         # ===============================
@@ -724,6 +751,10 @@ def run():
                         f.write(json.dumps(snap) + "\n")
                 except Exception as _e:
                     print(f"Warning: could not write portfolio_log.jsonl: {_e}")
+
+        # Track regime for transition detection on next cycle
+        if state.regime is not None:
+            _prev_regime = state.regime
 
 schedule.every(5).minutes.do(run)
 
