@@ -134,6 +134,98 @@ GRID_BOTS = [bot.strip() for bot in os.getenv("GRID_BOT_IDS", "").split(",") if 
 MAX_BTC = 0.80   # hard stop — staggered above inventory.py UPPER_BAND (0.72)
 MIN_BTC = 0.20   # hard stop — staggered below inventory.py LOWER_BAND (0.55)
 
+# ─── Post-redeploy fill-flood guard ───────────────────────────────────────────
+# When the grid recentres at the wrong time (local top or bottom), 3Commas
+# immediately initialises the new grid by filling every level between the centre
+# and the current price.  This can dump a large fraction of the portfolio in one
+# cycle (Mar 20: btc_ratio 25%→47% in 5 min; Mar 19: 16 sell fills in ~$22 range).
+#
+# Guard logic:
+#  1. After every redeploy, save redeploy_ts + btc_ratio_at_redeploy to state.
+#  2. For FLOOD_WINDOW_SECS after the redeploy, monitor btc_ratio each cycle.
+#  3. If |btc_ratio_now - btc_ratio_at_redeploy| ≥ FLOOD_BTC_THRESHOLD → flood.
+#  4. On flood: stop all bots, mark flood_active, wait FLOOD_COOLDOWN_SECS.
+#  5. After cooldown, clear state and resume normal logic.
+# ──────────────────────────────────────────────────────────────────────────────
+REDEPLOY_STATE_FILE   = "redeploy_state.json"
+FLOOD_WINDOW_SECS     = 900    # 15 min — monitor window after redeploy (3 cycles)
+FLOOD_BTC_THRESHOLD   = 0.10   # 10pp btc_ratio change = fill-flood signal
+FLOOD_COOLDOWN_SECS   = 1800   # 30 min bots-off after flood detected
+
+
+def _save_redeploy_state(price: float, btc_ratio: float) -> None:
+    """Record a redeploy event so the fill-flood guard can monitor the next cycles."""
+    state = {
+        "ts":                   time.time(),
+        "price":                price,
+        "btc_ratio_at_redeploy": btc_ratio,
+        "flood_active":         False,
+        "flood_ts":             None,
+    }
+    try:
+        with open(REDEPLOY_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print(f"Warning: could not save redeploy state: {e}")
+
+
+def _check_fill_flood(btc_ratio: float) -> tuple:
+    """
+    Check whether a fill-flood is active or should be triggered.
+
+    Returns:
+        ("active",  elapsed_secs)  — flood cooldown still running; stop bots
+        ("new",     delta)         — flood just triggered; stop bots + save state
+        (None,      None)          — no flood; proceed normally
+    """
+    if not os.path.exists(REDEPLOY_STATE_FILE):
+        return None, None
+    try:
+        with open(REDEPLOY_STATE_FILE) as f:
+            rs = json.load(f)
+    except Exception:
+        return None, None
+
+    now = time.time()
+
+    # If a flood was already triggered, check whether cooldown has expired
+    if rs.get("flood_active"):
+        elapsed = now - (rs.get("flood_ts") or now)
+        if elapsed < FLOOD_COOLDOWN_SECS:
+            return "active", elapsed
+        # Cooldown expired — clear flood flag and resume
+        rs["flood_active"] = False
+        try:
+            with open(REDEPLOY_STATE_FILE, "w") as f:
+                json.dump(rs, f)
+        except Exception:
+            pass
+        return None, None
+
+    # Not currently flooded — check if we're within the monitoring window
+    redeploy_ts = rs.get("ts")
+    if not redeploy_ts or (now - redeploy_ts) > FLOOD_WINDOW_SECS:
+        return None, None
+
+    # Within window: compare current btc_ratio to the baseline at redeploy
+    baseline = rs.get("btc_ratio_at_redeploy")
+    if baseline is None:
+        return None, None
+
+    delta = abs(btc_ratio - baseline)
+    if delta >= FLOOD_BTC_THRESHOLD:
+        rs["flood_active"] = True
+        rs["flood_ts"]     = now
+        rs["flood_delta"]  = round(delta, 4)
+        try:
+            with open(REDEPLOY_STATE_FILE, "w") as f:
+                json.dump(rs, f)
+        except Exception:
+            pass
+        return "new", delta
+
+    return None, None
+
 
 _last_run_ts = 0
 _prev_regime  = None   # regime from previous cycle — detects transitions for redeploy
@@ -185,11 +277,13 @@ def run():
     print("Checking market...")
 
     state = EngineState()
-    _bo_state  = {}      # populated in breakout section; needed in finally block
-    _pt_state  = None    # active price target (if any); needed in finally block
-    _prox      = None    # proximity alert direction; needed in finally block
-    TRENDLINE  = None    # declared early so finally block can always reference it
+    _bo_state     = {}      # populated in breakout section; needed in finally block
+    _pt_state     = None    # active price target (if any); needed in finally block
+    _prox         = None    # proximity alert direction; needed in finally block
+    TRENDLINE     = None    # declared early so finally block can always reference it
     _trendline_active = False
+    _flood_status = None    # fill-flood guard result; needed in finally block
+    _flood_val    = None
 
     try:
         # ===============================
@@ -343,6 +437,28 @@ def run():
             state.compression
         )
 
+        # ===============================
+        # POST-REDEPLOY FILL-FLOOD GUARD
+        # ===============================
+        _flood_status, _flood_val = _check_fill_flood(state.btc_ratio)
+        if _flood_status == "new":
+            print(f"FILL-FLOOD DETECTED — btc_ratio moved {_flood_val:.1%} since last redeploy "
+                  f"(threshold {FLOOD_BTC_THRESHOLD:.0%}). "
+                  f"Grid was placed at a bad price. Stopping all bots for "
+                  f"{FLOOD_COOLDOWN_SECS // 60} min.")
+            if not DRY_RUN:
+                for bot in GRID_BOTS:
+                    stop_bot(bot)
+            return
+        if _flood_status == "active":
+            remaining = FLOOD_COOLDOWN_SECS - _flood_val
+            print(f"FILL-FLOOD COOLDOWN — bots paused ({remaining / 60:.0f} min remaining). "
+                  f"Skipping normal logic.")
+            if not DRY_RUN:
+                for bot in GRID_BOTS:
+                    stop_bot(bot)
+            return
+
         # Helper: start or stop a bot (respects DRY_RUN)
         # Defined here so it's available to the breakout block AND tiered decisions below
         def _act(bot_id, should_run, label):
@@ -407,6 +523,7 @@ def run():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, state.tiers)
                     update_grid_center(state.price, grid_width=state.grid_width)
+                    _save_redeploy_state(state.price, state.btc_ratio)
                     clear_breakout_state()
                 else:
                     print(f"Rate limit reached — skipping exhaustion redeploy")
@@ -613,6 +730,7 @@ def run():
                 redeploy_all_bots(GRID_BOTS, state.tiers)
                 # Only advance center AFTER bots successfully redeployed
                 update_grid_center(state.price, grid_width=state.grid_width)
+                _save_redeploy_state(state.price, state.btc_ratio)
             else:
                 print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
                 print(f"  Bots remain on current ranges — center NOT advanced")
@@ -712,6 +830,7 @@ def run():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, state.tiers)
                     update_grid_center(state.price, grid_width=state.grid_width)
+                    _save_redeploy_state(state.price, state.btc_ratio)
                 else:
                     print(f"  Rate limit reached — falling back to start_bot on regime transition")
                     for i, bot in enumerate(GRID_BOTS):
@@ -756,6 +875,11 @@ def run():
                 "gap_ratio":      round(getattr(state, "gap_ratio", 0.0), 3),
                 "dry_run":        DRY_RUN,
                 "tiers":          state.tiers,
+                # Fill-flood guard state
+                "fill_flood_active": _flood_status in ("active", "new"),
+                "fill_flood_remaining_min": round(
+                    (FLOOD_COOLDOWN_SECS - (_flood_val or 0)) / 60, 1
+                ) if _flood_status == "active" else None,
                 # Breakout state
                 "breakout_active":        _bo_state.get("active"),
                 "breakout_fire_price":    _bo_state.get("fire_price"),
