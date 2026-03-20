@@ -325,7 +325,7 @@
   }
 
   /* SIDEBAR TABS */
-  .aside-tabs { display:grid; grid-template-columns:repeat(5,1fr); border-bottom:1px solid var(--border); flex-shrink:0; }
+  .aside-tabs { display:grid; grid-template-columns:repeat(3,1fr); border-bottom:1px solid var(--border); flex-shrink:0; }
   .aside-tab {
     padding:9px 2px; font-family:var(--ui); font-size:9.5px; font-weight:600;
     letter-spacing:.06em; text-transform:uppercase; color:var(--muted);
@@ -335,6 +335,7 @@
   }
   .aside-tab:hover { color:var(--text); }
   .aside-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .aside-tab:nth-child(n+4) { border-top:1px solid var(--border); }
   .aside-panel { display:none; flex:1; overflow-y:auto; overflow-x:hidden; flex-direction:column; min-height:0; }
   .aside-panel.active { display:flex; flex-direction:column; }
   .aside-panel::-webkit-scrollbar { width:3px; }
@@ -3543,8 +3544,11 @@ async function loadNotifications() {
       const cutoff = Date.now() - 30 * 60 * 1000;
       const hasCritical = evts.some(e => {
         if (e.severity !== 'critical') return false;
-        try { return new Date(e.ts.replace(' UTC','Z').replace(' ','T')) > cutoff; }
-        catch { return false; }
+        try {
+          const d = typeof e.ts === 'number' ? new Date(e.ts * 1000)
+                  : new Date(String(e.ts).replace(' UTC','Z').replace(' ','T'));
+          return d > cutoff;
+        } catch { return false; }
       });
       badge.style.display = hasCritical ? 'block' : 'none';
     }
@@ -3580,8 +3584,11 @@ async function _evtBackgroundPoll() {
     const cutoff = Date.now() - 30 * 60 * 1000;
     const hasCritical = evts.some(e => {
       if (e.severity !== 'critical') return false;
-      try { return new Date(e.ts.replace(' UTC','Z').replace(' ','T')) > cutoff; }
-      catch { return false; }
+      try {
+        const d = typeof e.ts === 'number' ? new Date(e.ts * 1000)
+                : new Date(String(e.ts).replace(' UTC','Z').replace(' ','T'));
+        return d > cutoff;
+      } catch { return false; }
     });
     badge.style.display = hasCritical ? 'block' : 'none';
   } catch { /* silent */ }
