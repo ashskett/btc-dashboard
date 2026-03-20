@@ -138,6 +138,43 @@ MIN_BTC = 0.20   # hard stop — staggered below inventory.py LOWER_BAND (0.55)
 _last_run_ts = 0
 _prev_regime  = None   # regime from previous cycle — detects transitions for redeploy
 
+
+def _drift_momentum_hot(df, gap_ratio, gap_threshold=4.0, move_pct=0.006):
+    """
+    Return True if price is in a hot momentum run that makes this a bad time
+    to redeploy the grid (we'd be chasing the move and filling buys at the top).
+
+    Conditions (both must be true):
+      1. gap_ratio > gap_threshold  — price is running hard away from the trendline
+      2. Last 2 hourly candles moved > move_pct in the same direction
+         (i.e. two consecutive up or down closes)
+
+    When True, the drift redeploy is suppressed for this cycle and retried
+    next cycle, by which time momentum may have exhausted.
+    """
+    if gap_ratio is None or abs(gap_ratio) <= gap_threshold:
+        return False
+    try:
+        closes = df["close"].iloc[-3:]  # 3 closes → 2 moves
+        move1 = closes.iloc[1] - closes.iloc[0]
+        move2 = closes.iloc[2] - closes.iloc[1]
+        price = closes.iloc[2]
+        # Same direction and each move exceeds move_pct threshold
+        if (move1 > 0 and move2 > 0 and
+                move1 > price * move_pct and move2 > price * move_pct):
+            print(f"  Drift momentum guard: gap_ratio={gap_ratio:.2f} + 2-candle up run "
+                  f"(+{move1:,.0f}, +{move2:,.0f}) — suppressing redeploy this cycle")
+            return True
+        if (move1 < 0 and move2 < 0 and
+                abs(move1) > price * move_pct and abs(move2) > price * move_pct):
+            print(f"  Drift momentum guard: gap_ratio={gap_ratio:.2f} + 2-candle down run "
+                  f"({move1:,.0f}, {move2:,.0f}) — suppressing redeploy this cycle")
+            return True
+    except Exception as e:
+        print(f"  Drift momentum guard check failed: {e}")
+    return False
+
+
 def run():
     global _last_run_ts, _prev_regime
     now = time.time()
@@ -547,7 +584,8 @@ def run():
         print(f"  Drift check: deploy_gw=${_drift_gw:,.0f}  current_gw=${state.grid_width:,.0f}"
               f"  dist=${abs(state.price - (state.center + (state.tilt or 0))):,.0f}"
               f"  threshold=${_drift_gw * 0.85:,.0f}")
-        if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0):
+        if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0) and \
+                not _drift_momentum_hot(df, state.gap_ratio):
             state.drift_triggered = True
             print("Grid drift detected")
             print("New Grid Parameters")
