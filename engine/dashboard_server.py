@@ -1346,6 +1346,91 @@ def log_clear():
     return jsonify({"ok": True})
 
 
+@app.route("/notifications")
+def notifications():
+    """
+    Walk engine_log.jsonl and extract discrete safety/state-change events.
+    Returns a list of events, newest first, max 100.
+    Each event: {ts, type, severity, msg}
+    severity: "critical" | "warning" | "info"
+    """
+    entries = read_log(1000)
+    events  = []
+    prev    = {}
+
+    for e in entries:
+        ts    = e.get("ts", "")
+        price = e.get("price") or 0
+
+        # Fill-flood guard
+        if e.get("fill_flood_active") and not prev.get("fill_flood_active"):
+            events.append({"ts": ts, "type": "FILL_FLOOD", "severity": "critical",
+                           "msg": f"Fill-flood: rapid fills after redeploy — bots paused 30 min  (${price:,.0f})"})
+
+        # Drift / grid recentre
+        if e.get("drift_triggered") and not prev.get("drift_triggered"):
+            old_center = prev.get("center") or 0
+            events.append({"ts": ts, "type": "DRIFT", "severity": "warning",
+                           "msg": f"Grid recentred ${old_center:,.0f} → ${price:,.0f}"})
+
+        # Breakout state
+        bo      = e.get("breakout_active")
+        prev_bo = prev.get("breakout_active")
+        if bo and bo != prev_bo:
+            if bo in ("UP", "DOWN"):
+                sev = "critical" if bo == "DOWN" else "warning"
+                events.append({"ts": ts, "type": f"BREAKOUT_{bo}", "severity": sev,
+                               "msg": f"Breakout {bo} detected at ${price:,.0f}"})
+            elif bo in ("PENDING_UP", "PENDING_DOWN"):
+                events.append({"ts": ts, "type": "BREAKOUT_PENDING", "severity": "info",
+                               "msg": f"Breakout {bo} — awaiting 1H confirm at ${price:,.0f}"})
+        if prev_bo in ("UP", "DOWN") and not bo:
+            events.append({"ts": ts, "type": "BREAKOUT_CLEAR", "severity": "info",
+                           "msg": f"Breakout {prev_bo} cleared at ${price:,.0f}"})
+
+        # Regime transition
+        reg      = e.get("regime")
+        prev_reg = prev.get("regime")
+        if reg and prev_reg and reg != prev_reg:
+            sev = {"TREND_DOWN": "warning", "COMPRESSION": "critical",
+                   "TREND_UP": "info", "RANGE": "info"}.get(reg, "info")
+            events.append({"ts": ts, "type": "REGIME", "severity": sev,
+                           "msg": f"Regime: {prev_reg} → {reg}  (${price:,.0f})"})
+
+        # Trending_up / trending_down changes
+        if e.get("trending_down") and not prev.get("trending_down"):
+            events.append({"ts": ts, "type": "TRENDING", "severity": "warning",
+                           "msg": f"Trending DOWN — inner+mid off  gap={e.get('gap_ratio',0):.1f}×ATR  (${price:,.0f})"})
+        if not e.get("trending_down") and prev.get("trending_down"):
+            events.append({"ts": ts, "type": "TRENDING", "severity": "info",
+                           "msg": f"Trending DOWN cleared  (${price:,.0f})"})
+        if e.get("trending_up") and not prev.get("trending_up"):
+            events.append({"ts": ts, "type": "TRENDING", "severity": "info",
+                           "msg": f"Trending UP — inner off  gap={e.get('gap_ratio',0):.1f}×ATR  (${price:,.0f})"})
+        if not e.get("trending_up") and prev.get("trending_up"):
+            events.append({"ts": ts, "type": "TRENDING", "severity": "info",
+                           "msg": f"Trending UP cleared  (${price:,.0f})"})
+
+        # Inventory mode
+        mode      = e.get("inventory_mode")
+        prev_mode = prev.get("inventory_mode")
+        if mode and prev_mode and mode != prev_mode:
+            sev = "critical" if mode in ("SELL_ONLY", "BUY_ONLY") else "info"
+            events.append({"ts": ts, "type": "INVENTORY", "severity": sev,
+                           "msg": f"Inventory: {prev_mode} → {mode}  BTC={e.get('btc_ratio',0):.1%}"})
+
+        # Price target fired
+        if e.get("price_target_active") and not prev.get("price_target_active"):
+            label = e.get("price_target_label") or "target"
+            events.append({"ts": ts, "type": "PRICE_TARGET", "severity": "info",
+                           "msg": f"Price target fired: \"{label}\"  (${price:,.0f})"})
+
+        prev = e
+
+    events.reverse()
+    return jsonify(events[:100])
+
+
 @app.route("/portfolio/log")
 def portfolio_log():
     """Return portfolio snapshots for P&L charting. ?limit=N (default all)."""

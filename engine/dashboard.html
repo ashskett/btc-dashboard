@@ -339,6 +339,21 @@
   .aside-panel.active { display:flex; flex-direction:column; }
   .aside-panel::-webkit-scrollbar { width:3px; }
   .aside-panel::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+  /* Event notification cards */
+  .evt-card { display:flex; flex-direction:column; gap:3px; padding:7px 9px 7px 11px;
+    background:var(--panel); border-radius:4px; border:1px solid var(--border);
+    border-left-width:3px; font-family:var(--mono); font-size:10px; }
+  .evt-card.critical { border-left-color:#f85149; }
+  .evt-card.warning  { border-left-color:#e3b341; }
+  .evt-card.info     { border-left-color:#388bfd; }
+  .evt-card .evt-top { display:flex; align-items:center; gap:6px; }
+  .evt-badge { font-size:8px; padding:1px 5px; border-radius:2px; font-weight:600;
+    letter-spacing:.04em; white-space:nowrap; }
+  .evt-badge.critical { background:#3d1f1f; color:#f85149; }
+  .evt-badge.warning  { background:#2d2208; color:#e3b341; }
+  .evt-badge.info     { background:#0d1e3a; color:#388bfd; }
+  .evt-msg { color:var(--text); font-size:10px; line-height:1.4; }
+  .evt-ts  { color:var(--muted); font-size:9px; margin-left:auto; white-space:nowrap; }
 
   /* BALANCE PANEL */
   .bal-bar-wrap { display:flex; height:18px; border-radius:4px; overflow:hidden; width:100%; background:var(--border); }
@@ -485,6 +500,7 @@
     <button class="aside-tab"        id="tabPnl"      onclick="switchTab('pnl')">P&amp;L</button>
     <button class="aside-tab"        id="tabDca"      onclick="switchTab('dca')">DCA</button>
     <button class="aside-tab"        id="tabBalance"  onclick="switchTab('balance');loadBalance()">Balance</button>
+    <button class="aside-tab"        id="tabEvents"   onclick="switchTab('events');loadNotifications()" style="position:relative">Events<span id="evtBadge" style="display:none;position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:#f85149;"></span></button>
   </div>
 
   <!-- ── CONTROLS PANEL (existing content) ── -->
@@ -997,6 +1013,19 @@
       <div id="balError" style="display:none;color:var(--red);font-size:10px;text-align:center;padding:12px 0;"></div>
     </div>
   </div><!-- end #panelBalance -->
+
+  <!-- ── EVENTS PANEL ── -->
+  <div class="aside-panel" id="panelEvents">
+    <div class="sec" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <span class="sec-label">ENGINE EVENTS</span>
+        <span id="evtAge" style="font-size:9px;color:var(--muted);font-family:var(--mono)"></span>
+      </div>
+      <div id="evtList" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:5px;">
+        <div style="color:var(--muted);font-size:11px;font-family:var(--mono);padding:8px 0;">Loading…</div>
+      </div>
+    </div>
+  </div><!-- end #panelEvents -->
 
 </aside>
 
@@ -2883,6 +2912,8 @@ loadDcaBots();
 setInterval(loadDcaBots, 60000);
 loadBalance();
 setInterval(loadBalance, 60000);
+_evtBackgroundPoll();
+setInterval(_evtBackgroundPoll, 60000);
 
 // ── DCA BOTS ─────────────────────────────────────────────────
 let _dcaBots = [];
@@ -3457,6 +3488,102 @@ function switchTab(tab) {
   document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
   document.getElementById('panel' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
   if (tab === 'pnl') loadPnlSummary();
+  if (tab === 'events') { document.getElementById('evtBadge').style.display = 'none'; }
+}
+
+// ── EVENT NOTIFICATIONS ───────────────────────────────────────────────────────
+const EVT_LABELS = {
+  FILL_FLOOD:      'FILL FLOOD',
+  DRIFT:           'DRIFT',
+  BREAKOUT_UP:     'BREAKOUT ↑',
+  BREAKOUT_DOWN:   'BREAKOUT ↓',
+  BREAKOUT_PENDING:'PENDING',
+  BREAKOUT_CLEAR:  'CLEARED',
+  REGIME:          'REGIME',
+  TRENDING:        'TREND',
+  INVENTORY:       'INVENTORY',
+  PRICE_TARGET:    'PRICE TGT',
+};
+
+function _evtRelTime(tsStr) {
+  if (!tsStr) return '';
+  try {
+    // ts format: "2026-03-20 08:13:00 UTC"
+    const d = new Date(tsStr.replace(' UTC','Z').replace(' ','T'));
+    const diff = Math.floor((Date.now() - d) / 1000);
+    if (diff < 60)  return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+    return `${Math.floor(diff/86400)}d ago`;
+  } catch { return tsStr.slice(11,16) || ''; }
+}
+
+let _evtPollTimer = null;
+
+async function loadNotifications() {
+  try {
+    const r = await fetch(`/notifications${TOKEN ? '?token='+TOKEN : ''}`);
+    if (!r.ok) throw new Error(r.status);
+    const evts = await r.json();
+
+    const list = document.getElementById('evtList');
+    const age  = document.getElementById('evtAge');
+    age.textContent = `updated ${new Date().toLocaleTimeString()}`;
+
+    if (!evts.length) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:11px;font-family:var(--mono);padding:8px 0;">No events yet</div>';
+      return;
+    }
+
+    // Badge: show red dot on tab if there are unseen critical events in last 30 min
+    const badge = document.getElementById('evtBadge');
+    const activeEventsTab = document.getElementById('tabEvents').classList.contains('active');
+    if (!activeEventsTab) {
+      const cutoff = Date.now() - 30 * 60 * 1000;
+      const hasCritical = evts.some(e => {
+        if (e.severity !== 'critical') return false;
+        try { return new Date(e.ts.replace(' UTC','Z').replace(' ','T')) > cutoff; }
+        catch { return false; }
+      });
+      badge.style.display = hasCritical ? 'block' : 'none';
+    }
+
+    list.innerHTML = evts.map(e => `
+      <div class="evt-card ${e.severity}">
+        <div class="evt-top">
+          <span class="evt-badge ${e.severity}">${EVT_LABELS[e.type] || e.type}</span>
+          <span class="evt-ts">${_evtRelTime(e.ts)}</span>
+        </div>
+        <div class="evt-msg">${e.msg}</div>
+      </div>`).join('');
+
+  } catch(err) {
+    document.getElementById('evtList').innerHTML =
+      `<div style="color:var(--muted);font-size:11px;font-family:var(--mono);">Error: ${err}</div>`;
+  }
+}
+
+// Auto-refresh notifications every 60s (badge check even when tab is not active)
+function _startEvtPoll() {
+  if (_evtPollTimer) clearInterval(_evtPollTimer);
+  _evtPollTimer = setInterval(loadNotifications, 60000);
+}
+// Silent background poll (only updates badge; doesn't re-render if tab not active)
+async function _evtBackgroundPoll() {
+  try {
+    const r = await fetch(`/notifications${TOKEN ? '?token='+TOKEN : ''}`);
+    if (!r.ok) return;
+    const evts = await r.json();
+    const badge = document.getElementById('evtBadge');
+    if (document.getElementById('tabEvents').classList.contains('active')) return;
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    const hasCritical = evts.some(e => {
+      if (e.severity !== 'critical') return false;
+      try { return new Date(e.ts.replace(' UTC','Z').replace(' ','T')) > cutoff; }
+      catch { return false; }
+    });
+    badge.style.display = hasCritical ? 'block' : 'none';
+  } catch { /* silent */ }
 }
 
 // ── P&L SIMULATION ───────────────────────────────────────────
