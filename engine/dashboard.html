@@ -3505,17 +3505,18 @@ const EVT_LABELS = {
   PRICE_TARGET:    'PRICE TGT',
 };
 
-function _evtRelTime(tsStr) {
-  if (!tsStr) return '';
+function _evtRelTime(ts) {
+  if (!ts) return '';
   try {
-    // ts format: "2026-03-20 08:13:00 UTC"
-    const d = new Date(tsStr.replace(' UTC','Z').replace(' ','T'));
+    // ts may be a Unix timestamp (number) or "2026-03-20 08:13:00 UTC" string
+    const d = typeof ts === 'number' ? new Date(ts * 1000)
+            : new Date(String(ts).replace(' UTC','Z').replace(' ','T'));
     const diff = Math.floor((Date.now() - d) / 1000);
-    if (diff < 60)  return `${diff}s ago`;
-    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+    if (diff < 60)   return `${diff}s ago`;
+    if (diff < 3600)  return `${Math.floor(diff/60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
     return `${Math.floor(diff/86400)}d ago`;
-  } catch { return tsStr.slice(11,16) || ''; }
+  } catch { return ''; }
 }
 
 let _evtPollTimer = null;
