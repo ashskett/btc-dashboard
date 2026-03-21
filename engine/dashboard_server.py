@@ -733,6 +733,21 @@ def bot_pnl():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/bots/fills/debug")
+def bot_fills_debug():
+    """Temporary: expose raw 3Commas profits + market_orders for first bot."""
+    ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
+    if not ids:
+        return jsonify({"error": "no bots"})
+    bid = ids[0]
+    r1 = signed_request("GET", f"/ver1/grid_bots/{bid}/profits",  params={"limit": 5})
+    r2 = signed_request("GET", f"/ver1/grid_bots/{bid}/market_orders", params={"limit": 5})
+    return jsonify({
+        "profits_status": r1.status_code, "profits": r1.json() if r1.status_code == 200 else r1.text[:500],
+        "orders_status":  r2.status_code, "orders":  r2.json() if r2.status_code == 200 else r2.text[:500],
+    })
+
+
 @app.route("/bots/fills")
 def bot_fills():
     global _fills_cache
