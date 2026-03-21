@@ -1264,12 +1264,18 @@ def create_target():
             reversal_atr_mult=float(body.get("reversal_atr_mult", 2.0)),
             confirm_closes=int(body.get("confirm_closes", 2)),
             rearm_cooldown_h=float(body.get("rearm_cooldown_h", 4.0)),
+            detection_mode=body.get("detection_mode", "breakout"),
+            retest_tolerance_pct=float(body.get("retest_tolerance_pct", 0.5)),
             dca_enabled=bool(body.get("dca_enabled", False)),
             dca_base_order_usd=float(body.get("dca_base_order_usd", 500)),
             dca_safety_count=int(body.get("dca_safety_count", 5)),
             dca_safety_step_pct=float(body.get("dca_safety_step_pct", 1.5)),
             dca_safety_volume_mult=float(body.get("dca_safety_volume_mult", 1.2)),
             dca_tp_steps=dca_tp_steps,
+            smart_trade_enabled=bool(body.get("smart_trade_enabled", False)),
+            smart_trade_sell_pct=float(body.get("smart_trade_sell_pct", 25.0)),
+            smart_trade_tp_pct=float(body.get("smart_trade_tp_pct", 3.0)),
+            smart_trade_sl_pct=float(body.get("smart_trade_sl_pct", 1.5)),
         )
         return jsonify({"ok": True, "target": t})
     except Exception as e:
@@ -1305,6 +1311,39 @@ def clear_target_route(target_id):
         return jsonify({"ok": ok, "msg": "cleared (re-armed)" if ok else "not found"})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+# ── SmartTrade monitoring ─────────────────────────────────
+@app.route("/smart_trades/<st_id>", methods=["GET"])
+def get_smart_trade_route(st_id):
+    """Fetch live status of a 3Commas SmartTrade."""
+    try:
+        from threecommas import get_smart_trade
+        data = get_smart_trade(st_id)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/smart_trades/<st_id>/cancel", methods=["POST"])
+def cancel_smart_trade_route(st_id):
+    """Cancel an active SmartTrade and clear its ID from the linked target."""
+    try:
+        from threecommas import cancel_smart_trade
+        result = cancel_smart_trade(st_id)
+        # Also clear smart_trade_id from any target that references it
+        targets = load_targets()
+        for t in targets:
+            if str(t.get("smart_trade_id")) == str(st_id):
+                t["smart_trade_id"] = None
+                t.update({"fired": False, "fired_at": None, "fired_price": None,
+                           "cleared_at": time.time(), "consec_above": 0,
+                           "sf_phase": "watching", "sf_retest_high": None})
+        from price_targets import save_targets
+        save_targets(targets)
+        return jsonify({"ok": True, "result": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ── Breakout state management ─────────────────────────────

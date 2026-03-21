@@ -1,58 +1,52 @@
 """
-price_targets.py — User-defined breakout trigger levels.
+price_targets.py — User-defined breakout + support-failure trigger levels.
 
-Lets you pre-set a price level that, when crossed, tells the engine
-"I believe a big move is coming — keep the outer bot running and don't
-let the automatic breakout detector stop it on a dip."
+TWO DETECTION MODES
+===================
 
-Trigger behaviour (tunable per target):
-  confirm_closes      How many consecutive 1H closes above the trigger
-                      before it fires. Default 2 — filters single-candle
-                      wicks and brief spikes without meaningful delay.
-                      Set to 1 for immediate fire on first close above.
+1. "breakout" (default / existing behaviour)
+   direction UP  — fires when N consecutive 1H closes are above trigger
+   direction DOWN — fires when N consecutive 1H closes are below trigger
+   On fire: outer ON, inner+mid OFF; DCA bot launched if dca_enabled=true
 
-  rearm_cooldown_h    After a reversal clears the target, how many hours
-                      before it can fire again. Default 4. Prevents the
-                      "price bounces around the level all day" thrash scenario
-                      where the target fires and clears repeatedly.
+2. "support_failure" (DOWN only)
+   Four-phase state machine — designed to ignore liquidity sweeps (wicks
+   that snap back) and only fire on a confirmed, retested break:
 
-Schema per target:
-    {
-        "id":                   "abc12345",
-        "label":                "ATH retest → $82k",
-        "trigger_price":        73000,
-        "direction":            "UP",         # "UP" or "DOWN"
-        "price_target":         82000,        # optional: where you expect the move to end
-        "reversal_atr_mult":    1.2,          # clear if price reverses 1.2×ATR from fire price
-        "confirm_closes":       2,            # consecutive closes needed before firing
-        "rearm_cooldown_h":     4,            # hours before re-arm after reversal
-        "active":               true,
-        "fired":                false,
-        "fired_at":             null,
-        "fired_price":          null,
-        "cleared_at":           null,         # set on reversal; used for cooldown guard
-        "consec_above":         0,            # internal: running count of closes above trigger
-        "dca_enabled":          false,
-        "dca_base_order_usd":   500,
-        "dca_safety_count":     5,
-        "dca_safety_step_pct":  1.5,
-        "dca_safety_volume_mult": 1.2,
-        "dca_bot_id":           null
-    }
+   WATCHING → BROKEN → RETESTING → fires SmartTrade
+              ↑ N body-closes below support (close price, not low)
+                        ↑ price bounces back to within retest_tolerance_pct of support
+                                   ↑ closes below support again after the retest
 
-Engine behaviour when a target fires (UP):
-  - outer ON (wide range captures oscillations on the way up)
-  - inner + mid OFF (too tight — will get filled on the wrong side of a fast move)
-  - DCA bot launched if dca_enabled=true (accumulates on dips toward price_target)
-  - Normal breakout detector bypassed (won't false-fire DOWN on a dip)
-  - Drift detection bypassed (outer's 3×ATR range handles the move without redeployment)
+   On fire: 3Commas SmartTrade (spot sell X% of BTC + TP + SL)
+   Cancelled/reversed: price recovers above support + reversal_atr_mult×ATR
 
-Cleared automatically when:
-  - price reaches price_target (target achieved) → active=false, won't re-fire
-  - price reverses > reversal_atr_mult × ATR below fire price → cooldown before re-arm
+SCHEMA FIELDS
+=============
+  # Core (shared)
+  id, label, trigger_price, direction, price_target
+  reversal_atr_mult, confirm_closes, rearm_cooldown_h
+  active, fired, fired_at, fired_price, cleared_at, consec_above
 
-Or manually via:
-  POST /targets/<id>/clear  — re-arms immediately (overrides cooldown)
+  # Mode selector
+  detection_mode          "breakout" | "support_failure"
+
+  # Support-failure state (support_failure mode only)
+  sf_phase                "watching" | "broken" | "retesting"
+  sf_retest_high          float — highest close seen since break (tracks retest)
+  sf_broken_at            float — unix ts when phase became broken
+
+  # Smart trade config (support_failure mode)
+  smart_trade_enabled     bool
+  smart_trade_sell_pct    float  — % of current BTC to sell (e.g. 25 = sell 25%)
+  smart_trade_tp_pct      float  — take-profit below entry (e.g. 3.0 = 3% below)
+  smart_trade_sl_pct      float  — stop-loss above entry (e.g. 1.5 = 1.5% above)
+  smart_trade_id          str|null — active 3Commas SmartTrade ID once launched
+  retest_tolerance_pct    float  — how close to level counts as a retest (default 0.5)
+
+  # DCA config (breakout mode, UP direction)
+  dca_enabled, dca_base_order_usd, dca_safety_count
+  dca_safety_step_pct, dca_safety_volume_mult, dca_tp_steps, dca_bot_id
 """
 
 import os
@@ -82,23 +76,112 @@ def save_targets(targets: list):
         print(f"Warning: could not save breakout_targets.json: {e}")
 
 
+# ── Support-failure phase logic ────────────────────────────────────────────────
+
+def _advance_support_failure(t: dict, close_price: float, high_price: float) -> bool:
+    """
+    Advance a support_failure target through its 4-phase state machine.
+    Uses CLOSE prices only — wicks below support that snap back are ignored.
+
+    Returns True if the target should fire this cycle.
+    """
+    trigger          = float(t["trigger_price"])
+    confirm_n        = int(t.get("confirm_closes", 1))
+    tolerance_pct    = float(t.get("retest_tolerance_pct", 0.5))
+    tolerance_abs    = trigger * tolerance_pct / 100.0
+    phase            = t.get("sf_phase", "watching")
+    consec_below     = int(t.get("consec_above", 0))  # reused counter
+
+    changed = False
+
+    if phase == "watching":
+        # Count consecutive body-closes below support
+        if close_price < trigger:
+            consec_below += 1
+            t["consec_above"] = consec_below
+            changed = True
+            print(f"[SFail] '{t['label']}' — close ${close_price:,.0f} below "
+                  f"${trigger:,.0f} ({consec_below}/{confirm_n})")
+            if consec_below >= confirm_n:
+                t["sf_phase"]     = "broken"
+                t["sf_broken_at"] = time.time()
+                t["sf_retest_high"] = close_price
+                t["consec_above"] = 0
+                print(f"[SFail] '{t['label']}' → BROKEN  (${close_price:,.0f})")
+        else:
+            if consec_below > 0:
+                t["consec_above"] = 0
+                changed = True
+
+    elif phase == "broken":
+        # Track highest close since breaking — watching for retest
+        prev_high = float(t.get("sf_retest_high") or close_price)
+        if close_price > prev_high:
+            t["sf_retest_high"] = close_price
+            changed = True
+
+        retest_high = float(t.get("sf_retest_high", close_price))
+
+        # Retest condition: price closed back up to within tolerance of support
+        if retest_high >= trigger - tolerance_abs:
+            t["sf_phase"] = "retesting"
+            changed = True
+            print(f"[SFail] '{t['label']}' → RETESTING  "
+                  f"(high ${retest_high:,.0f} reached ${trigger:,.0f} ± ${tolerance_abs:,.0f})")
+
+        # Price recovered fully above support without retesting properly → reset
+        elif close_price > trigger:
+            t["sf_phase"]       = "watching"
+            t["consec_above"]   = 0
+            t["sf_retest_high"] = None
+            changed = True
+            print(f"[SFail] '{t['label']}' → WATCHING (price recovered ${close_price:,.0f} > ${trigger:,.0f})")
+
+    elif phase == "retesting":
+        # If price closes below support again after the retest → FIRE
+        if close_price < trigger:
+            print(f"[SFail] '{t['label']}' CONFIRMED — failed retest, "
+                  f"close ${close_price:,.0f} below ${trigger:,.0f} — FIRING")
+            t["sf_phase"] = "watching"  # reset for next time
+            t["sf_retest_high"] = None
+            return True   # ← signal to caller: fire now
+
+        # Price recovered back above support and is holding — break was fake
+        elif close_price > trigger * 1.005:
+            t["sf_phase"]       = "watching"
+            t["consec_above"]   = 0
+            t["sf_retest_high"] = None
+            changed = True
+            print(f"[SFail] '{t['label']}' → WATCHING "
+                  f"(retest succeeded — support held at ${close_price:,.0f})")
+
+    return False
+
+
 # ── Core: check all targets against current price ─────────────────────────────
 
-def check_targets(price: float, atr: float) -> dict | None:
+def check_targets(price: float, atr: float,
+                  last_close: float = None, last_high: float = None) -> dict | None:
     """
     Check all active targets against current price.
 
+    price      — current BTC price (used for reversal/completion checks)
+    atr        — current ATR (used for reversal threshold)
+    last_close — most recent 1H close (used for body-close confirmation)
+    last_high  — most recent 1H high (used for retest detection)
+
     For each armed (active=true) target:
-      - If not yet fired:
-          Increment or reset consec_above counter based on whether
-          price is above/below trigger.
-          Fire once consec_above >= confirm_closes AND cooldown elapsed.
-      - If already fired:
-          Check for completion (price_target hit) or reversal (> rev_mult×ATR drop).
-          On reversal: clear + record cleared_at for cooldown.
+      breakout mode:
+        - Count consecutive closes above/below trigger; fire on threshold
+      support_failure mode (DOWN only):
+        - 4-phase state machine; see _advance_support_failure()
 
     Returns the first active+fired target, or None.
     """
+    # Fall back to price if close/high not supplied (keeps backward compat)
+    close = last_close if last_close is not None else price
+    high  = last_high  if last_high  is not None else price
+
     targets = load_targets()
     changed = False
     active_target = None
@@ -107,15 +190,15 @@ def check_targets(price: float, atr: float) -> dict | None:
         if not t.get("active"):
             continue
 
-        direction     = t.get("direction", "UP")
-        trigger       = float(t.get("trigger_price", 0))
-        fired         = t.get("fired", False)
-        confirm_n     = int(t.get("confirm_closes", 2))
-        cooldown_h    = float(t.get("rearm_cooldown_h", 4))
-        consec_above  = int(t.get("consec_above", 0))
+        direction  = t.get("direction", "UP")
+        trigger    = float(t.get("trigger_price", 0))
+        fired      = t.get("fired", False)
+        mode       = t.get("detection_mode", "breakout")
+        confirm_n  = int(t.get("confirm_closes", 2))
+        cooldown_h = float(t.get("rearm_cooldown_h", 4))
 
+        # ── Already fired: check completion or reversal ────────────────────
         if fired:
-            # ── Already active: check for completion or reversal ──────────
             fire_price   = float(t.get("fired_price") or trigger)
             price_target = t.get("price_target")
             rev_mult     = float(t.get("reversal_atr_mult", 1.2))
@@ -133,67 +216,94 @@ def check_targets(price: float, atr: float) -> dict | None:
                 print(f"[Target] '{t['label']}' REACHED — "
                       f"${price:,.0f} hit target ${price_target:,.0f} — disarming")
                 t.update({"fired": False, "fired_at": None, "fired_price": None,
-                          "consec_above": 0, "active": False})
+                          "consec_above": 0, "active": False,
+                          "smart_trade_id": None})
                 changed = True
 
             elif reversed_:
                 print(f"[Target] '{t['label']}' REVERSED — "
-                      f"${price:,.0f} < fire ${fire_price:,.0f} − {rev_mult}×ATR "
+                      f"${price:,.0f} < fire ${fire_price:,.0f} ± {rev_mult}×ATR "
                       f"— cooling down {cooldown_h:.0f}h before re-arm")
                 t.update({"fired": False, "fired_at": None, "fired_price": None,
-                          "consec_above": 0, "cleared_at": time.time()})
+                          "consec_above": 0, "cleared_at": time.time(),
+                          "smart_trade_id": None})
                 changed = True
 
             else:
                 if active_target is None:
                     active_target = t
+            continue
 
-        else:
-            # ── Not fired: accumulate confirmation closes ─────────────────
-            above = (direction == "UP" and price >= trigger) or \
-                    (direction == "DOWN" and price <= trigger)
+        # ── Not fired: accumulate confirmation ────────────────────────────
 
-            if above:
-                consec_above += 1
-            else:
-                if consec_above > 0:
-                    consec_above = 0
+        # Support-failure mode: dedicated state machine
+        if mode == "support_failure" and direction == "DOWN":
+            should_fire = _advance_support_failure(t, close, high)
+            changed = True  # phase may have advanced
+
+            if should_fire:
+                # Check cooldown
+                cleared_at = t.get("cleared_at")
+                in_cooldown = bool(
+                    cleared_at and
+                    (time.time() - cleared_at) < cooldown_h * 3600
+                )
+                if not in_cooldown:
+                    t.update({"fired": True, "fired_at": time.time(),
+                              "fired_price": close, "consec_above": 0})
                     changed = True
-
-            if consec_above != int(t.get("consec_above", 0)):
-                t["consec_above"] = consec_above
-                changed = True
-
-            # Check cooldown
-            cleared_at = t.get("cleared_at")
-            in_cooldown = bool(
-                cleared_at and
-                (time.time() - cleared_at) < cooldown_h * 3600
-            )
-
-            if consec_above >= confirm_n and not in_cooldown:
-                cooldown_remaining = 0
-                if cleared_at:
-                    cooldown_remaining = max(0, cooldown_h * 3600 - (time.time() - cleared_at))
-
-                print(f"[Target] FIRED: '{t['label']}' — "
-                      f"{consec_above} closes {'above' if direction=='UP' else 'below'} "
-                      f"${trigger:,.0f} (needed {confirm_n}) — price=${price:,.0f}")
-                t.update({"fired": True, "fired_at": time.time(), "fired_price": price,
-                          "consec_above": 0})
-                changed = True
-                if active_target is None:
-                    active_target = t
-
-            elif consec_above > 0 and confirm_n > 1:
-                remaining = confirm_n - consec_above
-                if in_cooldown:
-                    cooldown_secs = cooldown_h * 3600 - (time.time() - cleared_at)
-                    print(f"[Target] '{t['label']}' — {consec_above}/{confirm_n} closes "
-                          f"above ${trigger:,.0f} (cooldown: {cooldown_secs/3600:.1f}h remaining)")
+                    print(f"[SFail] FIRED: '{t['label']}' @ ${close:,.0f}")
+                    if active_target is None:
+                        active_target = t
                 else:
-                    print(f"[Target] '{t['label']}' — {consec_above}/{confirm_n} closes "
-                          f"above ${trigger:,.0f}, need {remaining} more")
+                    secs = cooldown_h * 3600 - (time.time() - cleared_at)
+                    print(f"[SFail] '{t['label']}' would fire but in cooldown "
+                          f"({secs/3600:.1f}h remaining)")
+            continue
+
+        # Breakout mode: original consecutive-close logic
+        consec_above = int(t.get("consec_above", 0))
+        above = (direction == "UP" and price >= trigger) or \
+                (direction == "DOWN" and price <= trigger)
+
+        if above:
+            consec_above += 1
+        else:
+            if consec_above > 0:
+                consec_above = 0
+                changed = True
+
+        if consec_above != int(t.get("consec_above", 0)):
+            t["consec_above"] = consec_above
+            changed = True
+
+        cleared_at  = t.get("cleared_at")
+        in_cooldown = bool(
+            cleared_at and
+            (time.time() - cleared_at) < cooldown_h * 3600
+        )
+
+        if consec_above >= confirm_n and not in_cooldown:
+            print(f"[Target] FIRED: '{t['label']}' — "
+                  f"{consec_above} closes {'above' if direction=='UP' else 'below'} "
+                  f"${trigger:,.0f} (needed {confirm_n}) — price=${price:,.0f}")
+            t.update({"fired": True, "fired_at": time.time(), "fired_price": price,
+                      "consec_above": 0})
+            changed = True
+            if active_target is None:
+                active_target = t
+
+        elif consec_above > 0 and confirm_n > 1:
+            remaining = confirm_n - consec_above
+            if in_cooldown:
+                cooldown_secs = cooldown_h * 3600 - (time.time() - cleared_at)
+                print(f"[Target] '{t['label']}' — {consec_above}/{confirm_n} closes "
+                      f"{'above' if direction=='UP' else 'below'} ${trigger:,.0f} "
+                      f"(cooldown: {cooldown_secs/3600:.1f}h remaining)")
+            else:
+                print(f"[Target] '{t['label']}' — {consec_above}/{confirm_n} closes "
+                      f"{'above' if direction=='UP' else 'below'} ${trigger:,.0f}, "
+                      f"need {remaining} more")
 
     if changed:
         save_targets(targets)
@@ -211,12 +321,20 @@ def add_target(
     reversal_atr_mult: float = 1.2,
     confirm_closes: int = 2,
     rearm_cooldown_h: float = 4.0,
+    detection_mode: str = "breakout",
+    retest_tolerance_pct: float = 0.5,
+    # DCA (breakout UP)
     dca_enabled: bool = False,
     dca_base_order_usd: float = 500,
     dca_safety_count: int = 5,
     dca_safety_step_pct: float = 1.5,
     dca_safety_volume_mult: float = 1.2,
     dca_tp_steps: list = None,
+    # SmartTrade (support_failure DOWN)
+    smart_trade_enabled: bool = False,
+    smart_trade_sell_pct: float = 25.0,
+    smart_trade_tp_pct: float = 3.0,
+    smart_trade_sl_pct: float = 1.5,
 ) -> dict:
     targets = load_targets()
     target = {
@@ -234,6 +352,14 @@ def add_target(
         "fired_price":            None,
         "cleared_at":             None,
         "consec_above":           0,
+        # Mode
+        "detection_mode":         detection_mode,
+        "retest_tolerance_pct":   retest_tolerance_pct,
+        # Support-failure state
+        "sf_phase":               "watching",
+        "sf_retest_high":         None,
+        "sf_broken_at":           None,
+        # DCA
         "dca_enabled":            dca_enabled,
         "dca_base_order_usd":     dca_base_order_usd,
         "dca_safety_count":       dca_safety_count,
@@ -241,6 +367,12 @@ def add_target(
         "dca_safety_volume_mult": dca_safety_volume_mult,
         "dca_tp_steps":           dca_tp_steps or [],
         "dca_bot_id":             None,
+        # SmartTrade
+        "smart_trade_enabled":    smart_trade_enabled,
+        "smart_trade_sell_pct":   smart_trade_sell_pct,
+        "smart_trade_tp_pct":     smart_trade_tp_pct,
+        "smart_trade_sl_pct":     smart_trade_sl_pct,
+        "smart_trade_id":         None,
     }
     targets.append(target)
     save_targets(targets)
@@ -270,12 +402,14 @@ def delete_target(target_id: str) -> bool:
 
 
 def clear_target(target_id: str) -> bool:
-    """Clear fired/cooldown state immediately — re-arms the target."""
+    """Clear fired/cooldown/phase state immediately — re-arms the target."""
     targets = load_targets()
     for t in targets:
         if t.get("id") == target_id:
             t.update({"fired": False, "fired_at": None, "fired_price": None,
-                      "cleared_at": None, "consec_above": 0})
+                      "cleared_at": None, "consec_above": 0,
+                      "sf_phase": "watching", "sf_retest_high": None,
+                      "sf_broken_at": None, "smart_trade_id": None})
             save_targets(targets)
             return True
     return False

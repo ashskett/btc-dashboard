@@ -266,6 +266,7 @@ The macro dashboard will be served as static files by the Flask server and linke
 | RSA PEM MalformedFraming on server | `sed -i 's/\r//' 3commas_private.pem` |
 | Breakout state persisting across restarts | `rm -f breakout_state.json` before restarting |
 | IP whitelist blocking API calls | Use Self-generated RSA key type (not System-generated) |
+| **[BUG — pending]** Controls tab inventory bar: BTC % and USDC % labels are swapped | Fix label ordering in `dashboard.html` inventory bar HTML |
 
 ---
 

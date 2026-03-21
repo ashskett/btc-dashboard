@@ -566,7 +566,10 @@ def run():
         # the auto-detector entirely (prevents a DOWN false-fire on a dip during
         # an expected upward move). Drift detection is also bypassed while a
         # target is active; the outer bot's 3×ATR range handles the move.
-        _pt_state = check_targets(state.price, state.atr)
+        _last_close = float(df["close"].iloc[-1]) if df is not None and len(df) else state.price
+        _last_high  = float(df["high"].iloc[-1])  if df is not None and len(df) else state.price
+        _pt_state = check_targets(state.price, state.atr,
+                                  last_close=_last_close, last_high=_last_high)
         if _pt_state:
             _pt_label  = _pt_state.get("label", "unnamed")
             _pt_dir    = _pt_state.get("direction", "UP")
@@ -647,10 +650,42 @@ def run():
                     else:
                         print(f"  Rate limit reached — DCA bot launch deferred to next cycle")
 
-            else:  # DOWN target
+            else:  # DOWN target — support failure or plain DOWN breakout
                 print(f"  [Target] all bots off (capital protection)")
                 for bot in GRID_BOTS:
                     _act(bot, False, f"target DOWN: {_pt_label}")
+
+                # SmartTrade launch on first cycle after support_failure fires
+                _st_mode    = _pt_state.get("detection_mode") == "support_failure"
+                _st_enabled = _pt_state.get("smart_trade_enabled", False)
+                _st_id      = _pt_state.get("smart_trade_id")
+                _fired_at   = _pt_state.get("fired_at") or 0
+                _hold_secs  = max(0, 360 - (time.time() - _fired_at))  # 6-min sweep guard
+
+                if _st_mode and _st_enabled and not _st_id:
+                    if _hold_secs > 0:
+                        print(f"  SmartTrade launch held — sweep guard ({_hold_secs:.0f}s remaining)")
+                    elif DRY_RUN:
+                        sell_pct = float(_pt_state.get("smart_trade_sell_pct", 25))
+                        tp_pct   = float(_pt_state.get("smart_trade_tp_pct", 3.0))
+                        sl_pct   = float(_pt_state.get("smart_trade_sl_pct", 1.5))
+                        print(f"  [SIM] Would open SmartTrade SELL: "
+                              f"{sell_pct:.0f}% BTC  TP={tp_pct:.1f}% below  SL={sl_pct:.1f}% above")
+                    elif _can_act():
+                        _record_action()
+                        try:
+                            from threecommas import execute_smart_trade as _exec_st
+                            st_result = _exec_st(_pt_state, state.price, state.btc_ratio)
+                            st_id = str(st_result.get("id", ""))
+                            if st_id:
+                                update_target(_pt_state["id"], {"smart_trade_id": st_id})
+                                print(f"  SmartTrade launched: id={st_id}")
+                            else:
+                                print(f"  Warning: SmartTrade response had no id: {st_result}")
+                        except Exception as _st_err:
+                            print(f"  Warning: SmartTrade launch failed: {_st_err}")
+                    else:
+                        print(f"  Rate limit reached — SmartTrade launch deferred to next cycle")
 
             return   # skip fresh breakout detection AND drift while target is live
 

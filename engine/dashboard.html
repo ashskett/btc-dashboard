@@ -2030,37 +2030,83 @@ function renderTargetSidebar(){
     const fired  = pt.fired;
     const isUp   = pt.direction === 'UP';
     const active = pt.active;
+    const isSF   = pt.detection_mode === 'support_failure';
     const trigCol = !active ? '#4a5a72' : fired ? (isUp?'#00e676':'#ff3d5a') : '#ffab00';
 
     let stateLabel, stateBg;
-    if(!active)    { stateLabel='OFF';    stateBg='rgba(74,90,114,.2)'; }
-    else if(fired) { stateLabel=isUp?'ACTIVE ▲':'ACTIVE ▼'; stateBg=isUp?'rgba(0,230,118,.15)':'rgba(255,61,90,.15)'; }
-    else {
+    if(!active) {
+      stateLabel='OFF'; stateBg='rgba(74,90,114,.2)';
+    } else if(fired) {
+      if(isSF && pt.smart_trade_id){
+        stateLabel='SMARTTRADE LIVE'; stateBg='rgba(255,61,90,.2)';
+      } else {
+        stateLabel=isUp?'ACTIVE ▲':'ACTIVE ▼';
+        stateBg=isUp?'rgba(0,230,118,.15)':'rgba(255,61,90,.15)';
+      }
+    } else if(isSF) {
+      const phase = pt.sf_phase || 'watching';
+      const phaseMap = {
+        watching:  ['WATCHING',  'rgba(255,171,0,.12)',  '#ffab00'],
+        broken:    ['BROKEN ▼',  'rgba(255,61,90,.15)',  '#f85149'],
+        retesting: ['RETESTING', 'rgba(255,140,0,.2)',   '#ff8c00'],
+      };
+      const [pl, pb, pc] = phaseMap[phase] || phaseMap.watching;
+      stateLabel = pl; stateBg = pb; trigCol; // override via span below
+    } else {
       const n = pt.consec_above||0, need = pt.confirm_closes||2;
       stateLabel = n > 0 ? `${n}/${need} closes` : 'ARMED';
       stateBg = 'rgba(255,171,0,.12)';
     }
 
-    const tpStr  = pt.price_target ? ` → $${pt.price_target.toLocaleString()}` : '';
+    const tpStr    = pt.price_target ? ` → $${pt.price_target.toLocaleString()}` : '';
     const dirArrow = isUp ? '▲' : '▼';
+    const modeTag  = isSF
+      ? `<span style="color:#f85149;font-size:8px;"> · SUPPORT FAIL</span>`
+      : '';
+    const stTag    = (isSF && pt.smart_trade_enabled)
+      ? `<span style="color:#f85149;font-size:8px;"> · SMARTTRADE</span>` : '';
+    const dcaTag   = pt.dca_enabled
+      ? `<span style="color:#b388ff;font-size:8px;"> · DCA</span>` : '';
+    const stCancelBtn = (fired && pt.smart_trade_id)
+      ? `<button class="tl-btn del" onclick="cancelSmartTrade('${pt.smart_trade_id}','${pt.id}')">Cancel ST</button>`
+      : '';
+
+    // SF phase colours for the state badge
+    let sfBadgeStyle = `background:${stateBg};color:${trigCol};`;
+    if(isSF && !fired){
+      const phase = pt.sf_phase || 'watching';
+      const phaseColors = {watching:'#ffab00', broken:'#f85149', retesting:'#ff8c00'};
+      sfBadgeStyle = `background:${stateBg};color:${phaseColors[phase]||'#ffab00'};`;
+    }
 
     return `<div class="tl-card" style="border-left:3px solid ${trigCol};margin-bottom:6px;">
       <div class="tl-hdr">
         <span style="color:${trigCol};font-size:10px;font-weight:700;">${dirArrow} $${pt.trigger_price.toLocaleString()}${tpStr}</span>
-        <span style="font-size:9px;padding:2px 5px;border-radius:3px;background:${stateBg};color:${trigCol};">${stateLabel}</span>
+        <span style="font-size:9px;padding:2px 5px;border-radius:3px;${sfBadgeStyle}">${stateLabel}</span>
       </div>
-      <div class="tl-meta" style="margin:3px 0;">${pt.label}</div>
+      <div class="tl-meta" style="margin:3px 0;">${pt.label}${modeTag}${stTag}${dcaTag}</div>
       <div style="font-size:9px;color:var(--muted);margin-bottom:5px;">
         confirm: ${pt.confirm_closes||2} closes · reversal: ${pt.reversal_atr_mult||2}×ATR · cooldown: ${pt.rearm_cooldown_h||4}h
-        ${pt.dca_enabled ? ' · <span style="color:#b388ff">DCA ON</span>' : ''}
+        ${isSF ? ` · retest: ${pt.retest_tolerance_pct||0.5}%` : ''}
       </div>
+      ${fired && pt.smart_trade_id ? `<div style="font-size:8px;color:#f85149;margin-bottom:5px;">SmartTrade: ${pt.smart_trade_id}</div>` : ''}
       <div class="tl-btns">
         <button class="tl-btn" onclick="toggleTargetActive('${pt.id}',${!active})">${active?'Disarm':'Re-arm'}</button>
         <button class="tl-btn" onclick="clearTargetState('${pt.id}')" ${!fired?'disabled':''} style="${!fired?'opacity:.4;cursor:default;':''}">Clear</button>
+        ${stCancelBtn}
         <button class="tl-btn del" onclick="deleteTarget('${pt.id}')">Delete</button>
       </div>
     </div>`;
   }).join('');
+}
+
+async function cancelSmartTrade(stId, targetId){
+  if(!confirm(`Cancel SmartTrade ${stId}?\n\nThis will close the sell position on 3Commas.`)) return;
+  try{
+    await apiFetch(`${API}/smart_trades/${stId}/cancel`, {method:'POST'});
+    await loadTargets();
+    toast('SmartTrade cancelled', 'ok');
+  } catch(e){ toast(`Cancel failed: ${e.message}`,'err'); }
 }
 
 async function toggleTargetActive(id, newActive){
@@ -2116,11 +2162,42 @@ function showAddTargetModal(pickedPrice){
       </div>
       <div>
         <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">DIRECTION</div>
-        <select id="pt_dir" style="width:100%;background:#080c10;border:1px solid #243044;
+        <select id="pt_dir" onchange="_ptOnDirChange()"
+          style="width:100%;background:#080c10;border:1px solid #243044;
           color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;">
           <option value="UP">▲ UP (breakout above)</option>
           <option value="DOWN">▼ DOWN (break below)</option>
         </select>
+      </div>
+    </div>
+
+    <!-- Detection mode — shown only for DOWN -->
+    <div id="ptDetectModeRow" style="display:none;margin-bottom:12px;">
+      <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">DETECTION MODE</div>
+      <select id="pt_detect_mode" onchange="_ptOnDetectModeChange()"
+        style="width:100%;background:#080c10;border:1px solid #243044;
+        color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;">
+        <option value="breakout">Plain breakout (N closes below)</option>
+        <option value="support_failure">Support failure + retest confirmation</option>
+      </select>
+    </div>
+
+    <!-- Retest tolerance — shown only for support_failure -->
+    <div id="ptRetestRow" style="display:none;margin-bottom:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">RETEST TOLERANCE %
+            <span style="opacity:.5;font-size:8px;">how close to level = retest</span></div>
+          <input id="pt_retest_tol" type="number" value="0.5" min="0.1" max="3" step="0.1"
+            style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+            font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
+        </div>
+        <div style="display:flex;align-items:flex-end;padding-bottom:2px;">
+          <div style="font-size:8px;color:var(--muted);line-height:1.5;">
+            Break confirmed → watch for bounce to within X% of support → close below again → fire.
+            Liquidity sweeps (wicks that snap back) are ignored — only candle body closes count.
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2160,8 +2237,8 @@ function showAddTargetModal(pickedPrice){
       </div>
     </div>
 
-    <!-- DCA toggle -->
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px;
+    <!-- DCA toggle (UP direction only) -->
+    <div id="ptDcaToggleRow" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px;
       background:#060a0e;border:1px solid #1c2433;border-radius:4px;">
       <input type="checkbox" id="pt_dca_on" onchange="_ptToggleDca(this.checked)"
         style="accent-color:var(--purple);width:14px;height:14px;cursor:pointer;"/>
@@ -2227,6 +2304,44 @@ function showAddTargetModal(pickedPrice){
       </div>
     </div>
 
+    <!-- SmartTrade section (support_failure DOWN only) -->
+    <div id="ptSmartTradeSection" style="display:none;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px;
+        background:#1a0a0a;border:1px solid #5a1a1a;border-radius:4px;">
+        <input type="checkbox" id="pt_st_on" onchange="_ptToggleSt(this.checked)"
+          style="accent-color:#f85149;width:14px;height:14px;cursor:pointer;"/>
+        <span style="font-size:9px;color:#f85149;text-transform:uppercase;
+          letter-spacing:.08em;font-weight:700;">Open SmartTrade SELL on confirmed failure</span>
+      </div>
+      <div id="ptStFields" style="display:none;">
+        <div style="font-size:8px;color:var(--muted);margin-bottom:8px;line-height:1.5;padding:6px 8px;
+          background:#060a0e;border-radius:4px;border:1px solid #1c2433;">
+          Sells X% of BTC at market on confirmed retest failure.
+          TP = limit buyback at target price. SL = cancel if price recovers above support (break was fake).
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div>
+            <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SELL % OF BTC</div>
+            <input id="pt_st_sell_pct" type="number" value="25" min="5" max="100" step="5"
+              style="width:100%;background:#080c10;border:1px solid #5a1a1a;color:#f85149;
+              font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:5px 7px;border-radius:4px;"/>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TP % BELOW ENTRY</div>
+            <input id="pt_st_tp_pct" type="number" value="3.0" min="0.5" max="30" step="0.5"
+              style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
+              font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SL % ABOVE ENTRY</div>
+            <input id="pt_st_sl_pct" type="number" value="1.5" min="0.3" max="10" step="0.1"
+              style="width:100%;background:#080c10;border:1px solid #243044;color:#ffab00;
+              font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div style="display:flex;gap:6px;">
       <button onclick="confirmAddTarget()"
         style="flex:1;background:rgba(255,171,0,.12);border:1px solid #ffab00;color:#ffab00;
@@ -2244,9 +2359,35 @@ function showAddTargetModal(pickedPrice){
   document.getElementById('pt_label').focus();
 }
 
+function _ptOnDirChange(){
+  const dir = document.getElementById('pt_dir').value;
+  const isDown = dir === 'DOWN';
+  document.getElementById('ptDetectModeRow').style.display = isDown ? 'block' : 'none';
+  document.getElementById('ptDcaToggleRow').style.display  = isDown ? 'none'  : 'flex';
+  document.getElementById('ptDcaFields').style.display     = 'none';
+  document.getElementById('pt_dca_on').checked             = false;
+  if(isDown) _ptOnDetectModeChange();
+  else { document.getElementById('ptRetestRow').style.display = 'none';
+         document.getElementById('ptSmartTradeSection').style.display = 'none'; }
+}
+
+function _ptOnDetectModeChange(){
+  const mode = document.getElementById('pt_detect_mode').value;
+  const isSF = mode === 'support_failure';
+  document.getElementById('ptRetestRow').style.display         = isSF ? 'block' : 'none';
+  document.getElementById('ptSmartTradeSection').style.display = isSF ? 'block' : 'none';
+  if(!isSF){ document.getElementById('ptDcaToggleRow').style.display = 'flex'; }
+  else      { document.getElementById('ptDcaToggleRow').style.display = 'none';
+              document.getElementById('ptDcaFields').style.display    = 'none'; }
+}
+
 function _ptToggleDca(on){
   document.getElementById('ptDcaFields').style.display = on ? 'block' : 'none';
   if(on && document.getElementById('ptTpRows').children.length === 0) _ptAddTpRow(2.0, 100);
+}
+
+function _ptToggleSt(on){
+  document.getElementById('ptStFields').style.display = on ? 'block' : 'none';
 }
 
 function _ptAddTpRow(profit, close){
@@ -2302,12 +2443,26 @@ async function confirmAddTarget(){
   const reversal_atr_mult = parseFloat(document.getElementById('pt_rev').value) || 2.0;
   const rearm_cooldown_h  = parseFloat(document.getElementById('pt_cool').value) || 4;
   const dca_enabled       = document.getElementById('pt_dca_on').checked;
+  const detect_mode_el    = document.getElementById('pt_detect_mode');
+  const detection_mode    = (dir === 'DOWN' && detect_mode_el) ? detect_mode_el.value : 'breakout';
 
   if(!label){ toast('Label required','err'); return; }
   if(!trigger || isNaN(trigger)){ toast('Trigger price required','err'); return; }
 
   const body = { label, trigger_price: trigger, direction: dir,
-    price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h, dca_enabled };
+    price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h,
+    dca_enabled, detection_mode };
+
+  // Support failure fields
+  if(detection_mode === 'support_failure'){
+    body.retest_tolerance_pct = parseFloat(document.getElementById('pt_retest_tol').value) || 0.5;
+    body.smart_trade_enabled  = document.getElementById('pt_st_on').checked;
+    if(body.smart_trade_enabled){
+      body.smart_trade_sell_pct = parseFloat(document.getElementById('pt_st_sell_pct').value) || 25;
+      body.smart_trade_tp_pct   = parseFloat(document.getElementById('pt_st_tp_pct').value)   || 3.0;
+      body.smart_trade_sl_pct   = parseFloat(document.getElementById('pt_st_sl_pct').value)   || 1.5;
+    }
+  }
 
   if(dca_enabled){
     body.dca_base_order_usd     = parseFloat(document.getElementById('pt_dca_base').value) || 500;

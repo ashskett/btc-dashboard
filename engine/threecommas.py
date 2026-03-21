@@ -232,6 +232,83 @@ def set_bot_capital(bot_id: str, total_usd: float) -> dict:
     }
 
 
+def execute_smart_trade(target: dict, current_price: float, btc_ratio: float) -> dict:
+    """
+    Open a 3Commas SmartTrade (spot SELL) on support failure confirmation.
+
+    Sells smart_trade_sell_pct% of current BTC holdings at market.
+    Sets TP smart_trade_tp_pct% below entry (limit buyback).
+    Sets SL smart_trade_sl_pct% above entry (if support recovers, exit).
+
+    Returns the SmartTrade API response dict.
+    """
+    account_id  = int(os.getenv("THREECOMMAS_ACCOUNT_ID", 0))
+    sell_pct    = float(target.get("smart_trade_sell_pct", 25.0)) / 100.0
+    tp_pct      = float(target.get("smart_trade_tp_pct",  3.0))
+    sl_pct      = float(target.get("smart_trade_sl_pct",  1.5))
+
+    # Estimate sell quantity from BTC ratio and account size.
+    # btc_ratio is 0-1 fraction; we use it to get approximate BTC qty.
+    # SmartTrade will reject if insufficient funds — that's fine, it surfaces clearly.
+    # Use a reasonable estimate: if btc_ratio=0.65 and we want 25%, that's 0.65*0.25 fraction of portfolio.
+    # We don't know exact BTC qty here, so let the SmartTrade use a % of available instead.
+    # 3Commas SmartTrade supports "percent" unit type.
+    tp_price = round(current_price * (1 - tp_pct / 100.0), 2)
+    sl_price = round(current_price * (1 + sl_pct / 100.0), 2)
+
+    body = {
+        "account_id": account_id,
+        "pair":       "USDC_BTC",
+        "instant":    False,
+        "leverage":   {"enabled": False},
+        "position": {
+            "type":       "sell",
+            "units":      {"value": str(round(sell_pct * 100, 1)), "type": "percent"},
+            "order_type": "market",
+        },
+        "take_profit": {
+            "enabled": True,
+            "steps": [{
+                "order_type": "limit",
+                "price":      {"value": str(tp_price), "type": "last"},
+                "volume":     100,
+            }],
+        },
+        "stop_loss": {
+            "enabled":    True,
+            "order_type": "market",
+            "price":      {"value": str(sl_price), "type": "last"},
+            "conditional": {"price": {"type": "last"}},
+        },
+        "note": f"Support failure: {target.get('label', '')} @ ${current_price:,.0f}",
+    }
+
+    print(f"  SmartTrade SELL: {sell_pct*100:.0f}% BTC | "
+          f"entry ~${current_price:,.0f} | TP ${tp_price:,.0f} ({tp_pct:.1f}% down) | "
+          f"SL ${sl_price:,.0f} ({sl_pct:.1f}% up)")
+
+    r = _signed_request("POST", "/v2/smart_trades", body=body)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"SmartTrade POST failed {r.status_code}: {r.text[:400]}")
+    return r.json()
+
+
+def get_smart_trade(smart_trade_id: str) -> dict:
+    """Fetch a SmartTrade by ID."""
+    r = _signed_request("GET", f"/v2/smart_trades/{smart_trade_id}")
+    if r.status_code != 200:
+        raise RuntimeError(f"get_smart_trade({smart_trade_id}) failed: {r.status_code} {r.text[:200]}")
+    return r.json()
+
+
+def cancel_smart_trade(smart_trade_id: str) -> dict:
+    """Cancel (close) an active SmartTrade."""
+    r = _signed_request("DELETE", f"/v2/smart_trades/{smart_trade_id}")
+    if r.status_code not in (200, 201, 204):
+        raise RuntimeError(f"cancel_smart_trade({smart_trade_id}) failed: {r.status_code} {r.text[:200]}")
+    return r.json() if r.content else {}
+
+
 def redeploy_all_bots(bot_ids, tiers):
     """
     Redeploy all bots with their respective tier parameters.
