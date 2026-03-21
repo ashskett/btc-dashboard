@@ -759,31 +759,24 @@ def bot_fills():
         ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
         fills = []
         for i, bid in enumerate(ids[:3]):
-            r = signed_request("GET", f"/ver1/grid_bots/{bid}/profits", params={"limit": 100})
+            r = signed_request("GET", f"/ver1/grid_bots/{bid}/market_orders", params={"limit": 200})
             if r.status_code != 200:
                 continue
             data = r.json()
-            if not isinstance(data, list):
-                continue
-            for item in data:
-                # Pick a representative price from the grid_lines (prefer the sell side)
-                price = 0.0
-                gls = item.get("grid_lines") or []
-                for gl in gls:
-                    if (gl.get("side") or "").lower() == "sell":
-                        price = float(gl.get("price") or 0)
-                        break
+            orders = data.get("balancing_orders") or [] if isinstance(data, dict) else []
+            for item in orders:
+                if item.get("status_string") != "Filled":
+                    continue
+                price = float(item.get("average_price") or item.get("rate") or 0)
                 if not price:
-                    for gl in gls:
-                        price = float(gl.get("price") or 0)
-                        if price:
-                            break
+                    continue
                 fills.append({
-                    "bot_id":     bid,
-                    "bot_index":  i,
-                    "time":       item.get("created_at"),
-                    "price":      price,
-                    "profit_usd": float(item.get("profit_usd") or item.get("usd_profit") or 0),
+                    "bot_id":    bid,
+                    "bot_index": i,
+                    "time":      item.get("created_at"),
+                    "price":     price,
+                    "side":      (item.get("order_type") or "").upper(),  # BUY or SELL
+                    "qty":       float(item.get("quantity") or 0),
                 })
         fills.sort(key=lambda x: x["time"] or "")
         _fills_cache = {"data": fills, "ts": now}

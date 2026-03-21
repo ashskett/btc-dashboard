@@ -1669,20 +1669,25 @@ async function loadFills(){
 function applyFillMarkers(){
   if(!candles || !fillsData.length) return;
   const gran = {'1m':60,'5m':300,'1h':3600,'4h':14400,'6h':21600,'1d':86400,'1w':604800,'1M':2592000}[currentTf] || 3600;
-  const markers = fillsData
+  // Deduplicate: one marker per candle per side (multiple fills in same candle collapse to one)
+  const seen = new Map();
+  fillsData
     .filter(f => f.price > 0 && f.time)
-    .map(f => {
+    .forEach(f => {
       const snapped = Math.floor(new Date(f.time).getTime() / 1000 / gran) * gran;
-      const col = BOT_COLORS[f.bot_index] || '#888';
-      return {
-        time:     snapped,
-        position: 'aboveBar',
-        color:    col,
-        shape:    'circle',
-        text:     f.profit_usd > 0 ? `+$${f.profit_usd.toFixed(2)}` : '',
-      };
-    })
-    .sort((a,b) => a.time - b.time);
+      const isSell  = f.side === 'SELL';
+      const key     = `${snapped}_${isSell ? 'S' : 'B'}`;
+      if (!seen.has(key)) {
+        seen.set(key, {
+          time:     snapped,
+          position: isSell ? 'aboveBar' : 'belowBar',
+          color:    isSell ? '#f85149' : '#3fb950',
+          shape:    isSell ? 'arrowDown' : 'arrowUp',
+          text:     '',
+        });
+      }
+    });
+  const markers = Array.from(seen.values()).sort((a,b) => a.time - b.time);
   try { candles.setMarkers(markers); } catch(e){}
 }
 
