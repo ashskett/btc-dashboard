@@ -17,48 +17,81 @@ import regime as r
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _reset_regime_state(tmp_path, monkeypatch):
-    """Point regime_state.json at a temp file and reset counter to 0."""
+    """Point regime_state.json at a temp file and reset all counters."""
     state_file = str(tmp_path / "regime_state.json")
     monkeypatch.setattr(r, "_REGIME_STATE_FILE", state_file)
-    json.dump({"below_tl_count": 0}, open(state_file, "w"))
+    json.dump({"below_tl_count": 0, "trending_up_active": False}, open(state_file, "w"))
     return state_file
 
 
 # ── trend_strength tests ───────────────────────────────────────────────────
 
 class TestTrendStrength:
-    def test_trending_up_fires_above_5_5x_atr(self):
+    """
+    trend_strength() now has Schmitt-trigger hysteresis for trending_up:
+      Entry: gap_ratio > 5.5
+      Exit:  gap_ratio < 4.5
+    All tests must isolate state via _reset_regime_state() to avoid
+    cross-test contamination through regime_state.json.
+    """
+
+    def test_trending_up_fires_above_5_5x_atr(self, tmp_path, monkeypatch):
+        _reset_regime_state(tmp_path, monkeypatch)
         ts = r.trend_strength(price=70000 + 600 * 6.0, trendline=70000, atr=600)
         assert ts["trending_up"] is True
         assert ts["trending_down"] is False
 
-    def test_trending_up_does_not_fire_at_5x_atr(self):
-        # 5.0× is below the 5.5× threshold
+    def test_trending_up_does_not_fire_at_5x_atr_from_cold(self, tmp_path, monkeypatch):
+        # Starting from inactive (cold state), 5.0× is below entry threshold (5.5×)
+        _reset_regime_state(tmp_path, monkeypatch)
         ts = r.trend_strength(price=70000 + 600 * 5.0, trendline=70000, atr=600)
         assert ts["trending_up"] is False
 
-    def test_trending_down_fires_below_negative_2x_atr(self):
+    def test_trending_up_hysteresis_holds_at_5x_once_active(self, tmp_path, monkeypatch):
+        # Hysteresis: once trending_up is active, 5.0× (above exit threshold 4.5×) should
+        # keep it active — this prevents the threshold-chop that flooded the Events tab
+        state_file = _reset_regime_state(tmp_path, monkeypatch)
+        # Manually set trending_up_active = True (simulates it having fired previously)
+        json.dump({"below_tl_count": 0, "trending_up_active": True}, open(state_file, "w"))
+        ts = r.trend_strength(price=70000 + 600 * 5.0, trendline=70000, atr=600)
+        assert ts["trending_up"] is True, \
+            "5.0× should keep trending_up active once entered (exit threshold is 4.5×)"
+
+    def test_trending_up_clears_below_exit_threshold(self, tmp_path, monkeypatch):
+        # Once active, trending_up should clear when gap_ratio drops below 4.5×
+        state_file = _reset_regime_state(tmp_path, monkeypatch)
+        json.dump({"below_tl_count": 0, "trending_up_active": True}, open(state_file, "w"))
+        ts = r.trend_strength(price=70000 + 600 * 4.0, trendline=70000, atr=600)
+        assert ts["trending_up"] is False, \
+            "4.0× is below exit threshold (4.5×) — trending_up should clear"
+
+    def test_trending_down_fires_below_negative_2x_atr(self, tmp_path, monkeypatch):
+        _reset_regime_state(tmp_path, monkeypatch)
         ts = r.trend_strength(price=70000 - 600 * 2.5, trendline=70000, atr=600)
         assert ts["trending_down"] is True
         assert ts["trending_up"] is False
 
-    def test_trending_down_does_not_fire_at_negative_1_5x_atr(self):
+    def test_trending_down_does_not_fire_at_negative_1_5x_atr(self, tmp_path, monkeypatch):
         # -1.5× is above the -2.0× threshold (was the old setting that fired too often)
+        _reset_regime_state(tmp_path, monkeypatch)
         ts = r.trend_strength(price=70000 - 600 * 1.5, trendline=70000, atr=600)
         assert ts["trending_down"] is False
 
-    def test_gap_ratio_calculated_correctly(self):
+    def test_gap_ratio_calculated_correctly(self, tmp_path, monkeypatch):
+        _reset_regime_state(tmp_path, monkeypatch)
         ts = r.trend_strength(price=70600, trendline=70000, atr=600)
         assert ts["gap_ratio"] == pytest.approx(1.0, abs=0.01)
 
-    def test_zero_atr_returns_zero_gap_ratio(self):
+    def test_zero_atr_returns_zero_gap_ratio(self, tmp_path, monkeypatch):
+        _reset_regime_state(tmp_path, monkeypatch)
         ts = r.trend_strength(price=70000, trendline=69000, atr=0)
         assert ts["gap_ratio"] == 0.0
         assert ts["trending_up"] is False
         assert ts["trending_down"] is False
 
-    def test_neutral_zone_neither_flag(self):
+    def test_neutral_zone_neither_flag(self, tmp_path, monkeypatch):
         # price == trendline → gap_ratio = 0
+        _reset_regime_state(tmp_path, monkeypatch)
         ts = r.trend_strength(price=70000, trendline=70000, atr=600)
         assert ts["trending_up"] is False
         assert ts["trending_down"] is False
