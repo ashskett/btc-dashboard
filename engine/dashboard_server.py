@@ -203,19 +203,26 @@ def price():
         return jsonify({"error": str(e)}), 500
 
 
-def _aggregate_candles(daily, period):
-    """Aggregate daily OHLCV into weekly or monthly candles."""
+def _aggregate_candles(candles_in, period):
+    """Aggregate OHLCV candles into a larger period (45m, 1w, 1M)."""
     import datetime
     from collections import defaultdict
     buckets = defaultdict(list)
-    for c in daily:
-        dt = datetime.datetime.utcfromtimestamp(c[0] / 1000)
-        if period == '1w':
+    for c in candles_in:
+        if period == '45m':
+            # Snap timestamp down to nearest 45-min boundary (seconds)
+            ts_s = c[0] // 1000
+            key  = (ts_s // 2700) * 2700 * 1000  # 2700s = 45min, result in ms
+        elif period == '1w':
+            dt = datetime.datetime.utcfromtimestamp(c[0] / 1000)
             anchor = dt - datetime.timedelta(days=dt.weekday())  # Monday
+            key = int(datetime.datetime(anchor.year, anchor.month, anchor.day,
+                                        tzinfo=datetime.timezone.utc).timestamp() * 1000)
         else:  # '1M'
+            dt = datetime.datetime.utcfromtimestamp(c[0] / 1000)
             anchor = datetime.datetime(dt.year, dt.month, 1)
-        key = int(datetime.datetime(anchor.year, anchor.month, anchor.day,
-                                    tzinfo=datetime.timezone.utc).timestamp() * 1000)
+            key = int(datetime.datetime(anchor.year, anchor.month, anchor.day,
+                                        tzinfo=datetime.timezone.utc).timestamp() * 1000)
         buckets[key].append(c)
     result = []
     for ts_ms, cs in sorted(buckets.items()):
@@ -245,6 +252,18 @@ def candles():
         tf_raw    = request.args.get("tf", "1h")
         limit     = min(int(request.args.get("limit", 150)), 500)
         before_ms = request.args.get("before")
+
+        # 45m: aggregate 3×15m candles
+        if tf_raw == '45m':
+            fetch_limit = limit * 3 + 3  # extra buffer for alignment
+            if before_ms:
+                since_45 = int(before_ms) - fetch_limit * 900_000
+                raw15 = exchange.fetch_ohlcv("BTC/USDC", timeframe='15m', since=since_45, limit=fetch_limit)
+                raw15 = [c for c in raw15 if c[0] < int(before_ms)]
+            else:
+                raw15 = exchange.fetch_ohlcv("BTC/USDC", timeframe='15m', limit=fetch_limit)
+            data = _aggregate_candles(raw15, '45m')
+            return jsonify(data[-limit:])
 
         # Weekly / Monthly: Coinbase has no native granularity for these.
         # Paginate daily candles (≤300/call) to cover the requested range.
@@ -287,8 +306,8 @@ def candles():
         if before_ms:
             # Fetch a window of candles ending strictly before the given timestamp.
             # ccxt fetch_ohlcv(since) fetches from that point forward, so we back-calculate.
-            TF_MS = {'1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000,
-                     '6h': 21_600_000, '1d': 86_400_000}
+            TF_MS = {'1m': 60_000, '5m': 300_000, '15m': 900_000, '45m': 2_700_000,
+                     '1h': 3_600_000, '6h': 21_600_000, '1d': 86_400_000}
             tf_ms = TF_MS.get(tf, 3_600_000)
             since = int(before_ms) - limit * tf_ms
             data  = exchange.fetch_ohlcv("BTC/USDC", timeframe=tf, since=since, limit=limit)

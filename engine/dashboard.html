@@ -477,8 +477,10 @@
   <div class="tf-bar">
     <button class="tf-btn" data-tf="1m">1m</button>
     <button class="tf-btn" data-tf="5m">5m</button>
+    <button class="tf-btn" data-tf="15m">15m</button>
+    <button class="tf-btn" data-tf="45m">45m</button>
     <button class="tf-btn active" data-tf="1h">1H</button>
-    <button class="tf-btn" data-tf="4h">6H</button>
+    <button class="tf-btn" data-tf="4h">4H</button>
     <button class="tf-btn" data-tf="1d">1D</button>
     <button class="tf-btn" data-tf="1w">1W</button>
     <button class="tf-btn" data-tf="1M">1M</button>
@@ -1668,7 +1670,7 @@ async function loadFills(){
 
 function applyFillMarkers(){
   if(!candles || !fillsData.length) return;
-  const gran = {'1m':60,'5m':300,'1h':3600,'4h':14400,'6h':21600,'1d':86400,'1w':604800,'1M':2592000}[currentTf] || 3600;
+  const gran = {'1m':60,'5m':300,'15m':900,'45m':2700,'1h':3600,'4h':14400,'6h':21600,'1d':86400,'1w':604800,'1M':2592000}[currentTf] || 3600;
   // Deduplicate: one marker per candle per side (multiple fills in same candle collapse to one)
   const seen = new Map();
   fillsData
