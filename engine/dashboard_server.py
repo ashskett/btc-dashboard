@@ -753,7 +753,9 @@ def bot_fills_debug():
 def bot_fills():
     global _fills_cache
     now = time.time()
-    if _fills_cache["data"] is not None and now - _fills_cache["ts"] < 300:
+    if (request.args.get("nocache") != "1"
+            and _fills_cache["data"] is not None
+            and now - _fills_cache["ts"] < 120):
         return jsonify(_fills_cache["data"])
     try:
         ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
