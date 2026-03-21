@@ -102,7 +102,8 @@ def _load_private_key():
 
 def signed_request(method, path, body=None, params=None):
     payload     = json.dumps(body) if body else ""
-    sign_target = ("/public/api" + path + payload).encode()
+    qs          = ("?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))) if params else ""
+    sign_target = ("/public/api" + path + qs + payload).encode()
     private_key = _load_private_key()
     sig = base64.b64encode(
         private_key.sign(sign_target, padding.PKCS1v15(), hashes.SHA256())
