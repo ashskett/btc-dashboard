@@ -1467,18 +1467,45 @@ def notifications():
                            "msg": f"Regime: {prev_reg} → {reg}  (${price:,.0f})"})
 
         # Trending_up / trending_down changes
+        # Dedup: suppress TRENDING events that chop within 30 min (threshold noise)
+        TREND_DEDUP_SECS = 1800
+
+        def _last_trend_ts(label):
+            from datetime import datetime, timezone
+            for ev in reversed(events):
+                if ev["type"] == "TRENDING" and label in ev["msg"]:
+                    try:
+                        return datetime.fromisoformat(
+                            ev["ts"].replace("Z", "+00:00")).timestamp()
+                    except Exception:
+                        pass
+            return 0
+
+        def _cur_unix(ts_str):
+            from datetime import datetime
+            try:
+                return datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                return 0
+
+        _now = _cur_unix(ts)
+
         if e.get("trending_down") and not prev.get("trending_down"):
-            events.append({"ts": ts, "type": "TRENDING", "severity": "warning",
-                           "msg": f"Trending DOWN — inner+mid off  gap={e.get('gap_ratio',0):.1f}×ATR  (${price:,.0f})"})
+            if _now - _last_trend_ts("Trending DOWN \u2014") > TREND_DEDUP_SECS:
+                events.append({"ts": ts, "type": "TRENDING", "severity": "warning",
+                               "msg": f"Trending DOWN \u2014 inner+mid off  gap={e.get('gap_ratio',0):.1f}\u00d7ATR  (${price:,.0f})"})
         if not e.get("trending_down") and prev.get("trending_down"):
-            events.append({"ts": ts, "type": "TRENDING", "severity": "info",
-                           "msg": f"Trending DOWN cleared  (${price:,.0f})"})
+            if _now - _last_trend_ts("Trending DOWN cleared") > TREND_DEDUP_SECS:
+                events.append({"ts": ts, "type": "TRENDING", "severity": "info",
+                               "msg": f"Trending DOWN cleared  (${price:,.0f})"})
         if e.get("trending_up") and not prev.get("trending_up"):
-            events.append({"ts": ts, "type": "TRENDING", "severity": "info",
-                           "msg": f"Trending UP — inner off  gap={e.get('gap_ratio',0):.1f}×ATR  (${price:,.0f})"})
+            if _now - _last_trend_ts("Trending UP \u2014") > TREND_DEDUP_SECS:
+                events.append({"ts": ts, "type": "TRENDING", "severity": "info",
+                               "msg": f"Trending UP \u2014 inner off  gap={e.get('gap_ratio',0):.1f}\u00d7ATR  (${price:,.0f})"})
         if not e.get("trending_up") and prev.get("trending_up"):
-            events.append({"ts": ts, "type": "TRENDING", "severity": "info",
-                           "msg": f"Trending UP cleared  (${price:,.0f})"})
+            if _now - _last_trend_ts("Trending UP cleared") > TREND_DEDUP_SECS:
+                events.append({"ts": ts, "type": "TRENDING", "severity": "info",
+                               "msg": f"Trending UP cleared  (${price:,.0f})"})
 
         # Inventory mode
         mode      = e.get("inventory_mode")

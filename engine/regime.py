@@ -81,10 +81,15 @@ def trend_strength(price, trendline, atr):
     """
     Returns a gap_ratio (price - trendline) / atr and derived trend flags.
 
-    trending_up:   price > trendline + 5.5×ATR — price running away upward.
+    trending_up:   ENTRY when gap_ratio > 5.5 (price running hard above trendline).
+                   EXIT  when gap_ratio < 4.5 (1.0× ATR hysteresis band).
                    Raised from 3.0 (Mar 16): 3x suppressed inner all morning during
-                   consolidation at gap_ratio 4.8–5.8 — too conservative. 5.5x only
-                   parks inner on a genuine acceleration, not normal ranging drift.
+                   consolidation at gap_ratio 4.8–5.8. 5.5x only parks inner on a
+                   genuine acceleration.
+                   Hysteresis added (Mar 21): prevents chop when gap_ratio sits on
+                   the 5.5 threshold — inner was toggling ON/OFF every cycle in a
+                   tight range where the trendline was far below price. State
+                   persisted in regime_state.json.
 
     trending_down: price < trendline - 2.0×ATR — meaningful downside pressure.
                    Raised from 1.5× (Mar 18): -1.5× fired too aggressively on
@@ -97,14 +102,36 @@ def trend_strength(price, trendline, atr):
     more than a false negative (staying on through mild adverse move) because
     the outer bot always provides a safety net even when inner/mid are paused.
     """
+    TRENDING_UP_ENTRY = 5.5   # gap_ratio threshold to enter trending_up
+    TRENDING_UP_EXIT  = 4.5   # gap_ratio threshold to exit (hysteresis band)
+
     if atr and atr > 0:
         gap_ratio = (price - trendline) / atr
     else:
         gap_ratio = 0.0
 
+    # Hysteresis: load current trending_up state, apply Schmitt-trigger logic
+    rs = _load_regime_state()
+    currently_up = rs.get("trending_up_active", False)
+
+    if currently_up:
+        # Only clear if gap_ratio has genuinely retreated (not just ticked below threshold)
+        new_trending_up = gap_ratio >= TRENDING_UP_EXIT
+    else:
+        # Only enter on a proper break above entry threshold
+        new_trending_up = gap_ratio > TRENDING_UP_ENTRY
+
+    if new_trending_up != currently_up:
+        rs["trending_up_active"] = new_trending_up
+        _save_regime_state(rs)
+        if new_trending_up:
+            print(f"[TrendStrength] trending_up ON  — gap_ratio={gap_ratio:.2f}×ATR (entry>{TRENDING_UP_ENTRY})")
+        else:
+            print(f"[TrendStrength] trending_up OFF — gap_ratio={gap_ratio:.2f}×ATR (exit<{TRENDING_UP_EXIT})")
+
     return {
         "gap_ratio":     round(gap_ratio, 3),
-        "trending_up":   bool(gap_ratio >  5.5),
+        "trending_up":   new_trending_up,
         "trending_down": bool(gap_ratio < -2.0),
     }
 
