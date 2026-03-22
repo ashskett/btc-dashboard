@@ -496,8 +496,8 @@
 </main>
 
 <aside>
-  <!-- SIDEBAR TAB BAR -->
-  <div class="aside-tabs">
+  <!-- SIDEBAR TAB BAR — two rows of 3 -->
+  <div class="aside-tabs" style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px;">
     <button class="aside-tab active" id="tabControls" onclick="switchTab('controls')">Controls</button>
     <button class="aside-tab"        id="tabGrid"     onclick="switchTab('grid');loadBots()">Grid</button>
     <button class="aside-tab"        id="tabPnl"      onclick="switchTab('pnl')">P&amp;L</button>
