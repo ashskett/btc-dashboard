@@ -218,6 +218,11 @@
     padding:6px 8px; border-radius:4px; outline:none;
   }
   .cinput:focus { border-color:var(--accent); }
+  input[type=range] { -webkit-appearance:none; background:transparent; cursor:pointer; height:18px; }
+  input[type=range]::-webkit-slider-runnable-track { height:4px; background:var(--border2); border-radius:2px; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); margin-top:-5px; }
+  input[type=range]::-moz-range-track { height:4px; background:var(--border2); border-radius:2px; border:none; }
+  input[type=range]::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:var(--accent); border:none; }
   .cset {
     background:rgba(0,212,255,.12); border:1px solid var(--accent); color:var(--accent);
     font-family:var(--mono); font-size:10px; padding:6px 10px; border-radius:4px; cursor:pointer; transition:all .15s;
@@ -499,7 +504,7 @@
   <!-- SIDEBAR TAB BAR — two rows of 3 -->
   <div class="aside-tabs" style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px;">
     <button class="aside-tab active" id="tabControls" onclick="switchTab('controls')">Controls</button>
-    <button class="aside-tab"        id="tabGrid"     onclick="switchTab('grid');loadBots()">Grid</button>
+    <button class="aside-tab"        id="tabGrid"     onclick="switchTab('grid');loadBots();loadBudgets()">Grid</button>
     <button class="aside-tab"        id="tabPnl"      onclick="switchTab('pnl')">P&amp;L</button>
     <button class="aside-tab"        id="tabDca"      onclick="switchTab('dca')">DCA</button>
     <button class="aside-tab"        id="tabBalance"  onclick="switchTab('balance');loadBalance()">Balance</button>
@@ -921,6 +926,39 @@
         <button class="cbtn on-b" onclick="loadBots()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
       </div>
       <div id="gridBotCards"><div style="color:var(--muted);font-size:10px;">Loading bots…</div></div>
+    </div>
+    <!-- CAPITAL BUDGET -->
+    <div class="sec">
+      <div class="sec-title">
+        Capital Budget
+        <button class="cbtn on-b" onclick="loadBudgets()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
+      </div>
+      <div id="budgetSection" style="font-size:10px;">
+        <div style="display:grid;grid-template-columns:55px 1fr 45px 40px;gap:6px 8px;align-items:center;margin-bottom:8px;">
+          <span class="ctl-lbl" style="margin:0">Inner</span>
+          <input type="range" id="budgetInner" min="0" max="60" value="30" oninput="onBudgetSlider()" style="width:100%;">
+          <span id="budgetInnerVal" style="color:var(--text);font-weight:700;">30%</span>
+          <span id="budgetInnerUsd" style="color:var(--muted);font-size:9px;">--</span>
+
+          <span class="ctl-lbl" style="margin:0">Mid</span>
+          <input type="range" id="budgetMid" min="0" max="60" value="20" oninput="onBudgetSlider()" style="width:100%;">
+          <span id="budgetMidVal" style="color:var(--text);font-weight:700;">20%</span>
+          <span id="budgetMidUsd" style="color:var(--muted);font-size:9px;">--</span>
+
+          <span class="ctl-lbl" style="margin:0">Outer</span>
+          <input type="range" id="budgetOuter" min="0" max="60" value="15" oninput="onBudgetSlider()" style="width:100%;">
+          <span id="budgetOuterVal" style="color:var(--text);font-weight:700;">15%</span>
+          <span id="budgetOuterUsd" style="color:var(--muted);font-size:9px;">--</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding:4px 6px;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:4px;">
+          <span style="color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.06em;">Allocated / Reserve</span>
+          <span id="budgetAllocated" style="font-weight:700;">65%</span>
+          <span style="color:var(--muted);margin:0 4px;">/</span>
+          <span id="budgetReserve" style="font-weight:700;color:var(--green);">35%</span>
+        </div>
+        <div id="budgetPortfolioLine" style="color:var(--muted);font-size:9px;margin-bottom:6px;">Portfolio: --</div>
+        <button class="cbtn" id="budgetSaveBtn" onclick="saveBudgets()" style="width:100%;border-color:var(--accent);color:var(--accent);">Save Budgets</button>
+      </div>
     </div>
   </div><!-- end #panelGrid -->
 
@@ -1520,6 +1558,72 @@ async function pollStatus(){
   } catch(e){
     setConnected(false);
   }
+}
+
+// ── CAPITAL BUDGETS ─────────────────────────────────────────
+let _budgetPortfolio = 0;
+async function loadBudgets(){
+  try {
+    const r = await fetch(`${API}/budgets`);
+    const budgets = await r.json();
+    const names = {inner:0, mid:1, outer:2};
+    const ids   = ['budgetInner','budgetMid','budgetOuter'];
+    budgets.forEach(b => {
+      const idx = names[b.name];
+      if (idx === undefined) return;
+      const sl = document.getElementById(ids[idx]);
+      if (sl) { sl.value = b.pct; }
+    });
+    onBudgetSlider();
+  } catch(e){ console.warn('loadBudgets error', e); }
+  // Grab portfolio value from latest portfolio log entry
+  try {
+    const s = await fetch(`${API}/portfolio/log?limit=1`);
+    const rows = await s.json();
+    if (rows.length > 0 && rows[0].portfolio_usd) {
+      _budgetPortfolio = rows[0].portfolio_usd;
+      document.getElementById('budgetPortfolioLine').textContent =
+        `Portfolio: $${Number(rows[0].portfolio_usd).toLocaleString(undefined,{maximumFractionDigits:0})}`;
+    }
+    onBudgetSlider();
+  } catch(e){}
+}
+
+function onBudgetSlider(){
+  const inner = parseInt(document.getElementById('budgetInner').value)||0;
+  const mid   = parseInt(document.getElementById('budgetMid').value)||0;
+  const outer = parseInt(document.getElementById('budgetOuter').value)||0;
+  const total = inner + mid + outer;
+  const reserve = 100 - total;
+  document.getElementById('budgetInnerVal').textContent = inner + '%';
+  document.getElementById('budgetMidVal').textContent   = mid + '%';
+  document.getElementById('budgetOuterVal').textContent  = outer + '%';
+  document.getElementById('budgetAllocated').textContent = total + '%';
+  const resEl = document.getElementById('budgetReserve');
+  resEl.textContent = reserve + '%';
+  resEl.style.color = reserve < 0 ? 'var(--red)' : reserve < 20 ? 'var(--amber)' : 'var(--green)';
+  // Show USD values if portfolio known
+  if (_budgetPortfolio > 0) {
+    document.getElementById('budgetInnerUsd').textContent = '$' + Math.round(_budgetPortfolio * inner / 100).toLocaleString();
+    document.getElementById('budgetMidUsd').textContent   = '$' + Math.round(_budgetPortfolio * mid / 100).toLocaleString();
+    document.getElementById('budgetOuterUsd').textContent  = '$' + Math.round(_budgetPortfolio * outer / 100).toLocaleString();
+  }
+}
+
+async function saveBudgets(){
+  const budgets = [
+    {name:'inner', pct: parseInt(document.getElementById('budgetInner').value)||0},
+    {name:'mid',   pct: parseInt(document.getElementById('budgetMid').value)||0},
+    {name:'outer', pct: parseInt(document.getElementById('budgetOuter').value)||0},
+  ];
+  const total = budgets.reduce((s,b)=>s+b.pct,0);
+  if (total > 100) { toast('Total budget exceeds 100%','err'); return; }
+  try {
+    const r = await fetch(`${API}/budgets`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(budgets)});
+    const j = await r.json();
+    if (j.ok) { toast('Budgets saved','ok'); }
+    else { toast(j.msg||'Save failed','err'); }
+  } catch(e){ toast('Error: '+e.message,'err'); }
 }
 
 // ── BOTS ─────────────────────────────────────────────────

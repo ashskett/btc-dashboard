@@ -84,7 +84,33 @@ def start_bot(bot_id):
     return r
 
 
-def redeploy_bot(bot_id, tier):
+_BUDGET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tier_budgets.json")
+
+# Default budget: % of total portfolio allocated to each tier
+_DEFAULT_BUDGETS = [
+    {"name": "inner",  "pct": 30},
+    {"name": "mid",    "pct": 20},
+    {"name": "outer",  "pct": 15},
+]
+
+
+def load_tier_budgets() -> list:
+    try:
+        if os.path.exists(_BUDGET_FILE):
+            return json.load(open(_BUDGET_FILE))
+    except Exception as e:
+        print(f"Warning: could not load tier_budgets.json: {e}")
+    return list(_DEFAULT_BUDGETS)
+
+
+def save_tier_budgets(budgets: list):
+    try:
+        json.dump(budgets, open(_BUDGET_FILE, "w"), indent=2)
+    except Exception as e:
+        print(f"Warning: could not save tier_budgets.json: {e}")
+
+
+def redeploy_bot(bot_id, tier, budget_usd=None):
     """
     Stop, update parameters for a single tier, then restart.
 
@@ -93,6 +119,10 @@ def redeploy_bot(bot_id, tier):
         grid_high   — upper_price
         levels      — grids_quantity
         name        — appended to bot name for clarity
+
+    budget_usd: if provided, calculates qty_per_grid from budget rather
+                than preserving whatever 3Commas had. This prevents capital
+                creep where 3Commas auto-allocates available funds on enable.
     """
     print(f"  Redeploying bot {bot_id} ({tier['name']} tier)...")
 
@@ -107,47 +137,21 @@ def redeploy_bot(bot_id, tier):
     stop_bot(bot_id)
     time.sleep(2)  # brief pause to let 3Commas cancel open orders
 
-    # Re-fetch post-stop state so we see actual BTC/USDC holdings after orders cancelled
-    try:
-        stopped = get_bot(bot_id)
-        btc_held  = float(stopped.get("investment_base_currency")  or 0)
-        usdc_held = float(stopped.get("investment_quote_currency") or 0)
-    except Exception:
-        stopped   = current
-        btc_held  = 0.0
-        usdc_held = 0.0
-
     # 3. Build the PATCH payload — only change range/levels, preserve everything else
     lower = round(tier["grid_low"],  2)
     upper = round(tier["grid_high"], 2)
     grids = int(tier["levels"])
+    mid_price = (lower + upper) / 2
 
-    # Estimate how many sell vs buy levels exist at current price (≈ midpoint of new range)
-    mid_price   = (lower + upper) / 2
-    sell_levels = max(1, round((upper - mid_price) / (upper - lower) * grids))
-    buy_levels  = max(1, grids - sell_levels)
-
-    # Original configured qty (what 3Commas had before)
-    original_qty = float(current.get("quantity_per_grid") or 0) or (100.0 / mid_price)
-
-    # Cap qty_per_grid so each funded side can cover its levels.
-    # If a side has zero capital the bot will self-heal as the other side fills.
-    candidates = []
-    if btc_held  > 0: candidates.append(btc_held  / sell_levels)
-    if usdc_held > 0: candidates.append(usdc_held / (buy_levels * mid_price))
-
-    if candidates:
-        max_funded_qty = min(candidates)
-        if max_funded_qty < original_qty * 0.9:
-            qty = max_funded_qty
-            print(f"  ⚠ Capital low — qty_per_grid capped: {original_qty:.6f} → {qty:.6f} BTC"
-                  f"  (held: {btc_held:.4f} BTC / ${usdc_held:,.0f} USDC)")
-        else:
-            qty = original_qty
+    # Calculate qty_per_grid from budget if provided
+    if budget_usd and budget_usd > 0 and mid_price > 0:
+        qty = budget_usd / (grids * mid_price)
+        print(f"    Budget: ${budget_usd:,.0f} → qty_per_grid={qty:.6f} BTC "
+              f"(${budget_usd/grids:,.0f}/level × {grids} levels)")
     else:
-        # No capital at all — keep original and let 3Commas surface the error
-        qty = original_qty
-        print(f"  ⚠ No capital detected after stop (btc=0, usdc=0) — using original qty {qty:.6f}")
+        # Fallback: preserve original qty (legacy behaviour for manual calls)
+        qty = float(current.get("quantity_per_grid") or 0) or (100.0 / mid_price)
+        print(f"    No budget set — using existing qty_per_grid={qty:.6f} BTC")
 
     patch_body = {
         "name":             current.get("name", f"Grid {tier['name']}"),
@@ -314,12 +318,57 @@ def redeploy_all_bots(bot_ids, tiers):
     Redeploy all bots with their respective tier parameters.
     bot_ids: list of 3Commas bot ID strings
     tiers:   list of tier dicts from calculate_grid_parameters()
+
+    Applies capital budgets from tier_budgets.json — each tier gets a fixed %
+    of total portfolio value. This prevents 3Commas from auto-allocating all
+    available capital to whichever bot starts first.
     """
+    # Fetch total portfolio value for budget calculation
+    budgets = load_tier_budgets()
+    portfolio_usd = 0.0
+    try:
+        from inventory import portfolio_snapshot
+        snap = portfolio_snapshot()
+        if snap:
+            portfolio_usd = snap.get("portfolio_usd", 0)
+    except Exception as e:
+        print(f"  Warning: could not get portfolio snapshot for budgets: {e}")
+
+    if portfolio_usd <= 0:
+        # Fallback: sum up what's deployed across all bots
+        try:
+            total = 0
+            for bid in bot_ids[:3]:
+                b = get_bot(bid)
+                qty = float(b.get("quantity_per_grid") or 0)
+                lvl = int(b.get("grids_quantity") or 1)
+                up  = float(b.get("upper_price") or 0)
+                lo  = float(b.get("lower_price") or 0)
+                total += qty * lvl * ((up + lo) / 2)
+            portfolio_usd = total * 1.5  # rough estimate (deployed ≈ 65% of total)
+        except Exception:
+            portfolio_usd = 80000  # last-resort fallback
+        print(f"  Using estimated portfolio: ${portfolio_usd:,.0f}")
+
+    print(f"  Portfolio: ${portfolio_usd:,.0f}")
+    for b in budgets:
+        pct = b.get("pct", 0)
+        print(f"    {b['name']}: {pct}% = ${portfolio_usd * pct / 100:,.0f}")
+
     results = []
     for i, bot_id in enumerate(bot_ids[:3]):
         tier = tiers[i] if i < len(tiers) else tiers[-1]
-        ok = redeploy_bot(bot_id, tier)
-        results.append((bot_id, tier["name"], ok))
+        tier_name = tier.get("name", f"tier{i}")
+
+        # Find matching budget
+        budget_usd = None
+        for b in budgets:
+            if b["name"] == tier_name:
+                budget_usd = portfolio_usd * b["pct"] / 100.0
+                break
+
+        ok = redeploy_bot(bot_id, tier, budget_usd=budget_usd)
+        results.append((bot_id, tier_name, ok))
         if i < len(bot_ids) - 1:
             time.sleep(1)  # stagger calls
 

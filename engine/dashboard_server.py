@@ -363,6 +363,37 @@ def stop_bot(bot_id):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Tier budget config ────────────────────────────────────
+from threecommas import load_tier_budgets, save_tier_budgets
+
+@app.route("/budgets", methods=["GET"])
+def get_budgets():
+    return jsonify(load_tier_budgets())
+
+@app.route("/budgets", methods=["POST"])
+def set_budgets():
+    """Set tier budget percentages. Body: [{"name":"inner","pct":30}, ...]"""
+    try:
+        body = request.get_json(force=True, silent=True)
+        if not isinstance(body, list):
+            return jsonify({"ok": False, "msg": "Expected array of {name, pct}"}), 400
+        budgets = []
+        for item in body:
+            name = item.get("name", "").strip()
+            pct  = float(item.get("pct", 0))
+            if not name:
+                continue
+            budgets.append({"name": name, "pct": round(pct, 1)})
+        total = sum(b["pct"] for b in budgets)
+        if total > 100:
+            return jsonify({"ok": False, "msg": f"Total budget {total}% exceeds 100%"}), 400
+        save_tier_budgets(budgets)
+        return jsonify({"ok": True, "budgets": budgets, "total_pct": total,
+                        "reserve_pct": round(100 - total, 1)})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 # ── Grid bot capital allocation ───────────────────────────
 @app.route("/bots/<bot_id>/capital", methods=["POST"])
 def set_grid_bot_capital(bot_id):
