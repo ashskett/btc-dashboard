@@ -103,22 +103,22 @@ class TestTrendStrength:
 class TestTrendDownHysteresis:
     """
     TREND_DOWN uses Schmitt-trigger hysteresis:
-      ENTRY: price < trendline − ATR×0.75 for 2 consecutive cycles
-      EXIT:  price > trendline − ATR×0.15
+      ENTRY: price < trendline − ATR×1.0 for 2 consecutive cycles
+      EXIT:  price > trendline − ATR×0.25
 
-    The wide entry gap (0.75×ATR) prevents firing on minor pullbacks.
-    The tight exit gap (0.15×ATR) prevents chop — once TREND_DOWN fires,
+    The wide entry gap (1.0×ATR) prevents firing on minor pullbacks.
+    The tight exit gap (0.25×ATR) prevents chop — once TREND_DOWN fires,
     price must genuinely recover to the trendline before it clears.
     """
 
     def _make_deep_below_df(self, make_df, atr=600.0, trendline=70000.0):
-        """DataFrame where close is well below entry threshold (>0.75×ATR)."""
-        price = trendline - atr * 1.0   # 1.0× ATR below — comfortably past 0.75× entry
+        """DataFrame where close is well below entry threshold (>1.0×ATR)."""
+        price = trendline - atr * 1.5   # 1.5× ATR below — comfortably past 1.0× entry
         return make_df(price=price, atr=atr)
 
     def _make_shallow_below_df(self, make_df, atr=600.0, trendline=70000.0):
         """DataFrame where close is below trendline but above entry threshold."""
-        price = trendline - atr * 0.5   # 0.5× ATR below — between exit (0.15) and entry (0.75)
+        price = trendline - atr * 0.5   # 0.5× ATR below — between exit (0.25) and entry (1.0)
         return make_df(price=price, atr=atr)
 
     def _make_above_df(self, make_df, atr=600.0, trendline=70000.0):
@@ -151,20 +151,20 @@ class TestTrendDownHysteresis:
     def test_shallow_dip_does_not_trigger_trend_down(
         self, make_df, tmp_path, monkeypatch
     ):
-        """A dip of 0.5×ATR is below trendline but above entry threshold (0.75×ATR)."""
+        """A dip of 0.5×ATR is below trendline but above entry threshold (1.0×ATR)."""
         _reset_regime_state(tmp_path, monkeypatch)
         df = self._make_shallow_below_df(make_df)
         trendline = 70000.0
         r.detect_regime(df, trendline)
         result = r.detect_regime(df, trendline)
         assert result != "TREND_DOWN", (
-            "0.5×ATR below trendline should not trigger TREND_DOWN (entry is 0.75×ATR)"
+            "0.5×ATR below trendline should not trigger TREND_DOWN (entry is 1.0×ATR)"
         )
 
     def test_trend_down_exit_requires_recovery_near_trendline(
         self, make_df, tmp_path, monkeypatch
     ):
-        """Once TREND_DOWN fires, it stays until price recovers to within 0.15×ATR of trendline."""
+        """Once TREND_DOWN fires, it stays until price recovers to within 0.25×ATR of trendline."""
         _reset_regime_state(tmp_path, monkeypatch)
         trendline = 70000.0
         atr = 600.0
@@ -179,7 +179,7 @@ class TestTrendDownHysteresis:
         df_shallow = self._make_shallow_below_df(make_df, atr=atr, trendline=trendline)
         result = r.detect_regime(df_shallow, trendline)
         assert result == "TREND_DOWN", (
-            "0.5×ATR below trendline should NOT clear TREND_DOWN (exit is 0.15×ATR)"
+            "0.5×ATR below trendline should NOT clear TREND_DOWN (exit is 0.25×ATR)"
         )
 
     def test_trend_down_clears_when_price_recovers_above_exit(

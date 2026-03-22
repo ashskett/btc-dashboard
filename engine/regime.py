@@ -34,8 +34,8 @@ def detect_regime(df, trendline):
     #
     # This mirrors the trending_up Schmitt trigger (entry 5.5, exit 4.5).
     #
-    TREND_DOWN_ENTRY_GAP = 0.75   # ATR multiplier to enter TREND_DOWN
-    TREND_DOWN_EXIT_GAP  = 0.15   # ATR multiplier to exit TREND_DOWN
+    TREND_DOWN_ENTRY_GAP = 1.0    # ATR multiplier to enter TREND_DOWN
+    TREND_DOWN_EXIT_GAP  = 0.25   # ATR multiplier to exit TREND_DOWN
 
     rs = _load_regime_state()
     td_active = rs.get("trend_down_active", False)
