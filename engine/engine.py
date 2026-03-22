@@ -507,7 +507,10 @@ def run():
                 state.center = state.price
                 state.deploy_grid_width = state.grid_width
 
-            if breakout_exhausting(df):
+            # UP breakout: exhaustion-redeploy (momentum stalling = grid at new level)
+            # DOWN breakout: do NOT use exhaustion logic — a brief pause in selling is
+            # normal and must NOT restart bots. Instead, wait for genuine price recovery.
+            if _active_dir == "UP" and breakout_exhausting(df):
                 print(f"BREAKOUT EXHAUSTING — momentum stalling at ${state.price:,.0f}  "
                       f"(moved ${_price_change:+,.0f} from fire price)")
                 print("Triggering grid redeploy at new price level")
@@ -529,11 +532,27 @@ def run():
                     print(f"Rate limit reached — skipping exhaustion redeploy")
                 return   # redeploy done (or skipped) — don't fall through to bot-stop logic
 
+            # DOWN breakout recovery: clear only when price recovers > 1.5×ATR above
+            # the fire price. Until then bots stay off unconditionally.
+            if _active_dir == "DOWN":
+                _recovery_threshold = _fire_price + state.atr * 1.5
+                if state.price >= _recovery_threshold:
+                    print(f"BREAKOUT_DOWN recovery — ${state.price:,.0f} above "
+                          f"fire+1.5×ATR (${_recovery_threshold:,.0f}) — clearing breakout")
+                    clear_breakout_state()
+                    # Fall through: bots off this cycle, normal logic next cycle
+                else:
+                    print(f"BREAKOUT_DOWN holding — recovery needs ${_recovery_threshold:,.0f} "
+                          f"(currently ${state.price:,.0f}, need +${_recovery_threshold - state.price:,.0f})")
+                for bot in GRID_BOTS:
+                    if not DRY_RUN:
+                        stop_bot(bot)
+                return
+
             # During active UP breakout: inner+mid off, outer stays running.
             # After INNER_REENTRY_CYCLES cycles with momentum fading (price still
             # elevated), bring inner back online — mid stays off, outer stays on.
             # Full exhaustion still fires later and triggers the normal grid redeploy.
-            # During active DOWN breakout: all bots off (capital protection).
             if _active_dir == "UP":
                 increment_active_cycles()
                 _cycles = _bo_state.get("cycles_active", 0) + 1  # +1 = value after increment
@@ -550,13 +569,6 @@ def run():
                     for i, bot in enumerate(GRID_BOTS[:3]):
                         tier_name = ["inner", "mid", "outer"][i]
                         _act(bot, i >= 2, f"{tier_name} (breakout UP)")
-            else:
-                print(f"BREAKOUT_DOWN active — all bots off (capital protection)")
-                for bot in GRID_BOTS:
-                    if DRY_RUN:
-                        print(f"[SIMULATION] Would keep bot {bot} stopped")
-                    else:
-                        stop_bot(bot)
             return
 
         # ===============================
