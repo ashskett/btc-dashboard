@@ -20,20 +20,56 @@ def detect_regime(df, trendline):
     bb_width = df.bb_width.iloc[-1]
     atr = df.atr.iloc[-1]
 
-    # ── TREND_DOWN hysteresis ─────────────────────────────────────────────────
-    # Require price to be at least ATR×0.15 below trendline (not just a tick)
-    # AND for 2 consecutive cycles to filter out single-candle noise.
-    # Entry 149 in the log was triggered by a $5 dip — this prevents that.
-    min_gap   = atr * 0.15
-    rs        = _load_regime_state()
-    if price < trendline - min_gap:
-        rs["below_tl_count"] = rs.get("below_tl_count", 0) + 1
-    else:
-        rs["below_tl_count"] = 0
-    _save_regime_state(rs)
+    # ── TREND_DOWN hysteresis (Schmitt trigger) ────────────────────────────────
+    #
+    # ENTRY: price < trendline − ATR×0.75 for 2 consecutive cycles.
+    #        0.75×ATR is ~$300 at current vol — filters normal pullbacks.
+    #        (Was ATR×0.15 = ~$61 — fired on trivial dips and then got stuck
+    #         because the exit threshold was the same as entry.)
+    #
+    # EXIT:  price > trendline − ATR×0.15 (within $61 of trendline = recovered).
+    #        Separate exit threshold prevents chop: once TREND_DOWN fires, price
+    #        must recover to near the trendline before it clears — not just
+    #        bounce to the entry threshold.
+    #
+    # This mirrors the trending_up Schmitt trigger (entry 5.5, exit 4.5).
+    #
+    TREND_DOWN_ENTRY_GAP = 0.75   # ATR multiplier to enter TREND_DOWN
+    TREND_DOWN_EXIT_GAP  = 0.15   # ATR multiplier to exit TREND_DOWN
 
-    if rs["below_tl_count"] >= 2:
-        return "TREND_DOWN"
+    rs = _load_regime_state()
+    td_active = rs.get("trend_down_active", False)
+
+    if td_active:
+        # Already in TREND_DOWN — only exit when price recovers close to trendline
+        if price >= trendline - atr * TREND_DOWN_EXIT_GAP:
+            rs["trend_down_active"] = False
+            rs["below_tl_count"] = 0
+            _save_regime_state(rs)
+            print(f"[Regime] TREND_DOWN OFF — price ${price:,.0f} recovered to within "
+                  f"{TREND_DOWN_EXIT_GAP}×ATR of trendline ${trendline:,.0f}")
+            # Fall through to other regime checks
+        else:
+            _save_regime_state(rs)
+            return "TREND_DOWN"
+    else:
+        # Not in TREND_DOWN — count consecutive cycles below entry threshold
+        entry_threshold = trendline - atr * TREND_DOWN_ENTRY_GAP
+        if price < entry_threshold:
+            rs["below_tl_count"] = rs.get("below_tl_count", 0) + 1
+        else:
+            if rs.get("below_tl_count", 0) > 0:
+                rs["below_tl_count"] = 0
+
+        if rs.get("below_tl_count", 0) >= 2:
+            rs["trend_down_active"] = True
+            _save_regime_state(rs)
+            print(f"[Regime] TREND_DOWN ON — price ${price:,.0f} has been "
+                  f">{TREND_DOWN_ENTRY_GAP}×ATR below trendline ${trendline:,.0f} "
+                  f"for {rs['below_tl_count']} cycles")
+            return "TREND_DOWN"
+
+        _save_regime_state(rs)
     # ─────────────────────────────────────────────────────────────────────────
 
     # Require 3 consecutive candles below the 10th percentile to confirm

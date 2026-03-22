@@ -20,7 +20,8 @@ def _reset_regime_state(tmp_path, monkeypatch):
     """Point regime_state.json at a temp file and reset all counters."""
     state_file = str(tmp_path / "regime_state.json")
     monkeypatch.setattr(r, "_REGIME_STATE_FILE", state_file)
-    json.dump({"below_tl_count": 0, "trending_up_active": False}, open(state_file, "w"))
+    json.dump({"below_tl_count": 0, "trending_up_active": False,
+               "trend_down_active": False}, open(state_file, "w"))
     return state_file
 
 
@@ -101,14 +102,23 @@ class TestTrendStrength:
 
 class TestTrendDownHysteresis:
     """
-    The two-cycle hysteresis was the direct cause of today's incident:
-    TREND_DOWN should require 2 consecutive cycles below trendline - ATR×0.15.
-    A single dip must not trigger it.
+    TREND_DOWN uses Schmitt-trigger hysteresis:
+      ENTRY: price < trendline − ATR×0.75 for 2 consecutive cycles
+      EXIT:  price > trendline − ATR×0.15
+
+    The wide entry gap (0.75×ATR) prevents firing on minor pullbacks.
+    The tight exit gap (0.15×ATR) prevents chop — once TREND_DOWN fires,
+    price must genuinely recover to the trendline before it clears.
     """
 
-    def _make_below_df(self, make_df, atr=600.0, trendline=70000.0):
-        """DataFrame where close is well below trendline."""
-        price = trendline - atr * 0.5   # 0.5× ATR below — comfortably below min_gap
+    def _make_deep_below_df(self, make_df, atr=600.0, trendline=70000.0):
+        """DataFrame where close is well below entry threshold (>0.75×ATR)."""
+        price = trendline - atr * 1.0   # 1.0× ATR below — comfortably past 0.75× entry
+        return make_df(price=price, atr=atr)
+
+    def _make_shallow_below_df(self, make_df, atr=600.0, trendline=70000.0):
+        """DataFrame where close is below trendline but above entry threshold."""
+        price = trendline - atr * 0.5   # 0.5× ATR below — between exit (0.15) and entry (0.75)
         return make_df(price=price, atr=atr)
 
     def _make_above_df(self, make_df, atr=600.0, trendline=70000.0):
@@ -116,56 +126,102 @@ class TestTrendDownHysteresis:
         price = trendline + atr * 0.5
         return make_df(price=price, atr=atr)
 
-    def test_single_dip_returns_range_not_trend_down(
+    def test_single_deep_dip_returns_range_not_trend_down(
         self, make_df, tmp_path, monkeypatch
     ):
         _reset_regime_state(tmp_path, monkeypatch)
-        df = self._make_below_df(make_df)
+        df = self._make_deep_below_df(make_df)
         trendline = 70000.0
         result = r.detect_regime(df, trendline)
-        # First cycle below trendline: count=1, need 2 → should NOT be TREND_DOWN
+        # First cycle below: count=1, need 2 → not TREND_DOWN yet
         assert result != "TREND_DOWN", (
             "Single cycle below trendline must not trigger TREND_DOWN"
         )
 
-    def test_two_consecutive_dips_return_trend_down(
+    def test_two_consecutive_deep_dips_return_trend_down(
         self, make_df, tmp_path, monkeypatch
     ):
         _reset_regime_state(tmp_path, monkeypatch)
-        df = self._make_below_df(make_df)
+        df = self._make_deep_below_df(make_df)
         trendline = 70000.0
         r.detect_regime(df, trendline)           # cycle 1: count → 1
         result = r.detect_regime(df, trendline)  # cycle 2: count → 2 → TREND_DOWN
         assert result == "TREND_DOWN"
 
-    def test_trend_down_resets_when_price_returns_above(
+    def test_shallow_dip_does_not_trigger_trend_down(
         self, make_df, tmp_path, monkeypatch
     ):
+        """A dip of 0.5×ATR is below trendline but above entry threshold (0.75×ATR)."""
         _reset_regime_state(tmp_path, monkeypatch)
+        df = self._make_shallow_below_df(make_df)
         trendline = 70000.0
-        df_below = self._make_below_df(make_df)
-        df_above = self._make_above_df(make_df)
-        r.detect_regime(df_below, trendline)   # count → 1
-        r.detect_regime(df_below, trendline)   # count → 2, TREND_DOWN
-        r.detect_regime(df_above, trendline)   # count reset → 0
-        # Now one more below — count is 1, should NOT be TREND_DOWN yet
-        result = r.detect_regime(df_below, trendline)
-        assert result != "TREND_DOWN", (
-            "Counter must reset when price returns above trendline"
-        )
-
-    def test_min_gap_prevents_trivial_dips(self, make_df, tmp_path, monkeypatch):
-        """A dip of only ATR×0.05 (below min_gap of ATR×0.15) should not count."""
-        _reset_regime_state(tmp_path, monkeypatch)
-        atr = 600.0
-        trendline = 70000.0
-        # Price just barely below trendline — less than min_gap (atr×0.15 = 90)
-        price = trendline - atr * 0.05
-        df = make_df(price=price, atr=atr)
         r.detect_regime(df, trendline)
         result = r.detect_regime(df, trendline)
-        # Even after 2 cycles, the dip is too shallow → not TREND_DOWN
-        assert result != "TREND_DOWN"
+        assert result != "TREND_DOWN", (
+            "0.5×ATR below trendline should not trigger TREND_DOWN (entry is 0.75×ATR)"
+        )
+
+    def test_trend_down_exit_requires_recovery_near_trendline(
+        self, make_df, tmp_path, monkeypatch
+    ):
+        """Once TREND_DOWN fires, it stays until price recovers to within 0.15×ATR of trendline."""
+        _reset_regime_state(tmp_path, monkeypatch)
+        trendline = 70000.0
+        atr = 600.0
+        df_deep = self._make_deep_below_df(make_df, atr=atr, trendline=trendline)
+
+        # Enter TREND_DOWN
+        r.detect_regime(df_deep, trendline)
+        r.detect_regime(df_deep, trendline)
+
+        # Price recovers to 0.5×ATR below trendline — still below exit threshold (0.15×ATR)
+        # TREND_DOWN should HOLD (this was the bug — before, it cleared here)
+        df_shallow = self._make_shallow_below_df(make_df, atr=atr, trendline=trendline)
+        result = r.detect_regime(df_shallow, trendline)
+        assert result == "TREND_DOWN", (
+            "0.5×ATR below trendline should NOT clear TREND_DOWN (exit is 0.15×ATR)"
+        )
+
+    def test_trend_down_clears_when_price_recovers_above_exit(
+        self, make_df, tmp_path, monkeypatch
+    ):
+        """TREND_DOWN clears when price gets within 0.15×ATR of trendline."""
+        _reset_regime_state(tmp_path, monkeypatch)
+        trendline = 70000.0
+        atr = 600.0
+
+        # Enter TREND_DOWN
+        df_deep = self._make_deep_below_df(make_df, atr=atr, trendline=trendline)
+        r.detect_regime(df_deep, trendline)
+        r.detect_regime(df_deep, trendline)
+
+        # Price recovers above trendline → should clear
+        df_above = self._make_above_df(make_df, atr=atr, trendline=trendline)
+        result = r.detect_regime(df_above, trendline)
+        assert result != "TREND_DOWN", (
+            "TREND_DOWN should clear when price recovers above trendline"
+        )
+
+    def test_trend_down_resets_count_when_price_returns_above(
+        self, make_df, tmp_path, monkeypatch
+    ):
+        """After TREND_DOWN clears, it takes 2 fresh deep dips to re-enter."""
+        _reset_regime_state(tmp_path, monkeypatch)
+        trendline = 70000.0
+        atr = 600.0
+        df_deep  = self._make_deep_below_df(make_df, atr=atr, trendline=trendline)
+        df_above = self._make_above_df(make_df, atr=atr, trendline=trendline)
+
+        # Enter TREND_DOWN
+        r.detect_regime(df_deep, trendline)
+        r.detect_regime(df_deep, trendline)
+        # Clear it
+        r.detect_regime(df_above, trendline)
+        # One more deep dip — count=1, should NOT re-trigger
+        result = r.detect_regime(df_deep, trendline)
+        assert result != "TREND_DOWN", (
+            "Counter must reset — one dip after recovery should not re-trigger"
+        )
 
 
 # ── COMPRESSION guard ──────────────────────────────────────────────────────
