@@ -1346,6 +1346,22 @@ def cancel_smart_trade_route(st_id):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ── Regime state management ───────────────────────────────
+@app.route("/regime/clear", methods=["POST"])
+def regime_clear():
+    """Reset regime_state.json — clears TREND_DOWN lock and trending_up state."""
+    state_file = os.path.join(os.path.dirname(__file__), "regime_state.json")
+    try:
+        import json as _json
+        _json.dump(
+            {"below_tl_count": 0, "trending_up_active": False, "trend_down_active": False},
+            open(state_file, "w")
+        )
+        return jsonify({"ok": True, "msg": "Regime state cleared"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 # ── Breakout state management ─────────────────────────────
 @app.route("/breakout/clear", methods=["POST"])
 def breakout_clear():
