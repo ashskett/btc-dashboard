@@ -1239,7 +1239,7 @@ async function loadCandles(tf){
     if(tf !== currentTf) return;  // TF changed while fetch was in-flight — discard
 
     const ts = chart.timeScale();
-    const mapped = data.map(c=>({time:c[0]/1000,open:c[1],high:c[2],low:c[3],close:c[4]}));
+    const mapped = data.map(c=>({time:Math.floor(c[0]/1000),open:c[1],high:c[2],low:c[3],close:c[4]}));
 
     if (!_candlesInitialised) {
       _candleData = mapped;
@@ -1284,7 +1284,7 @@ async function loadOlderCandles(){
     const data = await r.json();
     if(!Array.isArray(data) || data.length === 0){ _noMoreOlderCandles = true; return; }
 
-    const newCandles = data.map(c=>({time:c[0]/1000,open:c[1],high:c[2],low:c[3],close:c[4]}));
+    const newCandles = data.map(c=>({time:Math.floor(c[0]/1000),open:c[1],high:c[2],low:c[3],close:c[4]}));
     const uniqueNew  = newCandles.filter(c => c.time < _candleData[0].time);
     if(uniqueNew.length === 0){ _noMoreOlderCandles = true; return; }
 
@@ -1809,7 +1809,18 @@ function applyFillMarkers(){
       }
     });
   const markers = Array.from(seen.values()).sort((a,b) => a.time - b.time);
-  try { candles.setMarkers(markers); } catch(e){}
+  // Check which markers fall within actual candle data range
+  if (_candleData.length && markers.length) {
+    const candleTimes = new Set(_candleData.map(c => c.time));
+    const matched = markers.filter(m => candleTimes.has(m.time));
+    const unmatched = markers.filter(m => !candleTimes.has(m.time));
+    if (unmatched.length) {
+      console.warn(`[Fills] ${unmatched.length}/${markers.length} markers have no matching candle:`,
+        unmatched.map(m => ({time: m.time, date: new Date(m.time*1000).toISOString()})));
+    }
+    console.log(`[Fills] ${matched.length}/${markers.length} markers matched to candles (tf=${currentTf})`);
+  }
+  try { candles.setMarkers(markers); } catch(e){ console.error('[Fills] setMarkers error:', e); }
 }
 
 // ── ACTIONS ───────────────────────────────────────────────
