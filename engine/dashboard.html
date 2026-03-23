@@ -1921,8 +1921,18 @@ async function clearInvOverride(){
 
 async function setMode(mode){
   try{
-    await fetch(`${API}/inventory/mode`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
-    toast(`Mode → ${mode}`,'ok');
+    const r = await fetch(`${API}/inventory/mode`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+    const j = await r.json();
+    if (j.ok || j.mode) {
+      toast(`Mode → ${mode}`,'ok');
+      // Immediately update button highlights
+      const modes = {NORMAL:['mNormal','on-b'], BUY_ONLY:['mBuy','on-g'], SELL_ONLY:['mSell','on-r']};
+      Object.entries(modes).forEach(([k,[id,cls]])=>{
+        document.getElementById(id).className = `cbtn ${mode===k?cls:''}`;
+      });
+    } else {
+      toast(j.error||'Failed','err');
+    }
   } catch(e){ toast(`Error: ${e.message}`,'err'); }
 }
 
