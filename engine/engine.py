@@ -912,7 +912,7 @@ def run():
         # ────────────────────────┼───────┼───────┼───────┼──────────────────────────────────────
         # RANGE                   │  ON   │  ON   │  ON   │ Normal — all bots trade
         # TREND_UP                │  ON   │  ON   │  ON   │ Ride the move — grid profits on pullbacks
-        # trending_up + TREND_UP  │  OFF  │  ON   │  ON   │ Price running hard — inner gets burned
+        # trending_up + TREND_UP  │  ON   │  ON   │  ON   │ All run — inner fills outweigh sell risk
         # TREND_DOWN              │  OFF  │  OFF  │  ON   │ Outer catches the bounce
         # trending_down           │  OFF  │  OFF  │  ON   │ Same — strong dump, wait with outer
         # COMPRESSION             │  OFF  │  OFF  │  ON   │ Outer wide enough for low-vol oscillations
@@ -941,11 +941,15 @@ def run():
         elif state.trending_up and state.regime != "RANGE":
             # Price running hard above trendline AND regime confirms directional move.
             # In RANGE regime, high gap_ratio just means price is sitting comfortably
-            # above a support trendline — not actually trending. Inner should run there.
-            print(f"TRENDING UP (gap={state.gap_ratio:.2f}×ATR, regime={state.regime}) — inner off, mid+outer running")
+            # above a support trendline — not actually trending.
+            # Keep ALL bots ON — inner's tight range means its sell levels are close
+            # to current price (small drawdown risk), and stopping it causes more
+            # missed fills than the risk it prevents. 3Commas grid bots don't support
+            # per-bot buy-only mode, so the choice is ON or OFF.
+            print(f"TRENDING UP (gap={state.gap_ratio:.2f}×ATR, regime={state.regime}) — all bots ON (inner kept running)")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
-                _act(bot, i >= 1, tier_name)  # mid (index 1) and outer (index 2) run
+                _act(bot, True, tier_name)  # all bots run
 
         else:
             # RANGE or TREND_UP — all bots run

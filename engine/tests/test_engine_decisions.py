@@ -176,15 +176,12 @@ class TestBotDecisionTable:
         _run_cycle(p, prev_regime="TREND_UP")
         assert p["start_bot"].call_count == 3
 
-    def test_trending_up_in_non_range_stops_inner(self):
-        """trending_up AND regime != RANGE → inner off, mid+outer on."""
+    def test_trending_up_in_non_range_keeps_all_bots_on(self):
+        """trending_up AND regime != RANGE → all bots ON (inner fills outweigh sell risk)."""
         p = _engine_patches(regime="TREND_UP", trending_up=True)
         _run_cycle(p, prev_regime="TREND_UP")
-        stop_ids  = [c.args[0] for c in p["stop_bot"].call_args_list]
-        start_ids = [c.args[0] for c in p["start_bot"].call_args_list]
-        assert "bot_inner" in stop_ids
-        assert "bot_mid"   in start_ids
-        assert "bot_outer" in start_ids
+        assert p["start_bot"].call_count == 3
+        assert p["stop_bot"].call_count == 0
 
     def test_trending_up_in_range_keeps_all_bots_on(self):
         """trending_up in RANGE is normal ranging above support — all bots on."""
