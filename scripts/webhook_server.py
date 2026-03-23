@@ -54,6 +54,15 @@ def run(cmd, cwd=None):
     return result.returncode
 
 
+def deploy_ai_os():
+    log.info("=== AI OS Deploy started ===")
+    ai_os_dir = "/root/ai-os"
+    run(f"git -C {ai_os_dir} pull origin main")
+    run(f"bash -c 'source {ai_os_dir}/venv/bin/activate && pip install -r {ai_os_dir}/requirements.txt -q'")
+    run("systemctl restart ai-os")
+    log.info("=== AI OS Deploy complete ===")
+
+
 def deploy():
     log.info("=== Deploy started ===")
     log.info(f"Branch: {DEPLOY_BRANCH}")
@@ -114,7 +123,7 @@ def deploy():
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if self.path not in ("/deploy", "/"):
+        if self.path not in ("/deploy", "/deploy-ai-os", "/"):
             self.send_response(404)
             self.end_headers()
             return
@@ -122,24 +131,29 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
-        # Verify GitHub signature if present
-        sig_header = self.headers.get("X-Hub-Signature-256", "")
-        if sig_header:
-            expected = "sha256=" + hmac.new(
-                WEBHOOK_SECRET.encode(), body, hashlib.sha256
-            ).hexdigest()
-            if not hmac.compare_digest(sig_header, expected):
-                log.warning(f"Invalid signature from {self.client_address[0]}")
-                self.send_response(403)
-                self.end_headers()
-                return
+        # Verify GitHub signature if present (grid engine route only)
+        if self.path in ("/deploy", "/"):
+            sig_header = self.headers.get("X-Hub-Signature-256", "")
+            if sig_header:
+                expected = "sha256=" + hmac.new(
+                    WEBHOOK_SECRET.encode(), body, hashlib.sha256
+                ).hexdigest()
+                if not hmac.compare_digest(sig_header, expected):
+                    log.warning(f"Invalid signature from {self.client_address[0]}")
+                    self.send_response(403)
+                    self.end_headers()
+                    return
 
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Deploy triggered\n")
 
         import threading
-        threading.Thread(target=deploy, daemon=True).start()
+        if self.path == "/deploy-ai-os":
+            self.wfile.write(b"AI OS deploy triggered\n")
+            threading.Thread(target=deploy_ai_os, daemon=True).start()
+        else:
+            self.wfile.write(b"Deploy triggered\n")
+            threading.Thread(target=deploy, daemon=True).start()
 
     def log_message(self, fmt, *args):
         log.info(f"{self.client_address[0]} - {fmt % args}")
