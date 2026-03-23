@@ -842,10 +842,14 @@ def run():
         _inner_deploy_gw = state.deploy_inner_gw
         if not _inner_deploy_gw and state.tiers:
             _inner_deploy_gw = _inner_tier_gw(state.tiers)
+        _full_drift_threshold = _drift_gw * 0.85
         if _inner_deploy_gw and len(GRID_BOTS) >= 1 and state.tiers:
             _inner_drift_threshold = _inner_deploy_gw * 0.90
             _inner_dist = abs(state.price - (state.center + (state.tilt or 0)))
-            if _inner_dist > _inner_drift_threshold:
+            # Skip if we're already within 80% of the full drift threshold —
+            # a full redeploy is imminent and will handle all 3 bots together.
+            _near_full_drift = _inner_dist > _full_drift_threshold * 0.80
+            if _inner_dist > _inner_drift_threshold and not _near_full_drift:
                 print(f"  Inner drift: dist=${_inner_dist:,.0f} > 90% of inner_gw "
                       f"${_inner_deploy_gw:,.0f} (threshold=${_inner_drift_threshold:,.0f})"
                       f" — recentring narrow bot only")
