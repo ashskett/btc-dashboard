@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grid Engine — P&L</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:      #080c10;
+    --panel:   #0d1117;
+    --border:  #1c2433;
+    --border2: #243044;
+    --text:    #c9d4e0;
+    --muted:   #4a5a72;
+    --accent:  #00d4ff;
+    --green:   #00e676;
+    --red:     #ff3d5a;
+    --amber:   #ffab00;
+    --purple:  #b388ff;
+    --mono:    'Space Mono', monospace;
+    --ui:      'Syne', sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* HEADER */
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    height: 48px;
+    gap: 20px;
+  }
+  .logo { font-family:var(--ui); font-size:15px; font-weight:800; color:var(--accent); letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; }
+  .nav-link {
+    font-family:var(--ui); font-size:10px; font-weight:600; color:var(--muted);
+    text-decoration:none; letter-spacing:.06em; text-transform:uppercase;
+    padding:4px 10px; border-radius:4px; transition:all .15s;
+  }
+  .nav-link:hover { color:var(--text); background:rgba(255,255,255,.04); }
+  .nav-link.active { color:var(--accent); background:rgba(0,212,255,.08); }
+  .hprice { font-family:var(--ui); font-size:18px; font-weight:800; color:#fff; margin-left:auto; }
+
+  /* KPI ROW */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .kpi {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .kpi-lbl {
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .kpi-val {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: var(--ui);
+  }
+  .kpi-sub {
+    font-size: 9px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  /* CHARTS */
+  .chart-section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .chart-title {
+    font-family: var(--ui);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .tf-pills {
+    display: flex;
+    gap: 4px;
+  }
+  .tf-pill {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .tf-pill:hover { border-color: var(--border2); color: var(--text); }
+  .tf-pill.active { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,.08); }
+  .chart-wrap {
+    height: 350px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* BREAKDOWN TABLE */
+  .breakdown {
+    padding: 16px 20px;
+  }
+  .breakdown table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .breakdown th {
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .breakdown td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255,255,255,.03);
+    font-size: 11px;
+  }
+  .breakdown tr:hover td { background: rgba(255,255,255,.02); }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">Grid Engine</span>
+  <a href="/" class="nav-link">Terminal</a>
+  <a href="/pnl" class="nav-link active">P&L</a>
+  <a href="/macro" class="nav-link">Macro</a>
+  <span class="hprice" id="hPrice">--</span>
+</header>
+
+<!-- KPI ROW -->
+<div class="kpi-row">
+  <div class="kpi">
+    <div class="kpi-lbl">Portfolio Value</div>
+    <div class="kpi-val" id="kPortfolio">--</div>
+    <div class="kpi-sub" id="kPortfolioSub"></div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">24h Change</div>
+    <div class="kpi-val" id="k24h">--</div>
+    <div class="kpi-sub" id="k24hSub"></div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">7d Change</div>
+    <div class="kpi-val" id="k7d">--</div>
+    <div class="kpi-sub" id="k7dSub"></div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">BTC Holdings</div>
+    <div class="kpi-val" id="kBtc">--</div>
+    <div class="kpi-sub" id="kBtcSub"></div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">USDC Holdings</div>
+    <div class="kpi-val" id="kUsdc">--</div>
+    <div class="kpi-sub" id="kUsdcSub"></div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-lbl">Total Fills</div>
+    <div class="kpi-val" id="kFills">--</div>
+    <div class="kpi-sub" id="kFillsSub"></div>
+  </div>
+</div>
+
+<!-- PORTFOLIO VALUE CHART -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">Portfolio Value (USD)</span>
+    <div class="tf-pills" id="pfTfPills">
+      <button class="tf-pill" data-tf="6h">6H</button>
+      <button class="tf-pill" data-tf="24h">24H</button>
+      <button class="tf-pill active" data-tf="7d">7D</button>
+      <button class="tf-pill" data-tf="all">ALL</button>
+    </div>
+  </div>
+  <div class="chart-wrap" id="pfChart"></div>
+</div>
+
+<!-- BTC vs HODL CHART -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">Grid Strategy vs BTC HODL</span>
+  </div>
+  <div class="chart-wrap" id="vsChart"></div>
+</div>
+
+<!-- ALLOCATION CHART -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">BTC Allocation %</span>
+  </div>
+  <div class="chart-wrap" id="allocChart" style="height:200px;"></div>
+</div>
+
+<!-- DAILY BREAKDOWN -->
+<div class="breakdown">
+  <div class="chart-header">
+    <span class="chart-title">Daily Breakdown</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Open</th>
+        <th>Close</th>
+        <th>Change ($)</th>
+        <th>Change (%)</th>
+        <th>BTC Price</th>
+        <th>BTC HODL Chg</th>
+        <th>Alpha</th>
+      </tr>
+    </thead>
+    <tbody id="dailyBody"></tbody>
+  </table>
+</div>
+
+<script>
+// ── Auth ──
+(function() {
+  const p = new URLSearchParams(window.location.search);
+  const t = p.get('token');
+  if (t) localStorage.setItem('dash_token', t);
+  const TOKEN = localStorage.getItem('dash_token') || '';
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function(url, opts = {}) {
+    if (TOKEN && typeof url === 'string' && (url.startsWith('/') || url.startsWith(window.location.origin))) {
+      opts = { ...opts, headers: { 'X-Dashboard-Token': TOKEN, ...(opts.headers || {}) } };
+    }
+    return _fetch(url, opts);
+  };
+}());
+
+const f = v => '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+const f2 = v => '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
+const pct = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+
+let allData = [];
+let pfChart, pfSeries;
+let vsChart, gridSeries, hodlSeries;
+let allocChart, allocSeries;
+let currentTf = '7d';
+
+// ── Init Charts ──
+function initCharts() {
+  const opts = {
+    layout: { background: {color: '#080c10'}, textColor: '#4a5a72' },
+    grid: { vertLines: {color: '#0d1117'}, horzLines: {color: '#0d1117'} },
+    rightPriceScale: { borderColor: '#1c2433' },
+    timeScale: { borderColor: '#1c2433', timeVisible: true, secondsVisible: false },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  };
+
+  // Portfolio Value
+  pfChart = LightweightCharts.createChart(document.getElementById('pfChart'), opts);
+  pfSeries = pfChart.addAreaSeries({
+    topColor: 'rgba(0,212,255,.25)',
+    bottomColor: 'rgba(0,212,255,.02)',
+    lineColor: '#00d4ff',
+    lineWidth: 2,
+  });
+
+  // Grid vs HODL
+  vsChart = LightweightCharts.createChart(document.getElementById('vsChart'), opts);
+  gridSeries = vsChart.addLineSeries({ color: '#00d4ff', lineWidth: 2, title: 'Grid' });
+  hodlSeries = vsChart.addLineSeries({ color: '#ffab00', lineWidth: 1, lineStyle: 2, title: 'HODL' });
+
+  // Allocation
+  allocChart = LightweightCharts.createChart(document.getElementById('allocChart'), {
+    ...opts,
+    rightPriceScale: { ...opts.rightPriceScale, scaleMargins: { top: 0.05, bottom: 0.05 } },
+  });
+  allocSeries = allocChart.addAreaSeries({
+    topColor: 'rgba(179,136,255,.2)',
+    bottomColor: 'rgba(179,136,255,.02)',
+    lineColor: '#b388ff',
+    lineWidth: 1,
+  });
+}
+
+// ── Load Data ──
+async function loadData() {
+  try {
+    const r = await fetch('/portfolio/log');
+    allData = await r.json();
+    if (!allData.length) return;
+
+    updateKpis();
+    updateCharts();
+    updateDaily();
+  } catch (e) {
+    console.error('loadData error:', e);
+  }
+}
+
+// ── Filter by TF ──
+function filterByTf(data, tf) {
+  if (tf === 'all') return data;
+  const now = data[data.length - 1].ts;
+  const cutoffs = { '6h': 6*3600, '24h': 24*3600, '7d': 7*86400 };
+  const cutoff = now - (cutoffs[tf] || 7*86400);
+  return data.filter(d => d.ts >= cutoff);
+}
+
+// ── KPIs ──
+function updateKpis() {
+  const latest = allData[allData.length - 1];
+  const now = latest.ts;
+
+  // Portfolio value
+  document.getElementById('kPortfolio').textContent = f(latest.portfolio_usd);
+  document.getElementById('kPortfolioSub').textContent =
+    `${latest.btc_qty.toFixed(4)} BTC + ${f(latest.usdc_qty)} USDC`;
+
+  // 24h change
+  const d24 = allData.filter(d => d.ts <= now - 86400);
+  if (d24.length) {
+    const base = d24[d24.length - 1].portfolio_usd;
+    const chg = latest.portfolio_usd - base;
+    const chgPct = (chg / base) * 100;
+    const el = document.getElementById('k24h');
+    el.textContent = (chg >= 0 ? '+' : '') + f(chg);
+    el.className = 'kpi-val ' + (chg >= 0 ? 'pos' : 'neg');
+    document.getElementById('k24hSub').textContent = pct(chgPct);
+  }
+
+  // 7d change
+  const d7 = allData.filter(d => d.ts <= now - 7*86400);
+  if (d7.length) {
+    const base = d7[d7.length - 1].portfolio_usd;
+    const chg = latest.portfolio_usd - base;
+    const chgPct = (chg / base) * 100;
+    const el = document.getElementById('k7d');
+    el.textContent = (chg >= 0 ? '+' : '') + f(chg);
+    el.className = 'kpi-val ' + (chg >= 0 ? 'pos' : 'neg');
+    document.getElementById('k7dSub').textContent = pct(chgPct);
+  }
+
+  // BTC
+  document.getElementById('kBtc').textContent = latest.btc_qty.toFixed(4);
+  document.getElementById('kBtcSub').textContent = f(latest.btc_qty * latest.btc_price) + ' USD';
+
+  // USDC
+  document.getElementById('kUsdc').textContent = f(latest.usdc_qty);
+  document.getElementById('kUsdcSub').textContent = (latest.btc_ratio * 100).toFixed(1) + '% BTC ratio';
+
+  // Price
+  document.getElementById('hPrice').textContent = f(latest.btc_price);
+
+  // Fills
+  loadFillCount();
+}
+
+async function loadFillCount() {
+  try {
+    const r = await fetch('/bots/fills');
+    const fills = await r.json();
+    if (Array.isArray(fills)) {
+      document.getElementById('kFills').textContent = fills.length;
+      const buys = fills.filter(f => f.side === 'BUY').length;
+      const sells = fills.filter(f => f.side === 'SELL').length;
+      document.getElementById('kFillsSub').textContent = `${buys} buys / ${sells} sells`;
+    }
+  } catch(e) {}
+}
+
+// ── Charts ──
+function updateCharts() {
+  const filtered = filterByTf(allData, currentTf);
+  if (!filtered.length) return;
+
+  // Downsample if > 500 points (keep charts responsive)
+  const maxPts = 500;
+  const step = Math.max(1, Math.floor(filtered.length / maxPts));
+  const sampled = filtered.filter((_, i) => i % step === 0 || i === filtered.length - 1);
+
+  // Portfolio value
+  const pfData = sampled.map(d => ({
+    time: Math.floor(d.ts),
+    value: d.portfolio_usd,
+  }));
+  pfSeries.setData(pfData);
+  pfChart.timeScale().fitContent();
+
+  // Grid vs HODL (both normalised to 100 at start)
+  const basePortfolio = sampled[0].portfolio_usd;
+  const baseBtcPrice = sampled[0].btc_price;
+  const baseBtcQty = sampled[0].btc_qty + sampled[0].usdc_qty / sampled[0].btc_price;
+
+  const gridData = sampled.map(d => ({
+    time: Math.floor(d.ts),
+    value: (d.portfolio_usd / basePortfolio) * 100,
+  }));
+  const hodlData = sampled.map(d => ({
+    time: Math.floor(d.ts),
+    value: (baseBtcQty * d.btc_price / basePortfolio) * 100,
+  }));
+  gridSeries.setData(gridData);
+  hodlSeries.setData(hodlData);
+  vsChart.timeScale().fitContent();
+
+  // Allocation
+  const allocData = sampled.map(d => ({
+    time: Math.floor(d.ts),
+    value: d.btc_ratio * 100,
+  }));
+  allocSeries.setData(allocData);
+  allocChart.timeScale().fitContent();
+}
+
+// ── Daily Breakdown ──
+function updateDaily() {
+  // Group by date
+  const days = {};
+  allData.forEach(d => {
+    const date = new Date(d.ts * 1000).toISOString().slice(0, 10);
+    if (!days[date]) days[date] = { first: d, last: d };
+    else days[date].last = d;
+  });
+
+  const rows = Object.entries(days)
+    .sort((a, b) => b[0].localeCompare(a[0]))  // newest first
+    .map(([date, {first, last}]) => {
+      const chg = last.portfolio_usd - first.portfolio_usd;
+      const chgPct = (chg / first.portfolio_usd) * 100;
+      const btcChg = ((last.btc_price - first.btc_price) / first.btc_price) * 100;
+      // HODL change: if you held the starting BTC allocation as 100% BTC
+      const hodlStart = first.btc_qty + first.usdc_qty / first.btc_price;
+      const hodlEnd = hodlStart * last.btc_price;
+      const hodlChg = ((hodlEnd - first.portfolio_usd) / first.portfolio_usd) * 100;
+      const alpha = chgPct - hodlChg;
+      const cls = v => v >= 0 ? 'pos' : 'neg';
+      return `<tr>
+        <td>${date}</td>
+        <td>${f(first.portfolio_usd)}</td>
+        <td>${f(last.portfolio_usd)}</td>
+        <td class="${cls(chg)}">${chg >= 0 ? '+' : ''}${f2(chg)}</td>
+        <td class="${cls(chgPct)}">${pct(chgPct)}</td>
+        <td>${f(last.btc_price)}</td>
+        <td class="${cls(btcChg)}">${pct(btcChg)}</td>
+        <td class="${cls(alpha)}">${pct(alpha)}</td>
+      </tr>`;
+    });
+
+  document.getElementById('dailyBody').innerHTML = rows.join('');
+}
+
+// ── TF pills ──
+document.querySelectorAll('#pfTfPills .tf-pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#pfTfPills .tf-pill').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentTf = btn.dataset.tf;
+    updateCharts();
+  });
+});
+
+// ── Init ──
+initCharts();
+loadData();
+setInterval(loadData, 60000);
+</script>
+</body>
+</html>
