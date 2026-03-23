@@ -121,6 +121,8 @@ _DEFAULT_SETTINGS = {
     "lower_band":  0.30,   # below here: grid tilts to buy
     "upper_band":  0.47,   # above here: grid tilts to sell
     "taper_zone":  0.03,   # ramp width on each side of the band edge
+    "min_btc":     0.20,   # hard stop — all bots SELL_ONLY below this
+    "max_btc":     0.80,   # hard stop — all bots BUY_ONLY above this
 }
 
 # Module-level fallbacks — kept for backwards compatibility with any code that
@@ -148,10 +150,12 @@ def save_inventory_settings(settings: dict) -> dict:
     Validate and persist band settings.  Returns the saved dict.
     Raises ValueError on bad values so the caller can return a 400.
     """
-    target = float(settings.get("target_btc", _DEFAULT_SETTINGS["target_btc"]))
-    lower  = float(settings.get("lower_band",  _DEFAULT_SETTINGS["lower_band"]))
-    upper  = float(settings.get("upper_band",  _DEFAULT_SETTINGS["upper_band"]))
-    taper  = float(settings.get("taper_zone",  _DEFAULT_SETTINGS["taper_zone"]))
+    target  = float(settings.get("target_btc", _DEFAULT_SETTINGS["target_btc"]))
+    lower   = float(settings.get("lower_band",  _DEFAULT_SETTINGS["lower_band"]))
+    upper   = float(settings.get("upper_band",  _DEFAULT_SETTINGS["upper_band"]))
+    taper   = float(settings.get("taper_zone",  _DEFAULT_SETTINGS["taper_zone"]))
+    min_btc = float(settings.get("min_btc",     _DEFAULT_SETTINGS["min_btc"]))
+    max_btc = float(settings.get("max_btc",     _DEFAULT_SETTINGS["max_btc"]))
 
     if not (0.0 < lower < upper < 1.0):
         raise ValueError(f"lower_band ({lower}) must be < upper_band ({upper}), both in (0,1)")
@@ -159,8 +163,17 @@ def save_inventory_settings(settings: dict) -> dict:
         raise ValueError(f"target_btc ({target}) must be within [lower_band, upper_band]")
     if not (0.001 <= taper <= 0.15):
         raise ValueError(f"taper_zone ({taper}) must be between 0.001 and 0.15")
+    if not (0.05 <= min_btc < max_btc <= 0.95):
+        raise ValueError(f"min_btc ({min_btc}) must be < max_btc ({max_btc}), both in [0.05, 0.95]")
+    if min_btc >= lower:
+        raise ValueError(f"min_btc ({min_btc}) should be below lower_band ({lower})")
+    if max_btc <= upper:
+        raise ValueError(f"max_btc ({max_btc}) should be above upper_band ({upper})")
 
-    data = {"target_btc": target, "lower_band": lower, "upper_band": upper, "taper_zone": taper}
+    data = {
+        "target_btc": target, "lower_band": lower, "upper_band": upper,
+        "taper_zone": taper, "min_btc": min_btc, "max_btc": max_btc,
+    }
     json.dump(data, open(_SETTINGS_FILE, "w"), indent=2)
     return data
 

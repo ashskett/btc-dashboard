@@ -131,8 +131,17 @@ def get_active_trendline(current_price=None):
         return None
 GRID_BOTS = [bot.strip() for bot in os.getenv("GRID_BOT_IDS", "").split(",") if bot.strip()]
 
-MAX_BTC = 0.80   # hard stop — staggered above inventory.py UPPER_BAND (0.72)
-MIN_BTC = 0.20   # hard stop — staggered below inventory.py LOWER_BAND (0.55)
+MAX_BTC = 0.80   # default hard stop — overridden by inventory_settings.json at runtime
+MIN_BTC = 0.20   # default hard stop — overridden by inventory_settings.json at runtime
+
+def _get_hard_stops():
+    """Read MIN_BTC/MAX_BTC from inventory settings (dashboard-configurable)."""
+    try:
+        from inventory import get_inventory_settings
+        s = get_inventory_settings()
+        return s.get("min_btc", MIN_BTC), s.get("max_btc", MAX_BTC)
+    except Exception:
+        return MIN_BTC, MAX_BTC
 
 # ─── Post-redeploy fill-flood guard ───────────────────────────────────────────
 # When the grid recentres at the wrong time (local top or bottom), 3Commas
@@ -393,9 +402,10 @@ def run():
                 print(f"Warning: could not read inventory override: {e}")
 
         if not override.get("mode"):
-            if state.btc_ratio > MAX_BTC:
+            _min_btc, _max_btc = _get_hard_stops()
+            if state.btc_ratio > _max_btc:
                 state.inventory_mode = "SELL_ONLY"
-            elif state.btc_ratio < MIN_BTC:
+            elif state.btc_ratio < _min_btc:
                 state.inventory_mode = "BUY_ONLY"
             else:
                 state.inventory_mode = "NORMAL"
