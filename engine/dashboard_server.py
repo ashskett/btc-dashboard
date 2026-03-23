@@ -799,6 +799,44 @@ def bot_fills_debug():
     })
 
 
+FILLS_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fills_log.jsonl")
+
+def _load_persisted_fills():
+    """Load all persisted fills from JSONL file."""
+    fills = []
+    if os.path.exists(FILLS_LOG):
+        with open(FILLS_LOG) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        fills.append(json.loads(line))
+                    except Exception:
+                        pass
+    return fills
+
+def _persist_new_fills(new_fills):
+    """Append new fills to JSONL file, deduplicating by order_id."""
+    existing_ids = set()
+    if os.path.exists(FILLS_LOG):
+        with open(FILLS_LOG) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        existing_ids.add(json.loads(line).get("order_id"))
+                    except Exception:
+                        pass
+    added = 0
+    with open(FILLS_LOG, "a") as f:
+        for fill in new_fills:
+            if fill.get("order_id") not in existing_ids:
+                f.write(json.dumps(fill) + "\n")
+                existing_ids.add(fill.get("order_id"))
+                added += 1
+    return added
+
+
 @app.route("/bots/fills")
 def bot_fills():
     global _fills_cache
@@ -809,7 +847,7 @@ def bot_fills():
         return jsonify(_fills_cache["data"])
     try:
         ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
-        fills = []
+        api_fills = []
         for i, bid in enumerate(ids[:3]):
             r = signed_request("GET", f"/ver1/grid_bots/{bid}/market_orders", params={"limit": 200})
             if r.status_code != 200:
@@ -822,17 +860,24 @@ def bot_fills():
                 price = float(item.get("average_price") or item.get("rate") or 0)
                 if not price:
                     continue
-                fills.append({
+                api_fills.append({
+                    "order_id":  item.get("order_id"),
                     "bot_id":    bid,
                     "bot_index": i,
                     "time":      item.get("created_at"),
                     "price":     price,
-                    "side":      (item.get("order_type") or "").upper(),  # BUY or SELL
+                    "side":      (item.get("order_type") or "").upper(),
                     "qty":       float(item.get("quantity") or 0),
                 })
-        fills.sort(key=lambda x: x["time"] or "")
-        _fills_cache = {"data": fills, "ts": now}
-        return jsonify(fills)
+        # Persist any new fills we haven't seen before
+        added = _persist_new_fills(api_fills)
+        if added:
+            print(f"[Fills] Persisted {added} new fills to {FILLS_LOG}")
+        # Return ALL persisted fills (historical + current)
+        all_fills = _load_persisted_fills()
+        all_fills.sort(key=lambda x: x.get("time") or "")
+        _fills_cache = {"data": all_fills, "ts": now}
+        return jsonify(all_fills)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1617,7 +1662,8 @@ def notifications():
         prev = e
 
     events.reverse()
-    return jsonify(events[:100])
+    limit = request.args.get("limit", 200, type=int)
+    return jsonify(events[:limit])
 
 
 @app.route("/portfolio/log")

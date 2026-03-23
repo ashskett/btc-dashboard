@@ -455,31 +455,9 @@ def run():
             state.compression
         )
 
-        # ===============================
-        # POST-REDEPLOY FILL-FLOOD GUARD
-        # ===============================
-        _flood_status, _flood_val = _check_fill_flood(state.btc_ratio)
-        if _flood_status == "new":
-            print(f"FILL-FLOOD DETECTED — btc_ratio moved {_flood_val:.1%} since last redeploy "
-                  f"(threshold {FLOOD_BTC_THRESHOLD:.0%}). "
-                  f"Grid was placed at a bad price. Stopping all bots for "
-                  f"{FLOOD_COOLDOWN_SECS // 60} min.")
-            if not DRY_RUN:
-                for bot in GRID_BOTS:
-                    stop_bot(bot)
-            return
-        if _flood_status == "active":
-            remaining = FLOOD_COOLDOWN_SECS - _flood_val
-            print(f"FILL-FLOOD COOLDOWN — bots paused ({remaining / 60:.0f} min remaining). "
-                  f"Skipping normal logic.")
-            if not DRY_RUN:
-                for bot in GRID_BOTS:
-                    stop_bot(bot)
-            return
-
         # Helper: start or stop a bot (respects DRY_RUN)
-        # Defined here so it's available to the breakout block AND tiered decisions below
-        _bot_actions = []   # tracks every start/stop with reason for event log
+        # Tracks every start/stop with reason for the Events tab
+        _bot_actions = []
 
         def _act(bot_id, should_run, label):
             action = "start" if should_run else "stop"
@@ -491,6 +469,28 @@ def run():
                     start_bot(bot_id)
                 else:
                     stop_bot(bot_id)
+
+        # ===============================
+        # POST-REDEPLOY FILL-FLOOD GUARD
+        # ===============================
+        _flood_status, _flood_val = _check_fill_flood(state.btc_ratio)
+        if _flood_status == "new":
+            print(f"FILL-FLOOD DETECTED — btc_ratio moved {_flood_val:.1%} since last redeploy "
+                  f"(threshold {FLOOD_BTC_THRESHOLD:.0%}). "
+                  f"Grid was placed at a bad price. Stopping all bots for "
+                  f"{FLOOD_COOLDOWN_SECS // 60} min.")
+            for i, bot in enumerate(GRID_BOTS[:3]):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, False, f"{tier_name} (fill-flood)")
+            return
+        if _flood_status == "active":
+            remaining = FLOOD_COOLDOWN_SECS - _flood_val
+            print(f"FILL-FLOOD COOLDOWN — bots paused ({remaining / 60:.0f} min remaining). "
+                  f"Skipping normal logic.")
+            for i, bot in enumerate(GRID_BOTS[:3]):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, False, f"{tier_name} (fill-flood cooldown)")
+            return
 
         # ===============================
         # BREAKOUT DETECTION
@@ -565,9 +565,9 @@ def run():
                 else:
                     print(f"BREAKOUT_DOWN holding — recovery needs ${_recovery_threshold:,.0f} "
                           f"(currently ${state.price:,.0f}, need +${_recovery_threshold - state.price:,.0f})")
-                for bot in GRID_BOTS:
-                    if not DRY_RUN:
-                        stop_bot(bot)
+                for i, bot in enumerate(GRID_BOTS[:3]):
+                    tier_name = state.tiers[i]["name"] if i < len(state.tiers) else "bot"
+                    _act(bot, False, f"{tier_name} (breakout DOWN)")
                 return
 
             # During active UP breakout: inner+mid off, outer stays running.
@@ -766,11 +766,9 @@ def run():
                     print("[SIMULATION] Outer bot stays running")
                 elif _can_act():
                     _record_action()
-                    if len(GRID_BOTS) >= 1:
-                        stop_bot(GRID_BOTS[0])   # inner
-                    if len(GRID_BOTS) >= 2:
-                        stop_bot(GRID_BOTS[1])   # mid
-                    # outer (GRID_BOTS[2]) intentionally left running
+                    for i, bot in enumerate(GRID_BOTS[:3]):
+                        tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                        _act(bot, i >= 2, f"{tier_name} (breakout UP)")
                 else:
                     print(f"Rate limit reached — breakout UP bot stops skipped")
 
@@ -778,11 +776,14 @@ def run():
                 # Downside breakout: stop everything — capital protection
                 print("BREAKOUT DOWN — stopping all bots (capital protection)")
                 if DRY_RUN:
-                    print("[SIMULATION] Would stop all grid bots")
+                    for i, bot in enumerate(GRID_BOTS[:3]):
+                        tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                        _act(bot, False, f"{tier_name} (breakout DOWN)")
                 elif _can_act():
                     _record_action()
-                    for bot in GRID_BOTS:
-                        stop_bot(bot)
+                    for i, bot in enumerate(GRID_BOTS[:3]):
+                        tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                        _act(bot, False, f"{tier_name} (breakout DOWN)")
                 else:
                     print(f"Rate limit reached — breakout DOWN bot stops skipped")
 
@@ -892,24 +893,16 @@ def run():
         # ===============================
         if state.inventory_mode == "SELL_ONLY":
             print("Inventory protection: SELL ONLY")
-
-            for bot in GRID_BOTS:
-                if DRY_RUN:
-                    print(f"[SIMULATION] Sell-only mode bot {bot}")
-                else:
-                    stop_bot(bot)
-
+            for i, bot in enumerate(GRID_BOTS[:3]):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, False, f"{tier_name} (sell-only mode)")
             return
 
         if state.inventory_mode == "BUY_ONLY":
             print("Inventory protection: BUY ONLY")
-
-            for bot in GRID_BOTS:
-                if DRY_RUN:
-                    print(f"[SIMULATION] Buy-only mode bot {bot}")
-                else:
-                    stop_bot(bot)
-
+            for i, bot in enumerate(GRID_BOTS[:3]):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, False, f"{tier_name} (buy-only mode)")
             return
 
         # ===============================
