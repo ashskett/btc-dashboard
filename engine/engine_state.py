@@ -35,5 +35,10 @@ class EngineState:
         self.trending_down = False
         self.gap_ratio     = 0.0
 
+        # deploy-time references (from grid_state.json)
+        self.deploy_grid_width    = None
+        self.deploy_inner_gw      = None
+        self.deploy_inner_center  = None
+
         # tiers (populated by calculate_grid_parameters)
         self.tiers = []

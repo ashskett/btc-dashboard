@@ -328,8 +328,9 @@ def run():
         # of the last redeploy. Used for drift detection so that a temporary
         # ATR dip can't narrow the threshold and cause a premature recentre.
         # Falls back to current state.grid_width once it's calculated below.
-        state.deploy_grid_width = _saved_grid.get("grid_width_at_deploy")
-        state.deploy_inner_gw   = _saved_grid.get("inner_grid_width_at_deploy")
+        state.deploy_grid_width  = _saved_grid.get("grid_width_at_deploy")
+        state.deploy_inner_gw    = _saved_grid.get("inner_grid_width_at_deploy")
+        state.deploy_inner_center = _saved_grid.get("inner_center_at_deploy")
         state.regime = detect_regime(df, TRENDLINE)
         state.session = get_session()
 
@@ -520,7 +521,7 @@ def run():
                 print(f"  Centre drift during {_active_dir} breakout — "
                       f"advancing centre ${state.center:,.0f} → ${state.price:,.0f} "
                       f"(bots held; no redeploy until breakout clears)")
-                update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)))
+                update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
                 state.center = state.price
                 state.deploy_grid_width = state.grid_width
 
@@ -533,7 +534,7 @@ def run():
                 print("Triggering grid redeploy at new price level")
 
                 if DRY_RUN:
-                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)))
+                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
                     print(f"[SIMULATION] Would redeploy grid centered at ${state.price:,.0f}")
                     for i, bot_id in enumerate(GRID_BOTS[:3]):
                         tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
@@ -542,7 +543,7 @@ def run():
                 elif _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, state.tiers)
-                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)))
+                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
                     _save_redeploy_state(state.price, state.btc_ratio)
                     clear_breakout_state()
                 else:
@@ -795,8 +796,9 @@ def run():
             state.tiers[0].get("grid_width") or
             (state.tiers[0]["grid_high"] - state.tiers[0]["grid_low"]) / 2
             if state.tiers else 0)
+        _inner_ref_dbg = getattr(state, 'deploy_inner_center', None) or state.center
         print(f"  Drift check: deploy_gw=${_drift_gw:,.0f}  inner_gw=${_inner_dgw:,.0f}"
-              f"  dist=${abs(state.price - state.center):,.0f}"
+              f"  inner_ref=${_inner_ref_dbg:,.0f}  dist=${abs(state.price - _inner_ref_dbg):,.0f}"
               f"  mid_threshold=${_drift_gw * 0.85:,.0f}  inner_threshold=${_inner_dgw * 0.90:,.0f}")
         if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0) and \
                 not _drift_momentum_hot(df, state.gap_ratio):
@@ -814,7 +816,7 @@ def run():
 
             if DRY_RUN:
                 # In dry run: update center so simulation doesn't re-trigger drift every cycle
-                update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)))
+                update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
                 print("[SIMULATION] Would redeploy grid bots with tiered ranges:")
                 for i, bot_id in enumerate(GRID_BOTS[:3]):
                     tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
@@ -826,7 +828,7 @@ def run():
                 # Stop, reprice each bot to its tier range, restart
                 redeploy_all_bots(GRID_BOTS, state.tiers)
                 # Only advance center AFTER bots successfully redeployed
-                update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)))
+                update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
                 _save_redeploy_state(state.price, state.btc_ratio)
             else:
                 print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
@@ -845,9 +847,10 @@ def run():
         _full_drift_threshold = _drift_gw * 0.85
         if _inner_deploy_gw and len(GRID_BOTS) >= 1 and state.tiers:
             _inner_drift_threshold = _inner_deploy_gw * 0.90
-            # Use raw centre (no tilt) — tilt shifts grid levels for fills but
-            # shouldn't inflate the drift distance and cause repeat recentres
-            _inner_dist = abs(state.price - state.center)
+            # Use inner's own deployed centre if it diverged from mid centre
+            # (happens after inner-only recentre). Falls back to mid centre.
+            _inner_ref = getattr(state, 'deploy_inner_center', None) or state.center
+            _inner_dist = abs(state.price - _inner_ref)
             # Skip if we're already within 80% of the full drift threshold —
             # a full redeploy is imminent and will handle all 3 bots together.
             _near_full_drift = _inner_dist > _full_drift_threshold * 0.80
@@ -863,15 +866,19 @@ def run():
                     _record_action()
                     from threecommas import redeploy_bot
                     redeploy_bot(GRID_BOTS[0], inner_tier)
-                    # Update deploy_inner_gw so it doesn't re-trigger next cycle
+                    # Update deploy_inner_gw + inner centre so drift uses
+                    # narrow's actual position, not the mid-tier centre
                     state.deploy_inner_gw = _inner_tier_gw([inner_tier])
-                    # Persist inner width but keep centre + mid width unchanged
+                    _new_inner_center = (inner_tier['grid_low'] + inner_tier['grid_high']) / 2
+                    state.deploy_inner_center = _new_inner_center
+                    # Persist inner width + centre but keep mid centre unchanged
                     from grid_logic import get_grid_state as _get_gs
                     _gs = _get_gs()
                     update_grid_center(
                         _gs["grid_center"],
                         grid_width=_gs.get("grid_width_at_deploy"),
-                        inner_grid_width=_inner_tier_gw([inner_tier]))
+                        inner_grid_width=_inner_tier_gw([inner_tier]),
+                        inner_center=_new_inner_center)
                     print(f"  Narrow recentred. Mid/outer unchanged.")
                 else:
                     print(f"  Rate limit — inner drift redeploy deferred")
@@ -972,7 +979,7 @@ def run():
                 if _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, state.tiers)
-                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)))
+                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
                     _save_redeploy_state(state.price, state.btc_ratio)
                 else:
                     print(f"  Rate limit reached — falling back to start_bot on regime transition")
