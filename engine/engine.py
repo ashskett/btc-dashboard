@@ -796,7 +796,7 @@ def run():
             (state.tiers[0]["grid_high"] - state.tiers[0]["grid_low"]) / 2
             if state.tiers else 0)
         print(f"  Drift check: deploy_gw=${_drift_gw:,.0f}  inner_gw=${_inner_dgw:,.0f}"
-              f"  dist=${abs(state.price - (state.center + (state.tilt or 0))):,.0f}"
+              f"  dist=${abs(state.price - state.center):,.0f}"
               f"  mid_threshold=${_drift_gw * 0.85:,.0f}  inner_threshold=${_inner_dgw * 0.90:,.0f}")
         if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0) and \
                 not _drift_momentum_hot(df, state.gap_ratio):
@@ -845,7 +845,9 @@ def run():
         _full_drift_threshold = _drift_gw * 0.85
         if _inner_deploy_gw and len(GRID_BOTS) >= 1 and state.tiers:
             _inner_drift_threshold = _inner_deploy_gw * 0.90
-            _inner_dist = abs(state.price - (state.center + (state.tilt or 0)))
+            # Use raw centre (no tilt) — tilt shifts grid levels for fills but
+            # shouldn't inflate the drift distance and cause repeat recentres
+            _inner_dist = abs(state.price - state.center)
             # Skip if we're already within 80% of the full drift threshold —
             # a full redeploy is imminent and will handle all 3 bots together.
             _near_full_drift = _inner_dist > _full_drift_threshold * 0.80
