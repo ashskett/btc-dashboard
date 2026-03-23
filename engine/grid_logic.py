@@ -181,8 +181,9 @@ def get_grid_state():
         data = json.load(f)
 
     return {
-        "grid_center":          data.get("grid_center", 68000),
-        "grid_width_at_deploy": data.get("grid_width_at_deploy"),
+        "grid_center":                data.get("grid_center", 68000),
+        "grid_width_at_deploy":       data.get("grid_width_at_deploy"),
+        "inner_grid_width_at_deploy": data.get("inner_grid_width_at_deploy"),
     }
 
 
@@ -190,12 +191,15 @@ def get_grid_center():
     return get_grid_state()["grid_center"]
 
 
-def update_grid_center(price, grid_width=None):
+def update_grid_center(price, grid_width=None, inner_grid_width=None):
     """Save new grid center. grid_width should be the mid-tier width at deploy time
-    so that the drift threshold stays locked to that deployment, not the current ATR."""
+    so that the drift threshold stays locked to that deployment, not the current ATR.
+    inner_grid_width: inner-tier half-range, used for inner-only drift detection."""
     state = {"grid_center": price}
     if grid_width is not None:
         state["grid_width_at_deploy"] = grid_width
+    if inner_grid_width is not None:
+        state["inner_grid_width_at_deploy"] = inner_grid_width
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
