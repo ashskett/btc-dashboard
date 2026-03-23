@@ -1568,6 +1568,12 @@ def notifications():
             events.append({"ts": ts, "type": "PRICE_TARGET", "severity": "info",
                            "msg": f"Price target fired: \"{label}\"  (${price:,.0f})"})
 
+        # Price target timeout — support level held below for 2h, bots redeployed
+        if e.get("price_target_timeout") and not prev.get("price_target_timeout"):
+            label = e.get("price_target_label") or "target"
+            events.append({"ts": ts, "type": "TIMEOUT", "severity": "warning",
+                           "msg": f"Target timeout: \"{label}\" — 2h below, bots redeployed  (${price:,.0f})"})
+
         prev = e
 
     events.reverse()

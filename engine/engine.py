@@ -663,18 +663,47 @@ def run():
                         print(f"  Rate limit reached — DCA bot launch deferred to next cycle")
 
             else:  # DOWN target — support failure or plain DOWN breakout
-                print(f"  [Target] all bots off (capital protection)")
-                for bot in GRID_BOTS:
-                    _act(bot, False, f"target DOWN: {_pt_label}")
+
+                # ── 2-hour timeout ────────────────────────────────────────
+                # If price has stayed below the trigger for 2+ hours without
+                # recovering, the market has accepted the lower level.  Clear
+                # the target, redeploy bots at the new price, and let the
+                # grid work again.  The SmartTrade stays open independently.
+                SUPPORT_TIMEOUT_SECS = 7200   # 2 hours
+                _fired_at_ts = float(_pt_state.get("fired_at") or 0)
+                _elapsed     = time.time() - _fired_at_ts if _fired_at_ts else 0
+                if _elapsed >= SUPPORT_TIMEOUT_SECS:
+                    print(f"  [Target] TIMEOUT — '{_pt_label}' fired {_elapsed/3600:.1f}h ago, "
+                          f"no recovery → auto-clearing, redeploying bots")
+                    # Set cleared_at (arms rearm_cooldown_h) — keeps SF state fields clean
+                    from price_targets import update_target as _upd_tgt
+                    _upd_tgt(_pt_state["id"], {
+                        "fired": False, "fired_at": None, "fired_price": None,
+                        "consec_above": 0, "cleared_at": time.time(),
+                        # SmartTrade stays open — do NOT clear smart_trade_id
+                    })
+                    _pt_state["_timed_out"] = True   # flag for log_data
+                    # Redeploy all bots at current price level
+                    if not DRY_RUN:
+                        redeploy_all_bots(GRID_BOTS, TIERS)
+                    else:
+                        print(f"  [SIM] Would redeploy all bots after timeout")
+                else:
+                    remaining_m = max(0, SUPPORT_TIMEOUT_SECS - _elapsed) / 60
+                    print(f"  [Target] all bots off (capital protection) — "
+                          f"timeout in {remaining_m:.0f}m")
+                    for bot in GRID_BOTS:
+                        _act(bot, False, f"target DOWN: {_pt_label}")
 
                 # SmartTrade launch on first cycle after support_failure fires
+                # (skip if we just timed out — target is already cleared)
                 _st_mode    = _pt_state.get("detection_mode") == "support_failure"
                 _st_enabled = _pt_state.get("smart_trade_enabled", False)
                 _st_id      = _pt_state.get("smart_trade_id")
                 _fired_at   = _pt_state.get("fired_at") or 0
                 _hold_secs  = max(0, 360 - (time.time() - _fired_at))  # 6-min sweep guard
 
-                if _st_mode and _st_enabled and not _st_id:
+                if _st_mode and _st_enabled and not _st_id and not _pt_state.get("_timed_out"):
                     if _hold_secs > 0:
                         print(f"  SmartTrade launch held — sweep guard ({_hold_secs:.0f}s remaining)")
                     elif DRY_RUN:
@@ -938,6 +967,7 @@ def run():
                 "price_target_trigger": _pt_state.get("trigger_price") if _pt_state else None,
                 "price_target_tp":      _pt_state.get("price_target")  if _pt_state else None,
                 "price_target_dca_id":  _pt_state.get("dca_bot_id")    if _pt_state else None,
+                "price_target_timeout": bool(_pt_state.get("_timed_out")) if _pt_state else False,
             }
             write_status(log_data)
             write_log_entry(log_data)
