@@ -232,7 +232,7 @@
 <!-- DAILY P&L BAR CHART -->
 <div class="chart-section">
   <div class="chart-header">
-    <span class="chart-title">Daily P&L</span>
+    <span class="chart-title" id="pnlBarLabel">Daily P&L</span>
   </div>
   <div class="chart-wrap" id="dailyPnlChart" style="height:250px;"></div>
 </div>
@@ -284,6 +284,7 @@ let pfChart, pfSeries;
 let vsChart, gridSeries, hodlSeries;
 let allocChart, allocSeries;
 let dailyPnlChart, dailyPnlSeries;
+let _lastPnlBarMode = 'daily';
 let currentTf = '7d';
 
 // ── Init Charts ──
@@ -296,17 +297,24 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   };
 
-  // Portfolio Value
-  pfChart = LightweightCharts.createChart(document.getElementById('pfChart'), opts);
-  pfSeries = pfChart.addAreaSeries({
-    topColor: 'rgba(0,212,255,.25)',
-    bottomColor: 'rgba(0,212,255,.02)',
-    lineColor: '#00d4ff',
+  // Portfolio Value — use line series (area compresses tiny moves to invisible)
+  pfChart = LightweightCharts.createChart(document.getElementById('pfChart'), {
+    ...opts,
+    rightPriceScale: { ...opts.rightPriceScale, scaleMargins: { top: 0.1, bottom: 0.1 } },
+  });
+  pfSeries = pfChart.addLineSeries({
+    color: '#00d4ff',
     lineWidth: 2,
+    priceFormat: { type: 'price', precision: 0, minMove: 1 },
+    lastValueVisible: true,
+    priceLineVisible: true,
   });
 
   // Grid vs HODL
-  vsChart = LightweightCharts.createChart(document.getElementById('vsChart'), opts);
+  vsChart = LightweightCharts.createChart(document.getElementById('vsChart'), {
+    ...opts,
+    rightPriceScale: { ...opts.rightPriceScale, scaleMargins: { top: 0.1, bottom: 0.1 } },
+  });
   gridSeries = vsChart.addLineSeries({ color: '#00d4ff', lineWidth: 2, title: 'Grid' });
   hodlSeries = vsChart.addLineSeries({ color: '#ffab00', lineWidth: 1, lineStyle: 2, title: 'HODL' });
 
@@ -322,7 +330,7 @@ function initCharts() {
     lineWidth: 1,
   });
 
-  // Daily P&L bars
+  // P&L bars (recreated on TF switch to handle daily vs hourly time formats)
   dailyPnlChart = LightweightCharts.createChart(document.getElementById('dailyPnlChart'), {
     ...opts,
     rightPriceScale: { ...opts.rightPriceScale, scaleMargins: { top: 0.1, bottom: 0.1 } },
@@ -330,6 +338,7 @@ function initCharts() {
   dailyPnlSeries = dailyPnlChart.addHistogramSeries({
     priceFormat: { type: 'price', precision: 0, minMove: 1 },
   });
+  _lastPnlBarMode = 'daily';
 }
 
 // ── Load Data ──
@@ -461,25 +470,60 @@ function updateCharts() {
   allocSeries.setData(allocData);
   allocChart.timeScale().fitContent();
 
-  // Daily P&L bars (uses ALL data, not filtered by TF)
-  const dayMap = {};
-  allData.forEach(d => {
-    const date = new Date(d.ts * 1000).toISOString().slice(0, 10);
-    if (!dayMap[date]) dayMap[date] = { first: d, last: d };
-    else dayMap[date].last = d;
-  });
-  const barData = Object.entries(dayMap)
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([date, {first, last}]) => {
-      const chg = last.portfolio_usd - first.portfolio_usd;
-      // Use business day format for histogram (YYYY-MM-DD)
-      return {
-        time: date,
-        value: Math.round(chg * 100) / 100,
-        color: chg >= 0 ? '#00e676' : '#ff3d5a',
-      };
+  // P&L bars — hourly for 6H/24H, daily for 7D/ALL
+  const useHourly = currentTf === '6h' || currentTf === '24h';
+  const newMode = useHourly ? 'hourly' : 'daily';
+  const pnlLabel = document.getElementById('pnlBarLabel');
+  if (pnlLabel) pnlLabel.textContent = useHourly ? 'Hourly P&L' : 'Daily P&L';
+
+  // Must recreate series when switching between hourly (unix) and daily (business day)
+  // because Lightweight Charts doesn't support mixed time formats on one series
+  if (newMode !== _lastPnlBarMode) {
+    dailyPnlChart.removeSeries(dailyPnlSeries);
+    dailyPnlSeries = dailyPnlChart.addHistogramSeries({
+      priceFormat: { type: 'price', precision: 0, minMove: 1 },
     });
-  dailyPnlSeries.setData(barData);
+    _lastPnlBarMode = newMode;
+  }
+
+  const pnlSource = useHourly ? filtered : allData;
+  const bucketMap = {};
+
+  if (useHourly) {
+    pnlSource.forEach(d => {
+      const hour = Math.floor(d.ts / 3600) * 3600;
+      if (!bucketMap[hour]) bucketMap[hour] = { first: d, last: d };
+      else bucketMap[hour].last = d;
+    });
+    const barData = Object.entries(bucketMap)
+      .sort((a, b) => a[0] - b[0])
+      .map(([ts, {first, last}]) => {
+        const chg = last.portfolio_usd - first.portfolio_usd;
+        return {
+          time: parseInt(ts),
+          value: Math.round(chg * 100) / 100,
+          color: chg >= 0 ? '#00e676' : '#ff3d5a',
+        };
+      });
+    dailyPnlSeries.setData(barData);
+  } else {
+    pnlSource.forEach(d => {
+      const date = new Date(d.ts * 1000).toISOString().slice(0, 10);
+      if (!bucketMap[date]) bucketMap[date] = { first: d, last: d };
+      else bucketMap[date].last = d;
+    });
+    const barData = Object.entries(bucketMap)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, {first, last}]) => {
+        const chg = last.portfolio_usd - first.portfolio_usd;
+        return {
+          time: date,
+          value: Math.round(chg * 100) / 100,
+          color: chg >= 0 ? '#00e676' : '#ff3d5a',
+        };
+      });
+    dailyPnlSeries.setData(barData);
+  }
   dailyPnlChart.timeScale().fitContent();
 }
 
