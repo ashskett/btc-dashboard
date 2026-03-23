@@ -923,7 +923,10 @@
     <div class="sec">
       <div class="sec-title">
         Grid Bots <span id="gridBotCountLbl" style="color:var(--muted)"></span>
-        <button class="cbtn on-b" onclick="loadBots()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
+        <div style="display:flex;gap:4px;">
+          <button class="cbtn on-b" onclick="loadBots()" style="font-size:9px;padding:3px 8px;flex:none;">↻ Refresh</button>
+          <button class="cbtn" onclick="forceRedeploy()" style="font-size:9px;padding:3px 8px;flex:none;border-color:var(--amber);color:var(--amber);">Recentre All</button>
+        </div>
       </div>
       <div id="gridBotCards"><div style="color:var(--muted);font-size:10px;">Loading bots…</div></div>
     </div>
@@ -1623,6 +1626,19 @@ async function saveBudgets(){
     const j = await r.json();
     if (j.ok) { toast('Budgets saved','ok'); }
     else { toast(j.msg||'Save failed','err'); }
+  } catch(e){ toast('Error: '+e.message,'err'); }
+}
+
+// ── FORCE REDEPLOY ───────────────────────────────────────
+async function forceRedeploy(){
+  if (!confirm('Recentre all grid bots at current price?\n\nThis will stop, re-range, and restart all bots.')) return;
+  try {
+    const r = await fetch(`${API}/grid/force-redeploy`, {method:'POST'});
+    const j = await r.json();
+    if (j.ok) {
+      toast(`Recentred at $${Number(j.center||0).toLocaleString(undefined,{maximumFractionDigits:0})}`,'ok');
+      setTimeout(loadBots, 2000);
+    } else { toast(j.error||'Redeploy failed','err'); }
   } catch(e){ toast('Error: '+e.message,'err'); }
 }
 
