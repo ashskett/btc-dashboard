@@ -435,7 +435,13 @@ function updateCharts() {
   // Downsample if > 500 points (keep charts responsive)
   const maxPts = 500;
   const step = Math.max(1, Math.floor(filtered.length / maxPts));
-  const sampled = filtered.filter((_, i) => i % step === 0 || i === filtered.length - 1);
+  let sampled = filtered.filter((_, i) => i % step === 0 || i === filtered.length - 1);
+
+  // Deduplicate timestamps — Lightweight Charts crashes on dupes.
+  // Keep last entry per second (most recent value wins).
+  const deduped = new Map();
+  sampled.forEach(d => deduped.set(Math.floor(d.ts), d));
+  sampled = Array.from(deduped.values()).sort((a, b) => a.ts - b.ts);
 
   // Portfolio value
   const pfData = sampled.map(d => ({
