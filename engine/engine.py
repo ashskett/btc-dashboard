@@ -479,9 +479,12 @@ def run():
 
         # Helper: start or stop a bot (respects DRY_RUN)
         # Defined here so it's available to the breakout block AND tiered decisions below
+        _bot_actions = []   # tracks every start/stop with reason for event log
+
         def _act(bot_id, should_run, label):
+            action = "start" if should_run else "stop"
+            _bot_actions.append({"bot": bot_id, "action": action, "reason": label})
             if DRY_RUN:
-                action = "start" if should_run else "stop"
                 print(f"[SIMULATION] Would {action} bot {bot_id} ({label})")
             else:
                 if should_run:
@@ -879,6 +882,7 @@ def run():
                         grid_width=_gs.get("grid_width_at_deploy"),
                         inner_grid_width=_inner_tier_gw([inner_tier]),
                         inner_center=_new_inner_center)
+                    state._inner_drift_fired = True
                     print(f"  Narrow recentred. Mid/outer unchanged.")
                 else:
                     print(f"  Rate limit — inner drift redeploy deferred")
@@ -1042,6 +1046,14 @@ def run():
                 "price_target_tp":      _pt_state.get("price_target")  if _pt_state else None,
                 "price_target_dca_id":  _pt_state.get("dca_bot_id")    if _pt_state else None,
                 "price_target_timeout": bool(_pt_state.get("_timed_out")) if _pt_state else False,
+                "price_target_dir":     _pt_state.get("direction")  if _pt_state else None,
+                "price_target_st_id":   _pt_state.get("smart_trade_id") if _pt_state else None,
+                # Bot actions this cycle (start/stop with reason)
+                "bot_actions":          _bot_actions if _bot_actions else None,
+                # DCA bot state
+                "dca_bot_active":       bool(_pt_state.get("dca_bot_id")) if _pt_state else False,
+                # Inner drift
+                "inner_drift_fired":    getattr(state, '_inner_drift_fired', False),
             }
             write_status(log_data)
             write_log_entry(log_data)

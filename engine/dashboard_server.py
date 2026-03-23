@@ -1548,7 +1548,7 @@ def notifications():
         if e.get("trending_up") and not prev.get("trending_up"):
             if _now - _last_trend_ts("Trending UP \u2014") > TREND_DEDUP_SECS:
                 events.append({"ts": ts, "type": "TRENDING", "severity": "info",
-                               "msg": f"Trending UP \u2014 inner off  gap={e.get('gap_ratio',0):.1f}\u00d7ATR  (${price:,.0f})"})
+                               "msg": f"Trending UP \u2014 all bots on  gap={e.get('gap_ratio',0):.1f}\u00d7ATR  (${price:,.0f})"})
         if not e.get("trending_up") and prev.get("trending_up"):
             if _now - _last_trend_ts("Trending UP cleared") > TREND_DEDUP_SECS:
                 events.append({"ts": ts, "type": "TRENDING", "severity": "info",
@@ -1573,6 +1573,46 @@ def notifications():
             label = e.get("price_target_label") or "target"
             events.append({"ts": ts, "type": "TIMEOUT", "severity": "warning",
                            "msg": f"Target timeout: \"{label}\" — 2h below, bots redeployed  (${price:,.0f})"})
+
+        # Price target cleared (was active, now not)
+        if prev.get("price_target_active") and not e.get("price_target_active") \
+                and not e.get("price_target_timeout"):
+            label = prev.get("price_target_label") or "target"
+            events.append({"ts": ts, "type": "PRICE_TARGET", "severity": "info",
+                           "msg": f"Price target cleared: \"{label}\"  (${price:,.0f})"})
+
+        # DCA bot launched
+        if e.get("dca_bot_active") and not prev.get("dca_bot_active"):
+            label = e.get("price_target_label") or "target"
+            dca_id = e.get("price_target_dca_id") or "?"
+            events.append({"ts": ts, "type": "DCA", "severity": "info",
+                           "msg": f"DCA bot launched for \"{label}\"  id={dca_id}  (${price:,.0f})"})
+
+        # SmartTrade launched
+        if e.get("price_target_st_id") and not prev.get("price_target_st_id"):
+            label = e.get("price_target_label") or "target"
+            events.append({"ts": ts, "type": "SMART_TRADE", "severity": "warning",
+                           "msg": f"SmartTrade opened for \"{label}\"  (${price:,.0f})"})
+
+        # Inner drift (narrow-only recentre)
+        if e.get("inner_drift_fired") and not prev.get("inner_drift_fired"):
+            events.append({"ts": ts, "type": "INNER_DRIFT", "severity": "info",
+                           "msg": f"Narrow bot recentred (inner drift)  (${price:,.0f})"})
+
+        # Bot actions — log start/stop transitions with reasons
+        actions = e.get("bot_actions") or []
+        prev_actions = prev.get("bot_actions") or []
+        # Build current and previous bot states from actions
+        _cur_bots = {a["bot"]: a for a in actions}
+        _prev_bots = {a["bot"]: a for a in prev_actions}
+        for bot_id, a in _cur_bots.items():
+            prev_a = _prev_bots.get(bot_id)
+            # Log when a bot transitions from start→stop or stop→start
+            if prev_a and prev_a["action"] != a["action"]:
+                action_lbl = "STARTED" if a["action"] == "start" else "STOPPED"
+                sev = "info" if a["action"] == "start" else "warning"
+                events.append({"ts": ts, "type": "BOT_ACTION", "severity": sev,
+                               "msg": f"{a['reason']} {action_lbl}  (${price:,.0f})"})
 
         prev = e
 
