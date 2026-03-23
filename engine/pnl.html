@@ -229,6 +229,14 @@
   <div class="chart-wrap" id="allocChart" style="height:200px;"></div>
 </div>
 
+<!-- DAILY P&L BAR CHART -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">Daily P&L</span>
+  </div>
+  <div class="chart-wrap" id="dailyPnlChart" style="height:250px;"></div>
+</div>
+
 <!-- DAILY BREAKDOWN -->
 <div class="breakdown">
   <div class="chart-header">
@@ -275,6 +283,7 @@ let allData = [];
 let pfChart, pfSeries;
 let vsChart, gridSeries, hodlSeries;
 let allocChart, allocSeries;
+let dailyPnlChart, dailyPnlSeries;
 let currentTf = '7d';
 
 // ── Init Charts ──
@@ -311,6 +320,15 @@ function initCharts() {
     bottomColor: 'rgba(179,136,255,.02)',
     lineColor: '#b388ff',
     lineWidth: 1,
+  });
+
+  // Daily P&L bars
+  dailyPnlChart = LightweightCharts.createChart(document.getElementById('dailyPnlChart'), {
+    ...opts,
+    rightPriceScale: { ...opts.rightPriceScale, scaleMargins: { top: 0.1, bottom: 0.1 } },
+  });
+  dailyPnlSeries = dailyPnlChart.addHistogramSeries({
+    priceFormat: { type: 'price', precision: 0, minMove: 1 },
   });
 }
 
@@ -442,6 +460,27 @@ function updateCharts() {
   }));
   allocSeries.setData(allocData);
   allocChart.timeScale().fitContent();
+
+  // Daily P&L bars (uses ALL data, not filtered by TF)
+  const dayMap = {};
+  allData.forEach(d => {
+    const date = new Date(d.ts * 1000).toISOString().slice(0, 10);
+    if (!dayMap[date]) dayMap[date] = { first: d, last: d };
+    else dayMap[date].last = d;
+  });
+  const barData = Object.entries(dayMap)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, {first, last}]) => {
+      const chg = last.portfolio_usd - first.portfolio_usd;
+      // Use business day format for histogram (YYYY-MM-DD)
+      return {
+        time: date,
+        value: Math.round(chg * 100) / 100,
+        color: chg >= 0 ? '#00e676' : '#ff3d5a',
+      };
+    });
+  dailyPnlSeries.setData(barData);
+  dailyPnlChart.timeScale().fitContent();
 }
 
 // ── Daily Breakdown ──
