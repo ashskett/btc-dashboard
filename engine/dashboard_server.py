@@ -604,7 +604,7 @@ def force_redeploy_all():
 
         # Use the budget-aware redeploy from threecommas.py
         from threecommas import redeploy_all_bots
-        results = redeploy_all_bots(ids, tiers)
+        all_ok = redeploy_all_bots(ids, tiers)
 
         # Reset grid center to current price so drift detection stays accurate
         from grid_logic import update_grid_center
@@ -615,8 +615,8 @@ def force_redeploy_all():
         update_grid_center(price, grid_width=grid_width,
                           inner_grid_width=inner_gw, inner_center=price)
 
-        return jsonify({"ok": True, "price": price, "center": price,
-                       "bots": [{"bot_id": r[0], "tier": r[1], "ok": r[2]} for r in results]})
+        return jsonify({"ok": all_ok, "price": price, "center": price,
+                       "msg": "All bots redeployed with budgets" if all_ok else "Some bots failed"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
