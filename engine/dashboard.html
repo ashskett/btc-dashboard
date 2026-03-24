@@ -2311,18 +2311,61 @@ function renderTargetSidebar(){
       sfBadgeStyle = `background:${stateBg};color:${phaseColors[phase]||'#ffab00'};`;
     }
 
+    // DCA detail block
+    let dcaDetail = '';
+    if(pt.dca_enabled){
+      const tpLevels = (pt.dca_tp_steps||[]).map(s => `${s.profit_pct}%@${s.close_pct}%`).join(', ');
+      const trailBadge = pt.dca_trailing_enabled
+        ? `<span style="color:var(--green);font-size:8px;">TRAILING ${pt.dca_trailing_deviation_pct||1}%</span>` : '';
+      const dualBadge = pt.dca_dual_entry
+        ? `<span style="color:#00d4ff;font-size:8px;">DUAL (${pt.dca_scout_pct||30}/${100-(pt.dca_scout_pct||30)})</span>` : '';
+
+      let botIdLines = '';
+      if(pt.dca_dual_entry){
+        const scId = pt.dca_scout_bot_id;
+        const rtId = pt.dca_retest_bot_id;
+        if(scId||rtId) botIdLines = `<div style="font-size:8px;color:var(--muted);margin-top:3px;">` +
+          (scId ? `Scout: <span style="color:#00d4ff;">${scId}</span>` : `Scout: <span style="opacity:.4;">not launched</span>`) +
+          ` · ` +
+          (rtId ? `Retest: <span style="color:#ff6b35;">${rtId}</span>` : `Retest: <span style="opacity:.4;">not launched</span>`) +
+          `</div>`;
+      } else {
+        const botId = pt.dca_bot_id;
+        if(botId) botIdLines = `<div style="font-size:8px;color:var(--muted);margin-top:3px;">Bot: <span style="color:#b388ff;">${botId}</span></div>`;
+        else botIdLines = `<div style="font-size:8px;color:var(--muted);margin-top:3px;opacity:.4;">Bot: not launched</div>`;
+      }
+
+      dcaDetail = `<div style="margin:5px 0 4px;padding:6px 8px;background:rgba(179,136,255,.04);border:1px solid rgba(179,136,255,.12);border-radius:4px;">
+        <div style="font-size:8px;color:var(--muted);line-height:1.6;">
+          Base: $${pt.dca_base_order_usd||500} · SOs: ${pt.dca_safety_count||5} @ ${pt.dca_safety_step_pct||1.5}% step · Vol×${pt.dca_safety_volume_mult||1.2}
+        </div>
+        <div style="font-size:8px;color:var(--muted);">TP: ${tpLevels||'—'}</div>
+        <div style="display:flex;gap:8px;margin-top:3px;">${trailBadge}${dualBadge}</div>
+        ${botIdLines}
+      </div>`;
+    }
+
+    // SmartTrade detail
+    let stDetail = '';
+    if(isSF && pt.smart_trade_enabled && !pt.smart_trade_id){
+      stDetail = `<div style="font-size:8px;color:var(--muted);margin-bottom:3px;">ST config: sell ${pt.smart_trade_sell_pct||25}% · TP ${pt.smart_trade_tp_pct||3}% · SL ${pt.smart_trade_sl_pct||1.5}%</div>`;
+    }
+
     return `<div class="tl-card" style="border-left:3px solid ${trigCol};margin-bottom:6px;">
       <div class="tl-hdr">
         <span style="color:${trigCol};font-size:10px;font-weight:700;">${dirArrow} $${pt.trigger_price.toLocaleString()}${tpStr}</span>
         <span style="font-size:9px;padding:2px 5px;border-radius:3px;${sfBadgeStyle}">${stateLabel}</span>
       </div>
       <div class="tl-meta" style="margin:3px 0;">${pt.label}${modeTag}${stTag}${dcaTag}</div>
-      <div style="font-size:9px;color:var(--muted);margin-bottom:5px;">
+      <div style="font-size:9px;color:var(--muted);margin-bottom:3px;">
         confirm: ${pt.confirm_closes||2} closes · reversal: ${pt.reversal_atr_mult||2}×ATR · cooldown: ${pt.rearm_cooldown_h||4}h
         ${isSF ? ` · retest: ${pt.retest_tolerance_pct||0.5}%` : ''}
       </div>
+      ${dcaDetail}
+      ${stDetail}
       ${fired && pt.smart_trade_id ? `<div style="font-size:8px;color:#f85149;margin-bottom:5px;">SmartTrade: ${pt.smart_trade_id}</div>` : ''}
       <div class="tl-btns">
+        <button class="tl-btn" onclick="showEditTargetModal('${pt.id}')" style="color:#00d4ff;">Edit</button>
         <button class="tl-btn" onclick="toggleTargetActive('${pt.id}',${!active})">${active?'Disarm':'Re-arm'}</button>
         <button class="tl-btn" onclick="clearTargetState('${pt.id}')" ${!fired?'disabled':''} style="${!fired?'opacity:.4;cursor:default;':''}">Clear</button>
         ${stCancelBtn}
@@ -2367,28 +2410,40 @@ async function deleteTarget(id){
   } catch(e){ toast('Delete failed','err'); }
 }
 
-function showAddTargetModal(pickedPrice){
+function showEditTargetModal(targetId){
+  const pt = priceTargets.find(t => t.id === targetId);
+  if(!pt){ toast('Target not found','err'); return; }
+  showAddTargetModal(null, pt);
+}
+
+function showAddTargetModal(pickedPrice, editTarget){
   const old = document.getElementById('ptModal');
   if(old) old.remove();
+
+  const isEdit = !!editTarget;
+  const et = editTarget || {};
 
   const div = document.createElement('div');
   div.id = 'ptModal';
   div.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
     background:#0d1117;border:1px solid #243044;border-radius:8px;padding:22px 26px;
-    z-index:9999;min-width:300px;font-family:'Space Mono',monospace;
+    z-index:9999;min-width:300px;max-height:90vh;overflow-y:auto;font-family:'Space Mono',monospace;
     box-shadow:0 8px 48px rgba(0,0,0,.9);`;
 
-  // Pre-fill trigger price from chart pick or current price
-  const curPrice = pickedPrice ? Math.round(pickedPrice) : (status.price ? Math.round(status.price) : '');
+  // Pre-fill trigger price from edit target, chart pick, or current price
+  const curPrice = isEdit ? et.trigger_price : (pickedPrice ? Math.round(pickedPrice) : (status.price ? Math.round(status.price) : ''));
+  const modalTitle = isEdit ? 'EDIT PRICE TARGET' : 'ADD PRICE TARGET';
+  const submitLabel = isEdit ? 'Save Changes' : 'Set Target';
 
   div.innerHTML = `
+    <input type="hidden" id="pt_edit_id" value="${isEdit ? et.id : ''}"/>
     <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:#c9d4e0;
-      margin-bottom:16px;letter-spacing:.05em;">ADD PRICE TARGET</div>
+      margin-bottom:16px;letter-spacing:.05em;">${modalTitle}</div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
       <div>
         <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">LABEL</div>
-        <input id="pt_label" type="text" placeholder="ATH retest → 82k" value=""
+        <input id="pt_label" type="text" placeholder="ATH retest → 82k" value="${isEdit ? (et.label||'').replace(/"/g,'&quot;') : ''}"
           style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
           font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
       </div>
@@ -2397,8 +2452,8 @@ function showAddTargetModal(pickedPrice){
         <select id="pt_dir" onchange="_ptOnDirChange()"
           style="width:100%;background:#080c10;border:1px solid #243044;
           color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;">
-          <option value="UP">▲ UP (breakout above)</option>
-          <option value="DOWN">▼ DOWN (break below)</option>
+          <option value="UP" ${isEdit && et.direction==='UP'?'selected':''}>▲ UP (breakout above)</option>
+          <option value="DOWN" ${isEdit && et.direction==='DOWN'?'selected':''}>▼ DOWN (break below)</option>
         </select>
       </div>
     </div>
@@ -2409,8 +2464,8 @@ function showAddTargetModal(pickedPrice){
       <select id="pt_detect_mode" onchange="_ptOnDetectModeChange()"
         style="width:100%;background:#080c10;border:1px solid #243044;
         color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;">
-        <option value="breakout">Plain breakout (N closes below)</option>
-        <option value="support_failure">Support failure + retest confirmation</option>
+        <option value="breakout" ${isEdit && et.detection_mode==='breakout'?'selected':''}>Plain breakout (N closes below)</option>
+        <option value="support_failure" ${isEdit && et.detection_mode==='support_failure'?'selected':''}>Support failure + retest confirmation</option>
       </select>
     </div>
 
@@ -2420,7 +2475,7 @@ function showAddTargetModal(pickedPrice){
         <div>
           <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">RETEST TOLERANCE %
             <span style="opacity:.5;font-size:8px;">how close to level = retest</span></div>
-          <input id="pt_retest_tol" type="number" value="0.5" min="0.1" max="3" step="0.1"
+          <input id="pt_retest_tol" type="number" value="${isEdit ? (et.retest_tolerance_pct||0.5) : 0.5}" min="0.1" max="3" step="0.1"
             style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
             font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
         </div>
@@ -2442,7 +2497,7 @@ function showAddTargetModal(pickedPrice){
       </div>
       <div>
         <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">PRICE TARGET $ <span style="opacity:.5">(optional)</span></div>
-        <input id="pt_tp" type="number" placeholder="e.g. 82000"
+        <input id="pt_tp" type="number" placeholder="e.g. 82000" value="${isEdit && et.price_target ? et.price_target : ''}"
           style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
           font-family:'Space Mono',monospace;font-size:11px;padding:6px 8px;border-radius:4px;"/>
       </div>
@@ -2451,19 +2506,19 @@ function showAddTargetModal(pickedPrice){
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
       <div>
         <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">CONFIRM CLOSES</div>
-        <input id="pt_confirm" type="number" value="2" min="1" max="10"
+        <input id="pt_confirm" type="number" value="${isEdit ? (et.confirm_closes||2) : 2}" min="1" max="10"
           style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
           font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
       </div>
       <div>
         <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">REVERSAL ×ATR</div>
-        <input id="pt_rev" type="number" value="2.0" min="0.5" step="0.5"
+        <input id="pt_rev" type="number" value="${isEdit ? (et.reversal_atr_mult||2.0) : 2.0}" min="0.5" step="0.5"
           style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
           font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
       </div>
       <div>
         <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">COOLDOWN H</div>
-        <input id="pt_cool" type="number" value="4" min="0" step="1"
+        <input id="pt_cool" type="number" value="${isEdit ? (et.rearm_cooldown_h||4) : 4}" min="0" step="1"
           style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
           font-family:'Space Mono',monospace;font-size:10px;padding:6px 8px;border-radius:4px;"/>
       </div>
@@ -2472,7 +2527,7 @@ function showAddTargetModal(pickedPrice){
     <!-- DCA toggle (UP direction only) -->
     <div id="ptDcaToggleRow" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px;
       background:#060a0e;border:1px solid #1c2433;border-radius:4px;">
-      <input type="checkbox" id="pt_dca_on" onchange="_ptToggleDca(this.checked)"
+      <input type="checkbox" id="pt_dca_on" ${isEdit && et.dca_enabled?'checked':''} onchange="_ptToggleDca(this.checked)"
         style="accent-color:var(--purple);width:14px;height:14px;cursor:pointer;"/>
       <span style="font-size:9px;color:var(--purple);text-transform:uppercase;
         letter-spacing:.08em;font-weight:700;">Launch DCA bot on trigger</span>
@@ -2481,13 +2536,13 @@ function showAddTargetModal(pickedPrice){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
         <div>
           <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">BASE ORDER $</div>
-          <input id="pt_dca_base" type="number" value="500" min="10" step="10"
+          <input id="pt_dca_base" type="number" value="${isEdit ? (et.dca_base_order_usd||500) : 500}" min="10" step="10"
             style="width:100%;background:#080c10;border:1px solid #243044;color:#ffab00;
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
         </div>
         <div>
           <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SAFETY ORDER $</div>
-          <input id="pt_dca_so" type="number" value="100" min="10" step="10"
+          <input id="pt_dca_so" type="number" value="${isEdit ? (et.dca_safety_order_usd||100) : 100}" min="10" step="10"
             style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
         </div>
@@ -2495,19 +2550,19 @@ function showAddTargetModal(pickedPrice){
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
         <div>
           <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">MAX SOs</div>
-          <input id="pt_dca_count" type="number" value="5" min="1" max="25"
+          <input id="pt_dca_count" type="number" value="${isEdit ? (et.dca_safety_count||5) : 5}" min="1" max="25"
             style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
         </div>
         <div>
           <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">STEP %</div>
-          <input id="pt_dca_step" type="number" value="1.5" min="0.1" step="0.1"
+          <input id="pt_dca_step" type="number" value="${isEdit ? (et.dca_safety_step_pct||1.5) : 1.5}" min="0.1" step="0.1"
             style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
         </div>
         <div>
           <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">VOL MULT ×</div>
-          <input id="pt_dca_mult" type="number" value="1.2" min="1" step="0.05"
+          <input id="pt_dca_mult" type="number" value="${isEdit ? (et.dca_safety_volume_mult||1.2) : 1.2}" min="1" step="0.05"
             style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
         </div>
@@ -2516,9 +2571,9 @@ function showAddTargetModal(pickedPrice){
         <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">PAIR</div>
         <select id="pt_dca_pair" style="width:100%;background:#080c10;border:1px solid #243044;
           color:#c9d4e0;font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;">
-          <option value="USDC_BTC">USDC_BTC</option>
-          <option value="USDT_BTC">USDT_BTC</option>
-          <option value="USD_BTC">USD_BTC</option>
+          <option value="USDC_BTC" ${isEdit && et.dca_pair==='USDC_BTC'?'selected':''}>USDC_BTC</option>
+          <option value="USDT_BTC" ${isEdit && et.dca_pair==='USDT_BTC'?'selected':''}>USDT_BTC</option>
+          <option value="USD_BTC" ${isEdit && et.dca_pair==='USD_BTC'?'selected':''}>USD_BTC</option>
         </select>
       </div>
       <div>
@@ -2537,13 +2592,13 @@ function showAddTargetModal(pickedPrice){
       <!-- Trailing TP -->
       <div style="display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px;
         background:#060a0e;border:1px solid #1c2433;border-radius:4px;">
-        <input type="checkbox" id="pt_dca_trailing" onchange="_ptToggleTrailing(this.checked)"
+        <input type="checkbox" id="pt_dca_trailing" ${isEdit && et.dca_trailing_enabled?'checked':''} onchange="_ptToggleTrailing(this.checked)"
           style="accent-color:var(--green);width:14px;height:14px;cursor:pointer;"/>
         <span style="font-size:9px;color:var(--green);text-transform:uppercase;
           letter-spacing:.08em;font-weight:700;">Trailing TP</span>
         <div id="ptTrailingDev" style="display:none;margin-left:auto;align-items:center;gap:6px;">
           <span style="font-size:8px;color:var(--muted);">DEVIATION %</span>
-          <input id="pt_dca_trail_dev" type="number" value="1.0" min="0.1" max="10" step="0.1"
+          <input id="pt_dca_trail_dev" type="number" value="${isEdit ? (et.dca_trailing_deviation_pct||1.0) : 1.0}" min="0.1" max="10" step="0.1"
             style="width:65px;background:#080c10;border:1px solid #243044;color:#c9d4e0;
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
         </div>
@@ -2551,7 +2606,7 @@ function showAddTargetModal(pickedPrice){
       <!-- Dual Entry -->
       <div style="margin-top:10px;padding:8px;background:#060a0e;border:1px solid #1c2433;border-radius:4px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <input type="checkbox" id="pt_dca_dual" onchange="_ptToggleDual(this.checked)"
+          <input type="checkbox" id="pt_dca_dual" ${isEdit && et.dca_dual_entry?'checked':''} onchange="_ptToggleDual(this.checked)"
             style="accent-color:#00d4ff;width:14px;height:14px;cursor:pointer;"/>
           <span style="font-size:9px;color:#00d4ff;text-transform:uppercase;
             letter-spacing:.08em;font-weight:700;">Dual Entry (Scout + Retest)</span>
@@ -2563,19 +2618,19 @@ function showAddTargetModal(pickedPrice){
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
             <div>
               <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SCOUT %</div>
-              <input id="pt_dca_scout_pct" type="number" value="30" min="10" max="90" step="5"
+              <input id="pt_dca_scout_pct" type="number" value="${isEdit ? (et.dca_scout_pct||30) : 30}" min="10" max="90" step="5"
                 style="width:100%;background:#080c10;border:1px solid #243044;color:#00d4ff;
                 font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
             </div>
             <div>
               <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">BUFFER CYCLES</div>
-              <input id="pt_dca_scout_buf" type="number" value="5" min="0" max="20" step="1"
+              <input id="pt_dca_scout_buf" type="number" value="${isEdit ? (et.dca_scout_buffer_cycles||5) : 5}" min="0" max="20" step="1"
                 style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
                 font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
             </div>
             <div>
               <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">RETEST TOL %</div>
-              <input id="pt_dca_retest_tol" type="number" value="0.5" min="0.1" max="5" step="0.1"
+              <input id="pt_dca_retest_tol" type="number" value="${isEdit ? (et.dca_retest_tolerance_pct||0.5) : 0.5}" min="0.1" max="5" step="0.1"
                 style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
                 font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
             </div>
@@ -2592,7 +2647,7 @@ function showAddTargetModal(pickedPrice){
     <div id="ptSmartTradeSection" style="display:none;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px;
         background:#1a0a0a;border:1px solid #5a1a1a;border-radius:4px;">
-        <input type="checkbox" id="pt_st_on" onchange="_ptToggleSt(this.checked)"
+        <input type="checkbox" id="pt_st_on" ${isEdit && et.smart_trade_enabled?'checked':''} onchange="_ptToggleSt(this.checked)"
           style="accent-color:#f85149;width:14px;height:14px;cursor:pointer;"/>
         <span style="font-size:9px;color:#f85149;text-transform:uppercase;
           letter-spacing:.08em;font-weight:700;">Open SmartTrade SELL on confirmed failure</span>
@@ -2606,19 +2661,19 @@ function showAddTargetModal(pickedPrice){
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
           <div>
             <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SELL % OF BTC</div>
-            <input id="pt_st_sell_pct" type="number" value="25" min="5" max="100" step="5"
+            <input id="pt_st_sell_pct" type="number" value="${isEdit ? (et.smart_trade_sell_pct||25) : 25}" min="5" max="100" step="5"
               style="width:100%;background:#080c10;border:1px solid #5a1a1a;color:#f85149;
               font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:5px 7px;border-radius:4px;"/>
           </div>
           <div>
             <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TP % BELOW ENTRY</div>
-            <input id="pt_st_tp_pct" type="number" value="3.0" min="0.5" max="30" step="0.5"
+            <input id="pt_st_tp_pct" type="number" value="${isEdit ? (et.smart_trade_tp_pct||3.0) : 3.0}" min="0.5" max="30" step="0.5"
               style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
               font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
           </div>
           <div>
             <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SL % ABOVE ENTRY</div>
-            <input id="pt_st_sl_pct" type="number" value="1.5" min="0.3" max="10" step="0.1"
+            <input id="pt_st_sl_pct" type="number" value="${isEdit ? (et.smart_trade_sl_pct||1.5) : 1.5}" min="0.3" max="10" step="0.1"
               style="width:100%;background:#080c10;border:1px solid #243044;color:#ffab00;
               font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
           </div>
@@ -2630,7 +2685,7 @@ function showAddTargetModal(pickedPrice){
       <button onclick="confirmAddTarget()"
         style="flex:1;background:rgba(255,171,0,.12);border:1px solid #ffab00;color:#ffab00;
         font-family:'Space Mono',monospace;font-size:10px;padding:8px;border-radius:4px;cursor:pointer;font-weight:700;">
-        Set Target
+        ${submitLabel}
       </button>
       <button onclick="document.getElementById('ptModal').remove()"
         style="background:rgba(255,255,255,.04);border:1px solid #1c2433;color:#4a5a72;
@@ -2640,6 +2695,24 @@ function showAddTargetModal(pickedPrice){
     </div>`;
 
   document.body.appendChild(div);
+
+  // In edit mode, trigger visibility toggles to match existing state
+  if(isEdit){
+    _ptOnDirChange();
+    if(et.direction === 'DOWN' && et.detection_mode === 'support_failure') _ptOnDetectModeChange();
+    if(et.dca_enabled){
+      _ptToggleDca(true);
+      // Populate TP rows from existing data
+      document.getElementById('ptTpRows').innerHTML = '';
+      const steps = et.dca_tp_steps || [];
+      if(steps.length) steps.forEach(s => _ptAddTpRow(s.profit_pct, s.close_pct));
+      else _ptAddTpRow(2.0, 100);
+      if(et.dca_trailing_enabled) _ptToggleTrailing(true);
+      if(et.dca_dual_entry) _ptToggleDual(true);
+    }
+    if(et.smart_trade_enabled) _ptToggleSt(true);
+  }
+
   document.getElementById('pt_label').focus();
 }
 
@@ -2795,15 +2868,26 @@ async function confirmAddTarget(){
     body.dca_retest_tolerance_pct   = parseFloat(document.getElementById('pt_dca_retest_tol')?.value) || 0.5;
   }
 
+  const editId = document.getElementById('pt_edit_id')?.value;
+
   try{
-    const r = await apiFetch(`${API}/targets`, {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(body)});
+    let r;
+    if(editId){
+      // Edit mode — PUT to update existing target
+      r = await apiFetch(`${API}/targets/${editId}`, {method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)});
+    } else {
+      // Add mode — POST to create new target
+      r = await apiFetch(`${API}/targets`, {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)});
+    }
     const data = await r.json();
     if(!data.ok) throw new Error(data.msg);
     document.getElementById('ptModal').remove();
     await loadTargets();
-    toast(`Target "${label}" added`, 'ok');
+    toast(`Target "${label}" ${editId ? 'updated' : 'added'}`, 'ok');
   } catch(e){ toast(`Failed: ${e.message}`,'err'); }
 }
 
