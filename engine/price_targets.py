@@ -47,6 +47,13 @@ SCHEMA FIELDS
   # DCA config (breakout mode, UP direction)
   dca_enabled, dca_base_order_usd, dca_safety_count
   dca_safety_step_pct, dca_safety_volume_mult, dca_tp_steps, dca_bot_id
+  dca_trailing_enabled, dca_trailing_deviation_pct
+  dca_dual_entry             bool   — if True, split into scout (small/fast) + retest (larger/later)
+  dca_scout_pct              float  — % of base_order for scout bot (e.g. 30 = 30%)
+  dca_scout_buffer_cycles    int    — engine cycles to wait before scout fires (e.g. 2 = 10 min)
+  dca_retest_tolerance_pct   float  — price must pull back to within this % of trigger for retest bot
+  dca_scout_bot_id           str|null — 3Commas bot ID for scout
+  dca_retest_bot_id          str|null — 3Commas bot ID for retest
 """
 
 import os
@@ -330,6 +337,12 @@ def add_target(
     dca_safety_step_pct: float = 1.5,
     dca_safety_volume_mult: float = 1.2,
     dca_tp_steps: list = None,
+    dca_trailing_enabled: bool = False,
+    dca_trailing_deviation_pct: float = 1.0,
+    dca_dual_entry: bool = False,
+    dca_scout_pct: float = 30.0,
+    dca_scout_buffer_cycles: int = 2,
+    dca_retest_tolerance_pct: float = 0.5,
     # SmartTrade (support_failure DOWN)
     smart_trade_enabled: bool = False,
     smart_trade_sell_pct: float = 25.0,
@@ -366,7 +379,15 @@ def add_target(
         "dca_safety_step_pct":    dca_safety_step_pct,
         "dca_safety_volume_mult": dca_safety_volume_mult,
         "dca_tp_steps":           dca_tp_steps or [],
+        "dca_trailing_enabled":   dca_trailing_enabled,
+        "dca_trailing_deviation_pct": dca_trailing_deviation_pct,
+        "dca_dual_entry":         dca_dual_entry,
+        "dca_scout_pct":          dca_scout_pct,
+        "dca_scout_buffer_cycles": dca_scout_buffer_cycles,
+        "dca_retest_tolerance_pct": dca_retest_tolerance_pct,
         "dca_bot_id":             None,
+        "dca_scout_bot_id":       None,
+        "dca_retest_bot_id":      None,
         # SmartTrade
         "smart_trade_enabled":    smart_trade_enabled,
         "smart_trade_sell_pct":   smart_trade_sell_pct,
@@ -409,7 +430,8 @@ def clear_target(target_id: str) -> bool:
             t.update({"fired": False, "fired_at": None, "fired_price": None,
                       "cleared_at": None, "consec_above": 0,
                       "sf_phase": "watching", "sf_retest_high": None,
-                      "sf_broken_at": None, "smart_trade_id": None})
+                      "sf_broken_at": None, "smart_trade_id": None,
+                      "dca_scout_bot_id": None, "dca_retest_bot_id": None})
             save_targets(targets)
             return True
     return False

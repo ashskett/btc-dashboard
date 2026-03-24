@@ -98,6 +98,8 @@ def create_dca_bot(
     safety_order_volume_mult: float = 1.2,
     pair: str = "USDC_BTC",
     take_profit_steps: list = None,
+    trailing_enabled: bool = False,
+    trailing_deviation_pct: float = 1.0,
 ) -> dict:
     """
     Create a new DCA bot and return the API response dict (contains 'id').
@@ -112,6 +114,10 @@ def create_dca_bot(
 
     safety_order_step_pct: % drop between each safety order.
     safety_order_volume_mult (martingale): each SO is this × larger than previous.
+    trailing_enabled: if True, TP trails price by trailing_deviation_pct instead of
+        closing at a fixed level. Lets you ride extended moves.
+    trailing_deviation_pct: how far price can drop from its peak before TP triggers
+        (e.g. 1.0 = 1% pullback from high closes the deal).
     """
     body = {
         "account_id":                      int(ACCOUNT_ID),
@@ -144,6 +150,13 @@ def create_dca_bot(
     else:
         body["take_profit_type"] = "total"
         body["take_profit"]      = str(round(take_profit_pct, 2))
+    # Trailing TP — price must first reach TP level, then trails by deviation %.
+    # 3Commas fields: trailing_enabled (bool), trailing_deviation (string %).
+    if trailing_enabled:
+        body["trailing_enabled"]   = True
+        body["trailing_deviation"] = str(round(trailing_deviation_pct, 2))
+    else:
+        body["trailing_enabled"]   = False
     r = _signed_request("POST", "/ver1/bots/create_bot", body=body)
     if not r.ok:
         raise ValueError(f"3Commas {r.status_code}: {r.text[:500]}")

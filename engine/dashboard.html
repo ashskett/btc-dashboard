@@ -2468,6 +2468,58 @@ function showAddTargetModal(pickedPrice){
           Close % must sum to 100 · Profit % must be ascending
         </div>
       </div>
+      <!-- Trailing TP -->
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px;
+        background:#060a0e;border:1px solid #1c2433;border-radius:4px;">
+        <input type="checkbox" id="pt_dca_trailing" onchange="_ptToggleTrailing(this.checked)"
+          style="accent-color:var(--green);width:14px;height:14px;cursor:pointer;"/>
+        <span style="font-size:9px;color:var(--green);text-transform:uppercase;
+          letter-spacing:.08em;font-weight:700;">Trailing TP</span>
+        <div id="ptTrailingDev" style="display:none;margin-left:auto;align-items:center;gap:6px;">
+          <span style="font-size:8px;color:var(--muted);">DEVIATION %</span>
+          <input id="pt_dca_trail_dev" type="number" value="1.0" min="0.1" max="10" step="0.1"
+            style="width:65px;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+            font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+        </div>
+      </div>
+      <!-- Dual Entry -->
+      <div style="margin-top:10px;padding:8px;background:#060a0e;border:1px solid #1c2433;border-radius:4px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <input type="checkbox" id="pt_dca_dual" onchange="_ptToggleDual(this.checked)"
+            style="accent-color:#00d4ff;width:14px;height:14px;cursor:pointer;"/>
+          <span style="font-size:9px;color:#00d4ff;text-transform:uppercase;
+            letter-spacing:.08em;font-weight:700;">Dual Entry (Scout + Retest)</span>
+        </div>
+        <div id="ptDualFields" style="display:none;">
+          <div style="font-size:8px;color:var(--muted);margin-bottom:8px;line-height:1.4;">
+            Scout: small entry after buffer period · Retest: larger entry on pullback to trigger
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+            <div>
+              <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SCOUT %</div>
+              <input id="pt_dca_scout_pct" type="number" value="30" min="10" max="90" step="5"
+                style="width:100%;background:#080c10;border:1px solid #243044;color:#00d4ff;
+                font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+            </div>
+            <div>
+              <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">BUFFER CYCLES</div>
+              <input id="pt_dca_scout_buf" type="number" value="2" min="0" max="12" step="1"
+                style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+                font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+            </div>
+            <div>
+              <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">RETEST TOL %</div>
+              <input id="pt_dca_retest_tol" type="number" value="0.5" min="0.1" max="5" step="0.1"
+                style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+                font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+            </div>
+          </div>
+          <div style="font-size:8px;color:var(--muted);margin-top:6px;opacity:.6;">
+            Scout fires <span id="ptScoutTimer">~10 min</span> after trigger · Retest gets remaining
+            <span id="ptRetestPct">70</span>% on pullback
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- SmartTrade section (support_failure DOWN only) -->
@@ -2532,6 +2584,10 @@ function _ptOnDirChange(){
   document.getElementById('ptDcaToggleRow').style.display  = isDown ? 'none'  : 'flex';
   document.getElementById('ptDcaFields').style.display     = 'none';
   document.getElementById('pt_dca_on').checked             = false;
+  const _trailEl = document.getElementById('pt_dca_trailing');
+  if(_trailEl) { _trailEl.checked = false; _ptToggleTrailing(false); }
+  const _dualEl = document.getElementById('pt_dca_dual');
+  if(_dualEl) { _dualEl.checked = false; _ptToggleDual(false); }
   if(isDown) _ptOnDetectModeChange();
   else { document.getElementById('ptRetestRow').style.display = 'none';
          document.getElementById('ptSmartTradeSection').style.display = 'none'; }
@@ -2550,6 +2606,26 @@ function _ptOnDetectModeChange(){
 function _ptToggleDca(on){
   document.getElementById('ptDcaFields').style.display = on ? 'block' : 'none';
   if(on && document.getElementById('ptTpRows').children.length === 0) _ptAddTpRow(2.0, 100);
+}
+
+function _ptToggleTrailing(on){
+  const dev = document.getElementById('ptTrailingDev');
+  if(dev) dev.style.display = on ? 'flex' : 'none';
+}
+
+function _ptToggleDual(on){
+  const f = document.getElementById('ptDualFields');
+  if(f) f.style.display = on ? 'block' : 'none';
+  // Update dynamic labels
+  if(on) _ptUpdateDualLabels();
+}
+function _ptUpdateDualLabels(){
+  const sp = parseInt(document.getElementById('pt_dca_scout_pct')?.value || 30);
+  const buf = parseInt(document.getElementById('pt_dca_scout_buf')?.value || 2);
+  const rp = document.getElementById('ptRetestPct');
+  const st = document.getElementById('ptScoutTimer');
+  if(rp) rp.textContent = (100 - sp);
+  if(st) st.textContent = `~${buf * 5} min`;
 }
 
 function _ptToggleSt(on){
@@ -2645,6 +2721,12 @@ async function confirmAddTarget(){
       if(tpSteps[i].profit_pct <= tpSteps[i-1].profit_pct){ toast('TP profit levels must be ascending','err'); return; }
     }
     body.dca_tp_steps = tpSteps;
+    body.dca_trailing_enabled       = document.getElementById('pt_dca_trailing')?.checked || false;
+    body.dca_trailing_deviation_pct = parseFloat(document.getElementById('pt_dca_trail_dev')?.value) || 1.0;
+    body.dca_dual_entry             = document.getElementById('pt_dca_dual')?.checked || false;
+    body.dca_scout_pct              = parseFloat(document.getElementById('pt_dca_scout_pct')?.value) || 30;
+    body.dca_scout_buffer_cycles    = parseInt(document.getElementById('pt_dca_scout_buf')?.value) || 2;
+    body.dca_retest_tolerance_pct   = parseFloat(document.getElementById('pt_dca_retest_tol')?.value) || 0.5;
   }
 
   try{

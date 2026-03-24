@@ -538,6 +538,31 @@ def run():
                 state.center = state.price
                 state.deploy_grid_width = state.grid_width
 
+            # UP breakout early fakeout kill: if price drops 0.3×ATR below fire price,
+            # the breakout has clearly failed — kill immediately without waiting for
+            # the slower exhaustion check (which requires 5-candle averaging).
+            UP_FAKEOUT_ATR_MULT = 0.3
+            if _active_dir == "UP" and state.price < _fire_price - state.atr * UP_FAKEOUT_ATR_MULT:
+                _fakeout_thresh = _fire_price - state.atr * UP_FAKEOUT_ATR_MULT
+                print(f"BREAKOUT_UP FAKEOUT — price ${state.price:,.0f} fell below "
+                      f"fire−0.3×ATR (${_fakeout_thresh:,.0f}) — killing immediately")
+                if not DRY_RUN:
+                    clear_breakout_state()
+                    if _can_act():
+                        _record_action()
+                        redeploy_all_bots(GRID_BOTS, state.tiers)
+                        update_grid_center(state.price, grid_width=state.grid_width,
+                                          inner_grid_width=(_inner_tier_gw(state.tiers)),
+                                          inner_center=state.price)
+                        _save_redeploy_state(state.price, state.btc_ratio)
+                        print(f"  Grid redeployed at ${state.price:,.0f} after UP fakeout")
+                    else:
+                        print(f"  Rate limit — UP fakeout redeploy deferred")
+                else:
+                    clear_breakout_state()
+                    print(f"  [SIM] Would redeploy grid after UP fakeout")
+                return
+
             # UP breakout: exhaustion-redeploy (momentum stalling = grid at new level)
             # DOWN breakout: do NOT use exhaustion logic — a brief pause in selling is
             # normal and must NOT restart bots. Instead, wait for genuine price recovery.
@@ -641,57 +666,150 @@ def run():
                 DCA_LAUNCH_HOLD_SECS = 360   # 6 minutes
                 _fired_at   = _pt_state.get("fired_at") or 0
                 _hold_secs  = max(0, DCA_LAUNCH_HOLD_SECS - (time.time() - _fired_at))
+                _elapsed_cycles = max(0, round((time.time() - _fired_at) / 300)) if _fired_at else 0
                 if _hold_secs > 0:
                     print(f"  DCA launch held — sweep guard active ({_hold_secs:.0f}s remaining)")
 
-                # Only on the first cycle after firing (dca_bot_id not yet set).
-                # DCA bot launches if either dca_tp_steps (multi-level TP) is set
-                # or a price_target is set (single TP derived from the absolute $target).
                 _tp_steps = _pt_state.get("dca_tp_steps") or []
                 _has_tp   = bool(_tp_steps) or bool(_pt_tp)
-                if _pt_state.get("dca_enabled") and not _pt_state.get("dca_bot_id") and _has_tp and _hold_secs == 0:
+                _trailing_on  = bool(_pt_state.get("dca_trailing_enabled", False))
+                _trailing_dev = float(_pt_state.get("dca_trailing_deviation_pct", 1.0))
+                _dual_entry   = bool(_pt_state.get("dca_dual_entry", False))
+
+                if _pt_state.get("dca_enabled") and _has_tp and _hold_secs == 0:
                     bo_usd   = float(_pt_state.get("dca_base_order_usd", 500))
                     so_usd   = round(bo_usd * 0.5, 2)
                     so_count = int(_pt_state.get("dca_safety_count", 5))
                     so_step  = float(_pt_state.get("dca_safety_step_pct", 1.5))
                     so_mult  = float(_pt_state.get("dca_safety_volume_mult", 1.2))
-                    max_exp  = estimate_max_exposure(bo_usd, so_usd, so_count, so_mult)
 
                     # TP config: prefer explicit steps; fall back to single % from price_target
                     if _tp_steps:
+                        tp_pct  = 2.0  # placeholder when using steps
                         tp_desc = " | ".join(f"{s['profit_pct']}%→close {s['close_pct']}%" for s in _tp_steps)
                     else:
                         tp_pct  = round((_pt_tp - state.price) / state.price * 100, 2)
                         tp_desc = f"{tp_pct:.1f}%"
+                    _trail_str = f" trailing={_trailing_dev}%" if _trailing_on else ""
 
-                    if DRY_RUN:
-                        print(f"  [SIM] Would create DCA bot '{_pt_label}' | "
-                              f"base=${bo_usd} SO=${so_usd}×{so_count} "
-                              f"step={so_step}% mult={so_mult}× | "
-                              f"TP={tp_desc} | max_exposure=${max_exp:,.0f}")
-                    elif _can_act():
-                        _record_action()
-                        try:
-                            bot_data = create_dca_bot(
-                                label=_pt_label,
-                                base_order_usd=bo_usd,
-                                safety_order_usd=so_usd,
-                                take_profit_pct=tp_pct if not _tp_steps else 2.0,
-                                take_profit_steps=_tp_steps if _tp_steps else None,
-                                safety_order_count=so_count,
-                                safety_order_step_pct=so_step,
-                                safety_order_volume_mult=so_mult,
-                            )
-                            dca_id = str(bot_data.get("id", ""))
-                            if dca_id:
-                                enable_dca_bot(dca_id)
-                                update_target(_pt_state["id"], {"dca_bot_id": dca_id})
-                                print(f"  DCA bot launched: id={dca_id} "
-                                      f"base=${bo_usd} TP={tp_pct:.1f}% max_exp=${max_exp:,.0f}")
-                        except Exception as _dca_err:
-                            print(f"  Warning: DCA bot launch failed: {_dca_err}")
-                    else:
-                        print(f"  Rate limit reached — DCA bot launch deferred to next cycle")
+                    if _dual_entry:
+                        # ── DUAL ENTRY: scout (small/buffered) + retest (larger/pullback) ──
+                        _scout_pct     = float(_pt_state.get("dca_scout_pct", 30)) / 100.0
+                        _scout_buffer  = int(_pt_state.get("dca_scout_buffer_cycles", 2))
+                        _retest_tol    = float(_pt_state.get("dca_retest_tolerance_pct", 0.5))
+                        _fire_price_pt = float(_pt_state.get("fired_price") or _pt_state.get("trigger_price"))
+                        _retest_zone   = _fire_price_pt * (1 + _retest_tol / 100.0)
+
+                        # Scout bot: fires after buffer cycles (e.g. 2 cycles = ~10 min)
+                        if not _pt_state.get("dca_scout_bot_id") and _elapsed_cycles >= _scout_buffer:
+                            _scout_base = round(bo_usd * _scout_pct, 2)
+                            _scout_so   = round(_scout_base * 0.5, 2)
+                            _scout_exp  = estimate_max_exposure(_scout_base, _scout_so, so_count, so_mult)
+                            if DRY_RUN:
+                                print(f"  [SIM] Would create SCOUT DCA '{_pt_label} (scout)' | "
+                                      f"base=${_scout_base} ({_scout_pct*100:.0f}% of budget) "
+                                      f"TP={tp_desc}{_trail_str} | max_exp=${_scout_exp:,.0f}")
+                            elif _can_act():
+                                _record_action()
+                                try:
+                                    _sd = create_dca_bot(
+                                        label=f"{_pt_label} (scout)",
+                                        base_order_usd=_scout_base,
+                                        safety_order_usd=_scout_so,
+                                        take_profit_pct=tp_pct,
+                                        take_profit_steps=_tp_steps if _tp_steps else None,
+                                        safety_order_count=so_count,
+                                        safety_order_step_pct=so_step,
+                                        safety_order_volume_mult=so_mult,
+                                        trailing_enabled=_trailing_on,
+                                        trailing_deviation_pct=_trailing_dev,
+                                    )
+                                    _sid = str(_sd.get("id", ""))
+                                    if _sid:
+                                        enable_dca_bot(_sid)
+                                        update_target(_pt_state["id"], {"dca_scout_bot_id": _sid})
+                                        print(f"  SCOUT DCA launched: id={_sid} base=${_scout_base}"
+                                              f" TP={tp_desc}{_trail_str} max_exp=${_scout_exp:,.0f}")
+                                except Exception as _e:
+                                    print(f"  Warning: Scout DCA launch failed: {_e}")
+                            else:
+                                print(f"  Rate limit — scout DCA deferred")
+                        elif not _pt_state.get("dca_scout_bot_id"):
+                            print(f"  Scout DCA waiting — {_scout_buffer - _elapsed_cycles} cycles remaining")
+
+                        # Retest bot: fires when price pulls back near the trigger level
+                        if not _pt_state.get("dca_retest_bot_id") and _pt_state.get("dca_scout_bot_id"):
+                            if state.price <= _retest_zone:
+                                _retest_pct  = 1.0 - _scout_pct
+                                _retest_base = round(bo_usd * _retest_pct, 2)
+                                _retest_so   = round(_retest_base * 0.5, 2)
+                                _retest_exp  = estimate_max_exposure(_retest_base, _retest_so, so_count, so_mult)
+                                if DRY_RUN:
+                                    print(f"  [SIM] RETEST DCA '{_pt_label} (retest)' | "
+                                          f"base=${_retest_base} ({_retest_pct*100:.0f}%) "
+                                          f"price ${state.price:,.0f} in retest zone ≤${_retest_zone:,.0f}")
+                                elif _can_act():
+                                    _record_action()
+                                    try:
+                                        _rd = create_dca_bot(
+                                            label=f"{_pt_label} (retest)",
+                                            base_order_usd=_retest_base,
+                                            safety_order_usd=_retest_so,
+                                            take_profit_pct=tp_pct,
+                                            take_profit_steps=_tp_steps if _tp_steps else None,
+                                            safety_order_count=so_count,
+                                            safety_order_step_pct=so_step,
+                                            safety_order_volume_mult=so_mult,
+                                            trailing_enabled=_trailing_on,
+                                            trailing_deviation_pct=_trailing_dev,
+                                        )
+                                        _rid = str(_rd.get("id", ""))
+                                        if _rid:
+                                            enable_dca_bot(_rid)
+                                            update_target(_pt_state["id"], {"dca_retest_bot_id": _rid})
+                                            print(f"  RETEST DCA launched: id={_rid} base=${_retest_base}"
+                                                  f" (pullback to ${state.price:,.0f} ≤ ${_retest_zone:,.0f})")
+                                    except Exception as _e:
+                                        print(f"  Warning: Retest DCA launch failed: {_e}")
+                                else:
+                                    print(f"  Rate limit — retest DCA deferred")
+                            else:
+                                print(f"  Retest DCA waiting — price ${state.price:,.0f} > "
+                                      f"retest zone ${_retest_zone:,.0f} (trigger+{_retest_tol}%)")
+
+                    elif not _pt_state.get("dca_bot_id"):
+                        # ── SINGLE ENTRY (original behaviour) ──
+                        max_exp = estimate_max_exposure(bo_usd, so_usd, so_count, so_mult)
+                        if DRY_RUN:
+                            print(f"  [SIM] Would create DCA bot '{_pt_label}' | "
+                                  f"base=${bo_usd} SO=${so_usd}×{so_count} "
+                                  f"step={so_step}% mult={so_mult}× | "
+                                  f"TP={tp_desc}{_trail_str} | max_exposure=${max_exp:,.0f}")
+                        elif _can_act():
+                            _record_action()
+                            try:
+                                bot_data = create_dca_bot(
+                                    label=_pt_label,
+                                    base_order_usd=bo_usd,
+                                    safety_order_usd=so_usd,
+                                    take_profit_pct=tp_pct,
+                                    take_profit_steps=_tp_steps if _tp_steps else None,
+                                    safety_order_count=so_count,
+                                    safety_order_step_pct=so_step,
+                                    safety_order_volume_mult=so_mult,
+                                    trailing_enabled=_trailing_on,
+                                    trailing_deviation_pct=_trailing_dev,
+                                )
+                                dca_id = str(bot_data.get("id", ""))
+                                if dca_id:
+                                    enable_dca_bot(dca_id)
+                                    update_target(_pt_state["id"], {"dca_bot_id": dca_id})
+                                    print(f"  DCA bot launched: id={dca_id} "
+                                          f"base=${bo_usd} TP={tp_desc}{_trail_str} max_exp=${max_exp:,.0f}")
+                            except Exception as _dca_err:
+                                print(f"  Warning: DCA bot launch failed: {_dca_err}")
+                        else:
+                            print(f"  Rate limit reached — DCA bot launch deferred to next cycle")
 
             else:  # DOWN target — support failure or plain DOWN breakout
 
