@@ -805,6 +805,34 @@
       </div>
     </div>
 
+    <!-- ── Daily Grid Profit (stacked bar chart) ── -->
+    <div class="pnl-sec">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div class="sec-title" style="margin-bottom:0;">Daily Grid Profit</div>
+        <button class="cbtn" onclick="loadDailyProfit()" title="Refresh" style="padding:3px 8px;font-size:11px;">↻</button>
+      </div>
+      <div class="btn-row" style="flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+        <button class="cbtn pnl-tf active" data-dp="7"  onclick="setDpRange(this,7)">7d</button>
+        <button class="cbtn pnl-tf"        data-dp="14" onclick="setDpRange(this,14)">14d</button>
+        <button class="cbtn pnl-tf"        data-dp="30" onclick="setDpRange(this,30)">30d</button>
+        <button class="cbtn pnl-tf"        data-dp="0"  onclick="setDpRange(this,0)">All</button>
+      </div>
+      <div id="dpLoading" style="color:var(--muted);font-size:10px;padding:4px 0;">Loading…</div>
+      <div id="dpError"   style="display:none;color:var(--red);font-size:10px;padding:4px 0;"></div>
+      <canvas id="dpChart" style="display:none;width:100%;height:180px;"></canvas>
+      <div id="dpSummary" style="display:none;margin-top:8px;">
+        <div style="display:flex;gap:12px;font-size:10px;margin-bottom:4px;">
+          <span><span style="color:#00d4ff;">■</span> Inner: <span id="dpInnerTotal">—</span></span>
+          <span><span style="color:#ff6b35;">■</span> Mid: <span id="dpMidTotal">—</span></span>
+          <span><span style="color:#b388ff;">■</span> Outer: <span id="dpOuterTotal">—</span></span>
+        </div>
+        <div style="font-size:11px;color:var(--fg);">
+          Total: <span id="dpGrandTotal" style="font-weight:600;">—</span>
+          <span style="color:var(--muted);font-size:9px;margin-left:6px;">avg <span id="dpDailyAvg">—</span>/day</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Timeframe selector -->
     <div class="pnl-sec">
       <div class="sec-title">Simulation Timeframe</div>
@@ -3935,7 +3963,7 @@ function switchTab(tab) {
   document.querySelectorAll('.aside-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
   document.getElementById('panel' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
-  if (tab === 'pnl') loadPnlSummary();
+  if (tab === 'pnl') { loadPnlSummary(); loadDailyProfit(); }
   if (tab === 'events') { document.getElementById('evtBadge').style.display = 'none'; }
 }
 
@@ -4059,6 +4087,182 @@ function toLocalDTString(d) {
   // Returns "YYYY-MM-DDTHH:MM" for a datetime-local input
   const pad = n => String(n).padStart(2,'0');
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ── Daily Grid Profit chart ─────────────────────────────────
+let _dpData = null;
+let _dpDays = 7;
+
+function setDpRange(btn, days) {
+  document.querySelectorAll('.pnl-tf[data-dp]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _dpDays = days;
+  if (_dpData) renderDailyProfit(_dpData);
+  else loadDailyProfit();
+}
+
+async function loadDailyProfit() {
+  const loading = document.getElementById('dpLoading');
+  const errEl   = document.getElementById('dpError');
+  const canvas  = document.getElementById('dpChart');
+  const summary = document.getElementById('dpSummary');
+  loading.style.display = 'block';
+  errEl.style.display   = 'none';
+  canvas.style.display  = 'none';
+  summary.style.display = 'none';
+
+  try {
+    const r = await fetch(`${API}/bots/daily-profit`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    _dpData = data.days || [];
+    renderDailyProfit(_dpData);
+  } catch (e) {
+    loading.style.display = 'none';
+    errEl.style.display   = 'block';
+    errEl.textContent     = `Error: ${e.message}`;
+  }
+}
+
+function renderDailyProfit(allDays) {
+  const loading = document.getElementById('dpLoading');
+  const canvas  = document.getElementById('dpChart');
+  const summary = document.getElementById('dpSummary');
+  loading.style.display = 'none';
+
+  // Filter by date range
+  let days = allDays;
+  if (_dpDays > 0) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - _dpDays);
+    const cutStr = cutoff.toISOString().slice(0, 10);
+    days = allDays.filter(d => d.date >= cutStr);
+  }
+
+  if (!days.length) {
+    canvas.style.display  = 'none';
+    summary.style.display = 'block';
+    document.getElementById('dpGrandTotal').textContent = '$0.00';
+    document.getElementById('dpDailyAvg').textContent   = '$0.00';
+    document.getElementById('dpInnerTotal').textContent  = '$0.00';
+    document.getElementById('dpMidTotal').textContent    = '$0.00';
+    document.getElementById('dpOuterTotal').textContent  = '$0.00';
+    return;
+  }
+
+  canvas.style.display  = 'block';
+  summary.style.display = 'block';
+
+  // Compute totals for legend
+  let innerT = 0, midT = 0, outerT = 0;
+  days.forEach(d => { innerT += d.inner || 0; midT += d.mid || 0; outerT += d.outer || 0; });
+  const grandT = innerT + midT + outerT;
+  const fmtUsd = v => (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
+  const clr = v => v >= 0 ? 'var(--green)' : 'var(--red)';
+  document.getElementById('dpInnerTotal').innerHTML  = `<span style="color:${clr(innerT)}">${fmtUsd(innerT)}</span>`;
+  document.getElementById('dpMidTotal').innerHTML    = `<span style="color:${clr(midT)}">${fmtUsd(midT)}</span>`;
+  document.getElementById('dpOuterTotal').innerHTML  = `<span style="color:${clr(outerT)}">${fmtUsd(outerT)}</span>`;
+  document.getElementById('dpGrandTotal').innerHTML  = `<span style="color:${clr(grandT)}">${fmtUsd(grandT)}</span>`;
+  document.getElementById('dpDailyAvg').innerHTML    = `<span style="color:${clr(grandT/days.length)}">${fmtUsd(grandT / days.length)}</span>`;
+
+  // Draw stacked bar chart
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width  = rect.width  * dpr;
+  canvas.height = 180 * dpr;
+  canvas.style.height = '180px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = rect.width;
+  const H = 180;
+  ctx.clearRect(0, 0, W, H);
+
+  const PAD_LEFT = 40, PAD_RIGHT = 8, PAD_TOP = 10, PAD_BOTTOM = 28;
+  const chartW = W - PAD_LEFT - PAD_RIGHT;
+  const chartH = H - PAD_TOP - PAD_BOTTOM;
+
+  // Find max absolute daily total for Y scale (positive and negative stacks separately)
+  let maxPos = 0, maxNeg = 0;
+  days.forEach(d => {
+    // Stack positive segments and negative segments separately
+    let pos = 0, neg = 0;
+    ['inner', 'mid', 'outer'].forEach(k => {
+      const v = d[k] || 0;
+      if (v >= 0) pos += v; else neg += Math.abs(v);
+    });
+    if (pos > maxPos) maxPos = pos;
+    if (neg > maxNeg) maxNeg = neg;
+  });
+  const maxVal = Math.max(maxPos, maxNeg, 0.01);
+
+  // Y axis: 0 line in middle proportionally, or at bottom if all positive
+  const zeroY = maxNeg > 0
+    ? PAD_TOP + chartH * (maxPos / (maxPos + maxNeg))
+    : PAD_TOP + chartH;
+  const pxPerDollarUp   = maxPos > 0 ? (zeroY - PAD_TOP) / maxPos : 1;
+  const pxPerDollarDown = maxNeg > 0 ? (PAD_TOP + chartH - zeroY) / maxNeg : 1;
+
+  const barGap = Math.max(1, Math.floor(chartW / days.length * 0.15));
+  const barW   = Math.max(2, (chartW - barGap * days.length) / days.length);
+  const colors = ['#00d4ff', '#ff6b35', '#b388ff'];
+
+  // Draw zero line
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD_LEFT, zeroY);
+  ctx.lineTo(W - PAD_RIGHT, zeroY);
+  ctx.stroke();
+
+  // Draw Y axis labels
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  if (maxPos > 0) ctx.fillText('+$' + maxPos.toFixed(0), PAD_LEFT - 4, PAD_TOP + 8);
+  if (maxNeg > 0) ctx.fillText('-$' + maxNeg.toFixed(0), PAD_LEFT - 4, PAD_TOP + chartH);
+  ctx.fillText('$0', PAD_LEFT - 4, zeroY + 3);
+
+  // Draw bars
+  days.forEach((d, i) => {
+    const x = PAD_LEFT + i * (barW + barGap) + barGap / 2;
+
+    // Stack positive values upward from zero line
+    let posY = zeroY;
+    ['inner', 'mid', 'outer'].forEach((k, ki) => {
+      const v = d[k] || 0;
+      if (v > 0) {
+        const h = v * pxPerDollarUp;
+        ctx.fillStyle = colors[ki];
+        ctx.fillRect(x, posY - h, barW, h);
+        posY -= h;
+      }
+    });
+
+    // Stack negative values downward from zero line
+    let negY = zeroY;
+    ['inner', 'mid', 'outer'].forEach((k, ki) => {
+      const v = d[k] || 0;
+      if (v < 0) {
+        const h = Math.abs(v) * pxPerDollarDown;
+        ctx.fillStyle = colors[ki];
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(x, negY, barW, h);
+        ctx.globalAlpha = 1.0;
+        negY += h;
+      }
+    });
+
+    // Date label (show every few bars to avoid overlap)
+    const labelEvery = Math.max(1, Math.ceil(days.length / 10));
+    if (i % labelEvery === 0 || i === days.length - 1) {
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.font = '8px monospace';
+      ctx.textAlign = 'center';
+      const lbl = d.date.slice(5); // MM-DD
+      ctx.fillText(lbl, x + barW / 2, H - 4);
+    }
+  });
 }
 
 function setSummaryRange(btn, days) {

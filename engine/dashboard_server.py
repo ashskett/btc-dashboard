@@ -853,6 +853,107 @@ def bot_fills():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/bots/daily-profit")
+def bot_daily_profit():
+    """
+    Calculate daily realized grid-bot profit from fills using FIFO matching.
+
+    For each bot, BUY fills build a position queue. When a SELL fill arrives,
+    it's matched against the oldest BUY — realized profit = (sell_price - buy_price) × qty.
+    Fees (0.20% per side = 0.40% round-trip) are deducted. Profit is attributed
+    to the SELL fill's date.
+
+    Returns: { "days": [ {"date": "2026-03-24", "inner": 12.50, "mid": 8.20, "outer": 3.10, "total": 23.80} ] }
+    """
+    FEE_PER_SIDE = 0.002  # 0.20% maker/taker on Coinbase
+    BOT_NAMES = ["inner", "mid", "outer"]
+
+    try:
+        fills = _load_persisted_fills()
+        if not fills:
+            # Try fetching fresh fills via the /bots/fills logic
+            ids = [b.strip() for b in os.getenv("GRID_BOT_IDS", "").split(",") if b.strip()]
+            for i, bid in enumerate(ids[:3]):
+                r = signed_request("GET", f"/ver1/grid_bots/{bid}/market_orders", params={"limit": 200})
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                orders = data.get("balancing_orders") or [] if isinstance(data, dict) else []
+                for item in orders:
+                    if item.get("status_string") != "Filled":
+                        continue
+                    price = float(item.get("average_price") or item.get("rate") or 0)
+                    if not price:
+                        continue
+                    fills.append({
+                        "order_id": item.get("order_id"),
+                        "bot_id": bid,
+                        "bot_index": i,
+                        "time": item.get("created_at"),
+                        "price": price,
+                        "side": (item.get("order_type") or "").upper(),
+                        "qty": float(item.get("quantity") or 0),
+                    })
+
+        # Sort fills chronologically
+        fills.sort(key=lambda x: x.get("time") or "")
+
+        # FIFO matching per bot
+        # daily_profit[bot_index][date_str] = realized_profit
+        from collections import defaultdict, deque
+        buy_queues = {0: deque(), 1: deque(), 2: deque()}
+        daily_profit = {0: defaultdict(float), 1: defaultdict(float), 2: defaultdict(float)}
+
+        for f in fills:
+            bi = f.get("bot_index")
+            if bi is None or bi > 2:
+                continue
+            side = f.get("side", "")
+            price = f.get("price", 0)
+            qty = f.get("qty", 0)
+            ts = f.get("time", "")
+            if not price or not qty or not ts:
+                continue
+
+            # Extract date (YYYY-MM-DD) from ISO timestamp
+            date_str = ts[:10]
+
+            if "BUY" in side:
+                buy_queues[bi].append({"price": price, "qty": qty})
+            elif "SELL" in side:
+                # Match against oldest BUYs (FIFO)
+                remaining_sell = qty
+                while remaining_sell > 1e-10 and buy_queues[bi]:
+                    oldest = buy_queues[bi][0]
+                    match_qty = min(remaining_sell, oldest["qty"])
+                    gross = (price - oldest["price"]) * match_qty
+                    fees = (oldest["price"] * match_qty * FEE_PER_SIDE) + (price * match_qty * FEE_PER_SIDE)
+                    daily_profit[bi][date_str] += gross - fees
+                    oldest["qty"] -= match_qty
+                    remaining_sell -= match_qty
+                    if oldest["qty"] < 1e-10:
+                        buy_queues[bi].popleft()
+
+        # Build response: sorted list of days with per-bot profit
+        all_dates = sorted(set(
+            d for bp in daily_profit.values() for d in bp.keys()
+        ))
+        days = []
+        for d in all_dates:
+            row = {"date": d}
+            total = 0
+            for i, name in enumerate(BOT_NAMES):
+                v = round(daily_profit[i].get(d, 0), 2)
+                row[name] = v
+                total += v
+            row["total"] = round(total, 2)
+            days.append(row)
+
+        return jsonify({"days": days})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Inventory mode override ───────────────────────────────
 @app.route("/inventory/mode", methods=["POST"])
 def set_inventory_mode():
