@@ -324,31 +324,41 @@ def redeploy_all_bots(bot_ids, tiers):
     available capital to whichever bot starts first.
     """
     # Fetch total portfolio value for budget calculation
+    # Three attempts in priority order to avoid the death spiral where
+    # low deployed qty → low estimated portfolio → low budget → even lower qty.
     budgets = load_tier_budgets()
     portfolio_usd = 0.0
+
+    # Attempt 1: cached portfolio snapshot (fastest, usually fresh)
     try:
         from inventory import portfolio_snapshot
         snap = portfolio_snapshot()
         if snap:
             portfolio_usd = snap.get("portfolio_usd", 0)
+            if portfolio_usd > 0:
+                print(f"  Portfolio (cached): ${portfolio_usd:,.0f}")
     except Exception as e:
-        print(f"  Warning: could not get portfolio snapshot for budgets: {e}")
+        print(f"  Warning: portfolio snapshot failed: {e}")
 
+    # Attempt 2: live fetch from 3Commas account balance
     if portfolio_usd <= 0:
-        # Fallback: sum up what's deployed across all bots
         try:
-            total = 0
-            for bid in bot_ids[:3]:
-                b = get_bot(bid)
-                qty = float(b.get("quantity_per_grid") or 0)
-                lvl = int(b.get("grids_quantity") or 1)
-                up  = float(b.get("upper_price") or 0)
-                lo  = float(b.get("lower_price") or 0)
-                total += qty * lvl * ((up + lo) / 2)
-            portfolio_usd = total * 1.5  # rough estimate (deployed ≈ 65% of total)
-        except Exception:
-            portfolio_usd = 80000  # last-resort fallback
-        print(f"  Using estimated portfolio: ${portfolio_usd:,.0f}")
+            from inventory import calculate_inventory, _calculate_inventory_live
+            result = _calculate_inventory_live()
+            if result and len(result) >= 5:
+                btc_qty, usdc_qty, btc_price = result[2], result[3], result[4]
+                portfolio_usd = btc_qty * btc_price + usdc_qty
+                print(f"  Portfolio (live fetch): ${portfolio_usd:,.0f} "
+                      f"({btc_qty:.4f} BTC + ${usdc_qty:,.0f} USDC)")
+        except Exception as e:
+            print(f"  Warning: live portfolio fetch failed: {e}")
+
+    # Attempt 3: last-resort fallback — use a sane minimum, NEVER estimate from
+    # deployed qty (that creates a death spiral where low qty → low estimate → lower qty)
+    if portfolio_usd <= 0:
+        portfolio_usd = 60000  # conservative floor — better than under-deploying
+        print(f"  WARNING: Using fallback portfolio ${portfolio_usd:,.0f} "
+              f"(could not fetch real value)")
 
     print(f"  Portfolio: ${portfolio_usd:,.0f}")
     for b in budgets:
