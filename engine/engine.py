@@ -967,10 +967,25 @@ def run():
             (state.tiers[0]["grid_high"] - state.tiers[0]["grid_low"]) / 2
             if state.tiers else 0)
         _inner_ref_dbg = getattr(state, 'deploy_inner_center', None) or state.center
-        print(f"  Drift check: deploy_gw=${_drift_gw:,.0f}  inner_gw=${_inner_dgw:,.0f}"
+
+        # Session-aware drift multipliers — tighter in ASIA (recentre aggressively),
+        # wider in US (ride bigger moves). Weekend variants use same values.
+        _SESSION_DRIFT = {
+            "ASIA":     (0.65, 0.75),
+            "WKD_ASIA": (0.65, 0.75),
+            "EUROPE":   (0.75, 0.85),
+            "WKD_EU":   (0.75, 0.85),
+            "US":       (0.90, 0.95),
+            "WKD_US":   (0.90, 0.95),
+        }
+        _drift_full_mult, _drift_inner_mult = _SESSION_DRIFT.get(
+            state.session, (0.75, 0.85))  # EUROPE as default fallback
+
+        print(f"  Drift check [{state.session}]: deploy_gw=${_drift_gw:,.0f}  inner_gw=${_inner_dgw:,.0f}"
               f"  inner_ref=${_inner_ref_dbg:,.0f}  dist=${abs(state.price - _inner_ref_dbg):,.0f}"
-              f"  mid_threshold=${_drift_gw * 0.85:,.0f}  inner_threshold=${_inner_dgw * 0.90:,.0f}")
-        if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0) and \
+              f"  mid_threshold=${_drift_gw * _drift_full_mult:,.0f} ({_drift_full_mult:.0%})"
+              f"  inner_threshold=${_inner_dgw * _drift_inner_mult:,.0f} ({_drift_inner_mult:.0%})")
+        if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0, threshold_mult=_drift_full_mult) and \
                 not _drift_momentum_hot(df, state.gap_ratio):
             state.drift_triggered = True
             print("Grid drift detected")
@@ -1014,9 +1029,9 @@ def run():
         _inner_deploy_gw = state.deploy_inner_gw
         if not _inner_deploy_gw and state.tiers:
             _inner_deploy_gw = _inner_tier_gw(state.tiers)
-        _full_drift_threshold = _drift_gw * 0.85
+        _full_drift_threshold = _drift_gw * _drift_full_mult
         if _inner_deploy_gw and len(GRID_BOTS) >= 1 and state.tiers:
-            _inner_drift_threshold = _inner_deploy_gw * 0.90
+            _inner_drift_threshold = _inner_deploy_gw * _drift_inner_mult
             # Use inner's own deployed centre if it diverged from mid centre
             # (happens after inner-only recentre). Falls back to mid centre.
             _inner_ref = getattr(state, 'deploy_inner_center', None) or state.center
@@ -1025,7 +1040,7 @@ def run():
             # a full redeploy is imminent and will handle all 3 bots together.
             _near_full_drift = _inner_dist > _full_drift_threshold * 0.80
             if _inner_dist > _inner_drift_threshold and not _near_full_drift:
-                print(f"  Inner drift: dist=${_inner_dist:,.0f} > 90% of inner_gw "
+                print(f"  Inner drift: dist=${_inner_dist:,.0f} > {_drift_inner_mult:.0%} of inner_gw "
                       f"${_inner_deploy_gw:,.0f} (threshold=${_inner_drift_threshold:,.0f})"
                       f" — recentring narrow bot only")
                 inner_tier = state.tiers[0]

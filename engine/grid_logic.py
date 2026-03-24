@@ -209,16 +209,16 @@ def update_grid_center(price, grid_width=None, inner_grid_width=None,
         json.dump(state, f)
 
 
-def drift_detected(price, center, grid_width, tilt=0):
+def drift_detected(price, center, grid_width, tilt=0, threshold_mult=0.85):
     """
     Check if price has drifted beyond the threshold from the tilt-adjusted
     grid center.
 
-    Threshold is 85% of grid_width (the mid-tier half-range locked at deploy
-    time). Using 85% instead of the old 75% gives the bots more room to
-    oscillate and complete grid cycles before recentring.
+    threshold_mult is session-aware: tighter in ASIA (0.65) for aggressive
+    recentring, wider in US (0.90) to ride bigger moves. Default 0.85
+    (EUROPE baseline) preserves old behaviour when not specified.
     """
     adjusted_center = center + tilt
     drift = abs(price - adjusted_center)
-    threshold = grid_width * 0.85
+    threshold = grid_width * threshold_mult
     return drift > threshold
