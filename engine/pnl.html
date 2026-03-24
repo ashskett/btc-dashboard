@@ -237,6 +237,29 @@
   <div class="chart-wrap" id="dailyPnlChart" style="height:250px;"></div>
 </div>
 
+<!-- DAILY GRID PROFIT (stacked bar by bot) -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">Daily Grid Profit (by Bot)</span>
+    <div class="tf-pills" id="dpTfPills">
+      <button class="tf-pill" data-dp="7">7D</button>
+      <button class="tf-pill" data-dp="14">14D</button>
+      <button class="tf-pill active" data-dp="30">30D</button>
+      <button class="tf-pill" data-dp="0">ALL</button>
+    </div>
+  </div>
+  <div style="position:relative;height:280px;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:#080c10;">
+    <canvas id="dpCanvas" style="width:100%;height:100%;"></canvas>
+  </div>
+  <div style="display:flex;gap:18px;padding:10px 0 0;font-size:11px;align-items:center;">
+    <span><span style="color:#00d4ff;">■</span> Inner: <span id="dpInner">--</span></span>
+    <span><span style="color:#ff6b35;">■</span> Mid: <span id="dpMid">--</span></span>
+    <span><span style="color:#b388ff;">■</span> Outer: <span id="dpOuter">--</span></span>
+    <span style="margin-left:auto;font-weight:700;">Total: <span id="dpTotal">--</span></span>
+    <span style="color:var(--muted);font-size:9px;">avg <span id="dpAvg">--</span>/day</span>
+  </div>
+</div>
+
 <!-- DAILY BREAKDOWN -->
 <div class="breakdown">
   <div class="chart-header">
@@ -295,6 +318,7 @@ function initCharts() {
     rightPriceScale: { borderColor: '#1c2433' },
     timeScale: { borderColor: '#1c2433', timeVisible: true, secondsVisible: false },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    handleScale: { mouseWheel: false },
   };
 
   // Portfolio Value — use line series (area compresses tiny moves to invisible)
@@ -580,10 +604,163 @@ document.querySelectorAll('#pfTfPills .tf-pill').forEach(btn => {
   });
 });
 
+// ── Daily Grid Profit (stacked bar chart) ──
+let _dpData = null;
+let _dpDays = 30;
+
+document.querySelectorAll('#dpTfPills .tf-pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#dpTfPills .tf-pill').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _dpDays = parseInt(btn.dataset.dp);
+    if (_dpData) renderGridProfit(_dpData);
+  });
+});
+
+async function loadGridProfit() {
+  try {
+    const r = await fetch('/bots/daily-profit');
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.error) return;
+    _dpData = data.days || [];
+    renderGridProfit(_dpData);
+  } catch (e) {
+    console.error('loadGridProfit error:', e);
+  }
+}
+
+function renderGridProfit(allDays) {
+  const canvas = document.getElementById('dpCanvas');
+  if (!canvas) return;
+
+  // Filter by range
+  let days = allDays;
+  if (_dpDays > 0) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - _dpDays);
+    const cutStr = cutoff.toISOString().slice(0, 10);
+    days = allDays.filter(d => d.date >= cutStr);
+  }
+
+  // Totals
+  let innerT = 0, midT = 0, outerT = 0;
+  days.forEach(d => { innerT += d.inner || 0; midT += d.mid || 0; outerT += d.outer || 0; });
+  const grandT = innerT + midT + outerT;
+  const fmtU = v => (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
+  const clr = v => v >= 0 ? 'var(--green)' : 'var(--red)';
+  document.getElementById('dpInner').innerHTML = `<span style="color:${clr(innerT)}">${fmtU(innerT)}</span>`;
+  document.getElementById('dpMid').innerHTML   = `<span style="color:${clr(midT)}">${fmtU(midT)}</span>`;
+  document.getElementById('dpOuter').innerHTML = `<span style="color:${clr(outerT)}">${fmtU(outerT)}</span>`;
+  document.getElementById('dpTotal').innerHTML = `<span style="color:${clr(grandT)}">${fmtU(grandT)}</span>`;
+  document.getElementById('dpAvg').innerHTML   = days.length
+    ? `<span style="color:${clr(grandT/days.length)}">${fmtU(grandT / days.length)}</span>`
+    : '--';
+
+  if (!days.length) return;
+
+  // Canvas setup
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width  = rect.width  * dpr;
+  canvas.height = rect.height * dpr;
+  canvas.style.width  = rect.width  + 'px';
+  canvas.style.height = rect.height + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const PAD_L = 50, PAD_R = 12, PAD_T = 14, PAD_B = 32;
+  const cW = W - PAD_L - PAD_R;
+  const cH = H - PAD_T - PAD_B;
+
+  // Max stacked positive value for Y scale
+  let maxPos = 0;
+  days.forEach(d => {
+    let pos = 0;
+    ['inner', 'mid', 'outer'].forEach(k => { if ((d[k] || 0) > 0) pos += d[k]; });
+    if (pos > maxPos) maxPos = pos;
+  });
+  if (maxPos < 1) maxPos = 1;
+
+  const pxPerDollar = cH / (maxPos * 1.15);  // 15% headroom
+
+  const barGap = Math.max(1, Math.floor(cW / days.length * 0.15));
+  const barW   = Math.max(3, (cW - barGap * days.length) / days.length);
+  const colors = ['#00d4ff', '#ff6b35', '#b388ff'];
+
+  // Zero line
+  const zeroY = PAD_T + cH;
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD_L, zeroY);
+  ctx.lineTo(W - PAD_R, zeroY);
+  ctx.stroke();
+
+  // Y axis gridlines
+  const ySteps = 4;
+  const yStep = maxPos * 1.15 / ySteps;
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  for (let i = 1; i <= ySteps; i++) {
+    const val = yStep * i;
+    const y = zeroY - val * pxPerDollar;
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.beginPath();
+    ctx.moveTo(PAD_L, y);
+    ctx.lineTo(W - PAD_R, y);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillText('$' + Math.round(val), PAD_L - 6, y + 3);
+  }
+
+  // Bars
+  days.forEach((d, i) => {
+    const x = PAD_L + i * (barW + barGap) + barGap / 2;
+    let y = zeroY;
+
+    ['inner', 'mid', 'outer'].forEach((k, ki) => {
+      const v = d[k] || 0;
+      if (v > 0) {
+        const h = v * pxPerDollar;
+        ctx.fillStyle = colors[ki];
+        ctx.fillRect(x, y - h, barW, h);
+        y -= h;
+      }
+    });
+
+    // Date labels
+    const labelEvery = Math.max(1, Math.ceil(days.length / 12));
+    if (i % labelEvery === 0 || i === days.length - 1) {
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(d.date.slice(5), x + barW / 2, H - 8);
+    }
+  });
+
+  // Hover tooltip
+  canvas.onmousemove = function(e) {
+    const r = canvas.getBoundingClientRect();
+    const mx = e.clientX - r.left;
+    const idx = Math.floor((mx - PAD_L) / (barW + barGap));
+    if (idx >= 0 && idx < days.length) {
+      const d = days[idx];
+      canvas.title = `${d.date}\nInner: $${(d.inner||0).toFixed(2)}\nMid: $${(d.mid||0).toFixed(2)}\nOuter: $${(d.outer||0).toFixed(2)}\nTotal: $${d.total.toFixed(2)}`;
+    } else {
+      canvas.title = '';
+    }
+  };
+}
+
 // ── Init ──
 initCharts();
 loadData();
+loadGridProfit();
 setInterval(loadData, 60000);
+setInterval(loadGridProfit, 300000);  // refresh every 5 min
 </script>
 </body>
 </html>
