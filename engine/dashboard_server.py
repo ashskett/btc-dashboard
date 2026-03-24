@@ -1463,6 +1463,35 @@ def breakout_clear():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+@app.route("/flash-move/clear", methods=["POST"])
+def flash_move_clear():
+    """Clear flash move state — resume normal operation."""
+    state_file = os.path.join(os.path.dirname(__file__), "flash_move_state.json")
+    try:
+        import json as _json
+        _json.dump(
+            {"last_price": None, "active": None, "fire_price": None,
+             "fired_at": None, "cooldown_remaining": 0, "magnitude": 0},
+            open(state_file, "w")
+        )
+        return jsonify({"ok": True, "msg": "Flash move state cleared"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/flash-move/state", methods=["GET"])
+def flash_move_state():
+    """Return current flash move state."""
+    state_file = os.path.join(os.path.dirname(__file__), "flash_move_state.json")
+    try:
+        import json as _json
+        if os.path.exists(state_file):
+            return jsonify(_json.load(open(state_file)))
+        return jsonify({"active": None, "cooldown_remaining": 0})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/breakout/inject", methods=["POST"])
 def breakout_inject():
     """Inject a simulated breakout state for testing.

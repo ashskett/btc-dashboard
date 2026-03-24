@@ -31,6 +31,7 @@ from indicators import add_indicators
 from regime import detect_regime, trend_strength, compression_exit_fast
 from threecommas import stop_bot, start_bot, redeploy_all_bots
 from price_targets import check_targets, update_target
+from flash_move import detect_flash_move, get_flash_move_state
 from threecommas_dca import (
     create_dca_bot,
     enable_dca_bot,
@@ -309,6 +310,7 @@ def run():
     _trendline_active = False
     _flood_status = None    # fill-flood guard result; needed in finally block
     _flood_val    = None
+    _flash_state  = {}      # flash move state; needed in finally block
 
     try:
         # ===============================
@@ -500,6 +502,42 @@ def run():
             for i, bot in enumerate(GRID_BOTS[:3]):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
                 _act(bot, False, f"{tier_name} (fill-flood cooldown)")
+            return
+
+        # ===============================
+        # FLASH MOVE DETECTION
+        # ===============================
+        # Catches abnormally fast price moves (macro events, Trump posts, etc.)
+        # that would destroy grid bots by filling through the entire range in
+        # one direction. Runs before breakout detection — a flash move is more
+        # urgent and overrides everything.
+        try:
+            _df_5m_flash = get_btc_data_short(timeframe='5m', limit=10)
+        except Exception as _e:
+            print(f"Warning: 5m data fetch for flash move failed: {_e}")
+            _df_5m_flash = None
+
+        _flash = detect_flash_move(state.price, state.atr, _df_5m_flash)
+        _flash_state = get_flash_move_state()
+
+        if _flash["status"] == "new":
+            print(f"⚡ FLASH MOVE {_flash['direction']} — ${_flash['magnitude']:,.0f} move detected")
+            print(f"  Stopping ALL bots — cooldown {_flash['cooldown_remaining']} cycles "
+                  f"(~{_flash['cooldown_remaining'] * 5} min)")
+            for i, bot in enumerate(GRID_BOTS[:3]):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, False, f"{tier_name} (FLASH MOVE {_flash['direction']})")
+            # Don't return — fall through to finally block for logging
+            # but skip all normal logic
+            return
+
+        if _flash["status"] == "active":
+            remaining = _flash["cooldown_remaining"]
+            print(f"FLASH MOVE COOLDOWN — {_flash['direction']} move, "
+                  f"{remaining} cycle(s) remaining (~{remaining * 5} min)")
+            for i, bot in enumerate(GRID_BOTS[:3]):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, False, f"{tier_name} (flash move cooldown)")
             return
 
         # ===============================
@@ -1160,6 +1198,11 @@ def run():
                 "breakout_fire_price":    _bo_state.get("fire_price"),
                 "breakout_cycles_active": _bo_state.get("cycles_active", 0),
                 "proximity_alert":     _prox,
+                # Flash move state
+                "flash_move_active":    _flash_state.get("active") if _flash_state else None,
+                "flash_move_direction": _flash_state.get("active") if _flash_state else None,
+                "flash_move_magnitude": _flash_state.get("magnitude") if _flash_state else None,
+                "flash_move_cooldown":  _flash_state.get("cooldown_remaining", 0) if _flash_state else 0,
                 # Price target state
                 "price_target_active":  bool(_pt_state),
                 "price_target_label":   _pt_state.get("label")   if _pt_state else None,

@@ -468,6 +468,11 @@
   <button class="bo-clear" onclick="clearBreakout()">Clear ✕</button>
 </div>
 
+<div id="flashAlert" style="position:fixed;top:102px;left:0;right:300px;z-index:58;">
+  <span id="flashAlertMsg"></span>
+  <button class="bo-clear" onclick="clearFlashMove()">Clear ✕</button>
+</div>
+
 <main>
   <!-- Canvas overlay — sits on top of LightweightCharts canvas -->
   <canvas id="tlCanvas" style="position:absolute;top:0;left:0;pointer-events:none;z-index:10;"></canvas>
@@ -1568,6 +1573,29 @@ async function pollStatus(){
       boRow.style.display = 'none';
     }
 
+    // Flash move alert banner
+    const flashAlert = document.getElementById('flashAlert');
+    if(d.flash_move_active){
+      const fDir  = d.flash_move_direction;
+      const fMag  = d.flash_move_magnitude || 0;
+      const fCool = d.flash_move_cooldown || 0;
+      const isDown = fDir === 'DOWN';
+      flashAlert.style.background  = isDown ? 'rgba(255,61,90,.25)' : 'rgba(0,230,118,.20)';
+      flashAlert.style.borderColor = isDown ? 'var(--red)' : 'var(--green)';
+      flashAlert.style.border      = `1px solid ${isDown ? 'var(--red)' : 'var(--green)'}`;
+      flashAlert.style.color       = isDown ? 'var(--red)' : 'var(--green)';
+      flashAlert.style.padding     = '8px 16px';
+      flashAlert.style.fontFamily  = "'Space Mono',monospace";
+      flashAlert.style.fontSize    = '11px';
+      flashAlert.style.display     = 'flex';
+      flashAlert.style.alignItems  = 'center';
+      flashAlert.style.justifyContent = 'space-between';
+      document.getElementById('flashAlertMsg').textContent =
+        `⚡ FLASH MOVE ${fDir} — $${Math.round(fMag).toLocaleString()} in ~5min | ALL BOTS HALTED | cooldown: ${fCool} cycle(s)`;
+    } else {
+      flashAlert.style.display = 'none';
+    }
+
     redrawLines();
 
     // Refresh target lines + sidebar if engine reports a target just fired/cleared
@@ -2009,6 +2037,15 @@ async function saveBandSettings(){
 async function clearBreakout(){
   try{
     const r = await fetch(`${API}/breakout/clear`, {method:'POST'});
+    const d = await r.json();
+    toast(d.msg, d.ok ? 'ok' : 'err');
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+// ── FLASH MOVE CLEAR ────────────────────────────────────
+async function clearFlashMove(){
+  try{
+    const r = await fetch(`${API}/flash-move/clear`, {method:'POST'});
     const d = await r.json();
     toast(d.msg, d.ok ? 'ok' : 'err');
   } catch(e){ toast(`Error: ${e.message}`,'err'); }
