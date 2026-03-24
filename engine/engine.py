@@ -1034,8 +1034,8 @@ def run():
         # Session-aware drift multipliers — tighter in ASIA (recentre aggressively),
         # wider in US (ride bigger moves). Weekend variants use same values.
         _SESSION_DRIFT = {
-            "ASIA":     (0.65, 0.75),
-            "WKD_ASIA": (0.65, 0.75),
+            "ASIA":     (0.70, 0.80),
+            "WKD_ASIA": (0.70, 0.80),
             "EUROPE":   (0.75, 0.85),
             "WKD_EU":   (0.75, 0.85),
             "US":       (0.90, 0.95),
