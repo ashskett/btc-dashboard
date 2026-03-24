@@ -236,29 +236,47 @@ def set_bot_capital(bot_id: str, total_usd: float) -> dict:
     }
 
 
-def execute_smart_trade(target: dict, current_price: float, btc_ratio: float) -> dict:
+def execute_smart_trade(target: dict, current_price: float, btc_ratio: float,
+                        sell_pct_override: float = None, note_suffix: str = "") -> dict:
     """
     Open a 3Commas SmartTrade (spot SELL) on support failure confirmation.
 
     Sells smart_trade_sell_pct% of current BTC holdings at market.
-    Sets TP smart_trade_tp_pct% below entry (limit buyback).
+    Supports multi-step TP levels (smart_trade_tp_steps) or single TP fallback.
     Sets SL smart_trade_sl_pct% above entry (if support recovers, exit).
+
+    sell_pct_override: for dual entry, pass the reduced sell % (e.g. 7.5 for scout of 25%)
+    note_suffix: e.g. " (Scout)" or " (Retest)" for dual entry labelling
 
     Returns the SmartTrade API response dict.
     """
     account_id  = int(os.getenv("THREECOMMAS_ACCOUNT_ID", 0))
-    sell_pct    = float(target.get("smart_trade_sell_pct", 25.0)) / 100.0
-    tp_pct      = float(target.get("smart_trade_tp_pct",  3.0))
+    sell_pct    = (sell_pct_override if sell_pct_override is not None
+                   else float(target.get("smart_trade_sell_pct", 25.0))) / 100.0
     sl_pct      = float(target.get("smart_trade_sl_pct",  1.5))
+    sl_price    = round(current_price * (1 + sl_pct / 100.0), 2)
 
-    # Estimate sell quantity from BTC ratio and account size.
-    # btc_ratio is 0-1 fraction; we use it to get approximate BTC qty.
-    # SmartTrade will reject if insufficient funds — that's fine, it surfaces clearly.
-    # Use a reasonable estimate: if btc_ratio=0.65 and we want 25%, that's 0.65*0.25 fraction of portfolio.
-    # We don't know exact BTC qty here, so let the SmartTrade use a % of available instead.
-    # 3Commas SmartTrade supports "percent" unit type.
-    tp_price = round(current_price * (1 - tp_pct / 100.0), 2)
-    sl_price = round(current_price * (1 + sl_pct / 100.0), 2)
+    # Build TP steps — multi-step if configured, else single legacy TP
+    tp_steps_cfg = target.get("smart_trade_tp_steps") or []
+    if tp_steps_cfg:
+        tp_steps = []
+        for step in tp_steps_cfg:
+            step_price = round(current_price * (1 - float(step["profit_pct"]) / 100.0), 2)
+            tp_steps.append({
+                "order_type": "limit",
+                "price":      {"value": str(step_price), "type": "last"},
+                "volume":     float(step["close_pct"]),
+            })
+        tp_desc = " / ".join(f"{s['profit_pct']}%@{s['close_pct']}%" for s in tp_steps_cfg)
+    else:
+        tp_pct   = float(target.get("smart_trade_tp_pct", 3.0))
+        tp_price = round(current_price * (1 - tp_pct / 100.0), 2)
+        tp_steps = [{
+            "order_type": "limit",
+            "price":      {"value": str(tp_price), "type": "last"},
+            "volume":     100,
+        }]
+        tp_desc = f"{tp_pct:.1f}% below"
 
     body = {
         "account_id": account_id,
@@ -272,11 +290,7 @@ def execute_smart_trade(target: dict, current_price: float, btc_ratio: float) ->
         },
         "take_profit": {
             "enabled": True,
-            "steps": [{
-                "order_type": "limit",
-                "price":      {"value": str(tp_price), "type": "last"},
-                "volume":     100,
-            }],
+            "steps":   tp_steps,
         },
         "stop_loss": {
             "enabled":    True,
@@ -284,11 +298,11 @@ def execute_smart_trade(target: dict, current_price: float, btc_ratio: float) ->
             "price":      {"value": str(sl_price), "type": "last"},
             "conditional": {"price": {"type": "last"}},
         },
-        "note": f"Support failure: {target.get('label', '')} @ ${current_price:,.0f}",
+        "note": f"Support failure: {target.get('label', '')}{note_suffix} @ ${current_price:,.0f}",
     }
 
-    print(f"  SmartTrade SELL: {sell_pct*100:.0f}% BTC | "
-          f"entry ~${current_price:,.0f} | TP ${tp_price:,.0f} ({tp_pct:.1f}% down) | "
+    print(f"  SmartTrade SELL{note_suffix}: {sell_pct*100:.1f}% BTC | "
+          f"entry ~${current_price:,.0f} | TP [{tp_desc}] | "
           f"SL ${sl_price:,.0f} ({sl_pct:.1f}% up)")
 
     r = _signed_request("POST", "/v2/smart_trades", body=body)

@@ -886,34 +886,97 @@ def run():
                 # (skip if we just timed out — target is already cleared)
                 _st_mode    = _pt_state.get("detection_mode") == "support_failure"
                 _st_enabled = _pt_state.get("smart_trade_enabled", False)
+                _st_dual    = _pt_state.get("smart_trade_dual_entry", False)
                 _st_id      = _pt_state.get("smart_trade_id")
+                _st_scout_id  = _pt_state.get("smart_trade_scout_id")
+                _st_retest_id = _pt_state.get("smart_trade_retest_id")
                 _fired_at   = _pt_state.get("fired_at") or 0
                 _hold_secs  = max(0, 360 - (time.time() - _fired_at))  # 6-min sweep guard
 
-                if _st_mode and _st_enabled and not _st_id and not _pt_state.get("_timed_out"):
-                    if _hold_secs > 0:
-                        print(f"  SmartTrade launch held — sweep guard ({_hold_secs:.0f}s remaining)")
-                    elif DRY_RUN:
-                        sell_pct = float(_pt_state.get("smart_trade_sell_pct", 25))
-                        tp_pct   = float(_pt_state.get("smart_trade_tp_pct", 3.0))
-                        sl_pct   = float(_pt_state.get("smart_trade_sl_pct", 1.5))
-                        print(f"  [SIM] Would open SmartTrade SELL: "
-                              f"{sell_pct:.0f}% BTC  TP={tp_pct:.1f}% below  SL={sl_pct:.1f}% above")
-                    elif _can_act():
-                        _record_action()
-                        try:
-                            from threecommas import execute_smart_trade as _exec_st
-                            st_result = _exec_st(_pt_state, state.price, state.btc_ratio)
-                            st_id = str(st_result.get("id", ""))
-                            if st_id:
-                                update_target(_pt_state["id"], {"smart_trade_id": st_id})
-                                print(f"  SmartTrade launched: id={st_id}")
+                if _st_mode and _st_enabled and not _pt_state.get("_timed_out"):
+                    from threecommas import execute_smart_trade as _exec_st
+                    _total_sell = float(_pt_state.get("smart_trade_sell_pct", 25))
+
+                    if _st_dual:
+                        # ── Dual entry: Scout + Retest ──
+                        _scout_frac = float(_pt_state.get("smart_trade_scout_pct", 30)) / 100.0
+                        _scout_sell = _total_sell * _scout_frac
+                        _retest_sell = _total_sell * (1 - _scout_frac)
+                        _retest_tol = float(_pt_state.get("smart_trade_retest_tolerance_pct", 0.5))
+
+                        # Scout: launch immediately after sweep guard
+                        if not _st_scout_id:
+                            if _hold_secs > 0:
+                                print(f"  SmartTrade Scout held — sweep guard ({_hold_secs:.0f}s remaining)")
+                            elif DRY_RUN:
+                                print(f"  [SIM] Would open SmartTrade Scout SELL: "
+                                      f"{_scout_sell:.1f}% BTC")
+                            elif _can_act():
+                                _record_action()
+                                try:
+                                    st_result = _exec_st(_pt_state, state.price, state.btc_ratio,
+                                                         sell_pct_override=_scout_sell, note_suffix=" (Scout)")
+                                    st_id = str(st_result.get("id", ""))
+                                    if st_id:
+                                        update_target(_pt_state["id"], {"smart_trade_scout_id": st_id})
+                                        print(f"  SmartTrade Scout launched: id={st_id} ({_scout_sell:.1f}% BTC)")
+                                    else:
+                                        print(f"  Warning: SmartTrade Scout response had no id: {st_result}")
+                                except Exception as _st_err:
+                                    print(f"  Warning: SmartTrade Scout launch failed: {_st_err}")
                             else:
-                                print(f"  Warning: SmartTrade response had no id: {st_result}")
-                        except Exception as _st_err:
-                            print(f"  Warning: SmartTrade launch failed: {_st_err}")
+                                print(f"  Rate limit reached — SmartTrade Scout deferred")
+
+                        # Retest: launch when price pulls back to within X% of trigger
+                        if not _st_retest_id and _st_scout_id:
+                            _trigger_price = float(_pt_state.get("trigger_price", 0))
+                            _retest_zone = _trigger_price * (1 - _retest_tol / 100.0)
+                            if state.price >= _retest_zone:
+                                print(f"  SmartTrade Retest triggered — price ${state.price:,.0f} "
+                                      f"within {_retest_tol}% of trigger ${_trigger_price:,.0f}")
+                                if DRY_RUN:
+                                    print(f"  [SIM] Would open SmartTrade Retest SELL: "
+                                          f"{_retest_sell:.1f}% BTC")
+                                elif _can_act():
+                                    _record_action()
+                                    try:
+                                        st_result = _exec_st(_pt_state, state.price, state.btc_ratio,
+                                                             sell_pct_override=_retest_sell, note_suffix=" (Retest)")
+                                        st_id = str(st_result.get("id", ""))
+                                        if st_id:
+                                            update_target(_pt_state["id"], {"smart_trade_retest_id": st_id})
+                                            print(f"  SmartTrade Retest launched: id={st_id} ({_retest_sell:.1f}% BTC)")
+                                        else:
+                                            print(f"  Warning: SmartTrade Retest response had no id: {st_result}")
+                                    except Exception as _st_err:
+                                        print(f"  Warning: SmartTrade Retest launch failed: {_st_err}")
+                                else:
+                                    print(f"  Rate limit reached — SmartTrade Retest deferred")
+                            else:
+                                print(f"  SmartTrade Retest waiting — price ${state.price:,.0f} "
+                                      f"below retest zone ${_retest_zone:,.0f}")
+
                     else:
-                        print(f"  Rate limit reached — SmartTrade launch deferred to next cycle")
+                        # ── Single entry (original behaviour) ──
+                        if not _st_id:
+                            if _hold_secs > 0:
+                                print(f"  SmartTrade launch held — sweep guard ({_hold_secs:.0f}s remaining)")
+                            elif DRY_RUN:
+                                print(f"  [SIM] Would open SmartTrade SELL: {_total_sell:.0f}% BTC")
+                            elif _can_act():
+                                _record_action()
+                                try:
+                                    st_result = _exec_st(_pt_state, state.price, state.btc_ratio)
+                                    st_id = str(st_result.get("id", ""))
+                                    if st_id:
+                                        update_target(_pt_state["id"], {"smart_trade_id": st_id})
+                                        print(f"  SmartTrade launched: id={st_id}")
+                                    else:
+                                        print(f"  Warning: SmartTrade response had no id: {st_result}")
+                                except Exception as _st_err:
+                                    print(f"  Warning: SmartTrade launch failed: {_st_err}")
+                            else:
+                                print(f"  Rate limit reached — SmartTrade launch deferred")
 
             return   # skip fresh breakout detection AND drift while target is live
 

@@ -2347,8 +2347,33 @@ function renderTargetSidebar(){
 
     // SmartTrade detail
     let stDetail = '';
-    if(isSF && pt.smart_trade_enabled && !pt.smart_trade_id){
-      stDetail = `<div style="font-size:8px;color:var(--muted);margin-bottom:3px;">ST config: sell ${pt.smart_trade_sell_pct||25}% · TP ${pt.smart_trade_tp_pct||3}% · SL ${pt.smart_trade_sl_pct||1.5}%</div>`;
+    if(isSF && pt.smart_trade_enabled){
+      const stTpLevels = (pt.smart_trade_tp_steps||[]).map(s => `${s.profit_pct}%@${s.close_pct}%`).join(', ');
+      const stTpStr = stTpLevels || `${pt.smart_trade_tp_pct||3}% below`;
+      const stDualBadge = pt.smart_trade_dual_entry
+        ? `<span style="color:#00d4ff;font-size:8px;">DUAL (${pt.smart_trade_scout_pct||30}/${100-(pt.smart_trade_scout_pct||30)})</span>` : '';
+
+      let stBotLines = '';
+      if(pt.smart_trade_dual_entry){
+        const scId = pt.smart_trade_scout_id;
+        const rtId = pt.smart_trade_retest_id;
+        if(scId||rtId) stBotLines = `<div style="font-size:8px;color:var(--muted);margin-top:3px;">` +
+          (scId ? `Scout: <span style="color:#00d4ff;">${scId}</span>` : `Scout: <span style="opacity:.4;">pending</span>`) +
+          ` · ` +
+          (rtId ? `Retest: <span style="color:#ff6b35;">${rtId}</span>` : `Retest: <span style="opacity:.4;">pending</span>`) +
+          `</div>`;
+      } else if(pt.smart_trade_id){
+        stBotLines = `<div style="font-size:8px;color:#f85149;margin-top:3px;">ST: ${pt.smart_trade_id}</div>`;
+      }
+
+      stDetail = `<div style="margin:5px 0 4px;padding:6px 8px;background:rgba(248,81,73,.04);border:1px solid rgba(248,81,73,.12);border-radius:4px;">
+        <div style="font-size:8px;color:var(--muted);line-height:1.6;">
+          Sell: ${pt.smart_trade_sell_pct||25}% BTC · SL: ${pt.smart_trade_sl_pct||1.5}% above
+        </div>
+        <div style="font-size:8px;color:var(--muted);">TP: ${stTpStr}</div>
+        ${stDualBadge ? `<div style="margin-top:3px;">${stDualBadge}</div>` : ''}
+        ${stBotLines}
+      </div>`;
     }
 
     return `<div class="tl-card" style="border-left:3px solid ${trigCol};margin-bottom:6px;">
@@ -2658,7 +2683,7 @@ function showAddTargetModal(pickedPrice, editTarget){
           Sells X% of BTC at market on confirmed retest failure.
           TP = limit buyback at target price. SL = cancel if price recovers above support (break was fake).
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
           <div>
             <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SELL % OF BTC</div>
             <input id="pt_st_sell_pct" type="number" value="${isEdit ? (et.smart_trade_sell_pct||25) : 25}" min="5" max="100" step="5"
@@ -2666,16 +2691,58 @@ function showAddTargetModal(pickedPrice, editTarget){
               font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:5px 7px;border-radius:4px;"/>
           </div>
           <div>
-            <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">TP % BELOW ENTRY</div>
-            <input id="pt_st_tp_pct" type="number" value="${isEdit ? (et.smart_trade_tp_pct||3.0) : 3.0}" min="0.5" max="30" step="0.5"
-              style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
-              font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
-          </div>
-          <div>
             <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SL % ABOVE ENTRY</div>
             <input id="pt_st_sl_pct" type="number" value="${isEdit ? (et.smart_trade_sl_pct||1.5) : 1.5}" min="0.3" max="10" step="0.1"
               style="width:100%;background:#080c10;border:1px solid #243044;color:#ffab00;
               font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+          </div>
+        </div>
+
+        <!-- TP Steps -->
+        <div style="margin-bottom:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <div style="font-size:9px;color:var(--muted);">TAKE PROFIT LEVELS <span style="opacity:.5;font-size:8px;">(% below entry → buyback)</span></div>
+            <button onclick="_ptAddStTpRow()"
+              style="background:rgba(86,211,100,.08);border:1px solid rgba(86,211,100,.3);color:var(--green);
+              font-family:'Space Mono',monospace;font-size:9px;padding:3px 8px;border-radius:3px;cursor:pointer;">
+              + ADD LEVEL</button>
+          </div>
+          <div id="ptStTpRows"></div>
+          <div style="font-size:8px;color:var(--muted);margin-top:4px;opacity:.6;">
+            Close % must sum to 100 · Profit % must be ascending
+          </div>
+        </div>
+
+        <!-- Dual Entry -->
+        <div style="padding:8px;background:#060a0e;border:1px solid #1c2433;border-radius:4px;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <input type="checkbox" id="pt_st_dual" ${isEdit && et.smart_trade_dual_entry?'checked':''} onchange="_ptToggleStDual(this.checked)"
+              style="accent-color:#00d4ff;width:14px;height:14px;cursor:pointer;"/>
+            <span style="font-size:9px;color:#00d4ff;text-transform:uppercase;
+              letter-spacing:.08em;font-weight:700;">Dual Entry (Scout + Retest)</span>
+          </div>
+          <div id="ptStDualFields" style="display:none;">
+            <div style="font-size:8px;color:var(--muted);margin-bottom:8px;line-height:1.4;">
+              Scout: sells immediately on confirmation · Retest: sells when price pulls back to broken support
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">SCOUT %</div>
+                <input id="pt_st_scout_pct" type="number" value="${isEdit ? (et.smart_trade_scout_pct||30) : 30}" min="10" max="90" step="5"
+                  style="width:100%;background:#080c10;border:1px solid #243044;color:#00d4ff;
+                  font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">RETEST TOL %</div>
+                <input id="pt_st_retest_tol" type="number" value="${isEdit ? (et.smart_trade_retest_tolerance_pct||0.5) : 0.5}" min="0.1" max="5" step="0.1"
+                  style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+                  font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+              </div>
+            </div>
+            <div style="font-size:8px;color:var(--muted);margin-top:6px;opacity:.6;">
+              Scout sells <span id="ptStScoutSellPct">--</span>% of BTC immediately ·
+              Retest sells remaining <span id="ptStRetestSellPct">--</span>% on pullback to support
+            </div>
           </div>
         </div>
       </div>
@@ -2710,7 +2777,15 @@ function showAddTargetModal(pickedPrice, editTarget){
       if(et.dca_trailing_enabled) _ptToggleTrailing(true);
       if(et.dca_dual_entry) _ptToggleDual(true);
     }
-    if(et.smart_trade_enabled) _ptToggleSt(true);
+    if(et.smart_trade_enabled){
+      _ptToggleSt(true);
+      // Populate ST TP rows
+      document.getElementById('ptStTpRows').innerHTML = '';
+      const stSteps = et.smart_trade_tp_steps || [];
+      if(stSteps.length) stSteps.forEach(s => _ptAddStTpRow(s.profit_pct, s.close_pct));
+      else _ptAddStTpRow(et.smart_trade_tp_pct || 3.0, 100);
+      if(et.smart_trade_dual_entry) _ptToggleStDual(true);
+    }
   }
 
   document.getElementById('pt_label').focus();
@@ -2769,6 +2844,66 @@ function _ptUpdateDualLabels(){
 
 function _ptToggleSt(on){
   document.getElementById('ptStFields').style.display = on ? 'block' : 'none';
+  if(on && document.getElementById('ptStTpRows').children.length === 0) _ptAddStTpRow(3.0, 100);
+}
+
+function _ptToggleStDual(on){
+  const f = document.getElementById('ptStDualFields');
+  if(f) f.style.display = on ? 'block' : 'none';
+  if(on) _ptUpdateStDualLabels();
+}
+
+function _ptUpdateStDualLabels(){
+  const sellPct  = parseFloat(document.getElementById('pt_st_sell_pct')?.value || 25);
+  const scoutFrac = parseFloat(document.getElementById('pt_st_scout_pct')?.value || 30) / 100;
+  const scEl = document.getElementById('ptStScoutSellPct');
+  const rtEl = document.getElementById('ptStRetestSellPct');
+  if(scEl) scEl.textContent = (sellPct * scoutFrac).toFixed(1);
+  if(rtEl) rtEl.textContent = (sellPct * (1 - scoutFrac)).toFixed(1);
+}
+
+function _ptAddStTpRow(profit, close){
+  const c = document.getElementById('ptStTpRows');
+  const div = document.createElement('div');
+  div.setAttribute('data-st-tp-row','');
+  div.style.cssText = 'display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-bottom:5px;align-items:flex-end;';
+  div.innerHTML = `
+    <div>
+      <div style="font-size:8px;color:var(--muted);margin-bottom:3px;">PROFIT % BELOW</div>
+      <input type="number" class="pt-st-tp-profit" value="${profit!=null?profit:''}" placeholder="e.g. 3.0"
+        min="0.5" step="0.5"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:var(--green);
+        font-family:'Space Mono',monospace;font-size:10px;font-weight:700;padding:5px 7px;border-radius:4px;"/>
+    </div>
+    <div>
+      <div style="font-size:8px;color:var(--muted);margin-bottom:3px;">CLOSE %</div>
+      <input type="number" class="pt-st-tp-close" value="${close!=null?close:''}" placeholder="e.g. 100"
+        min="1" max="100" step="1"
+        style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
+        font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
+    </div>
+    <button onclick="_ptRemoveStTpRow(this)"
+      style="background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.25);color:#f85149;
+      font-family:'Space Mono',monospace;font-size:12px;padding:5px 9px;border-radius:4px;
+      cursor:pointer;line-height:1;">×</button>`;
+  c.appendChild(div);
+}
+
+function _ptRemoveStTpRow(btn){
+  const c = document.getElementById('ptStTpRows');
+  if(c.children.length <= 1){ toast('At least one TP level required','err'); return; }
+  btn.closest('[data-st-tp-row]').remove();
+}
+
+function _ptGetStTpSteps(){
+  const steps = [];
+  for(const row of document.querySelectorAll('#ptStTpRows [data-st-tp-row]')){
+    const profit = parseFloat(row.querySelector('.pt-st-tp-profit').value);
+    const close  = parseFloat(row.querySelector('.pt-st-tp-close').value);
+    if(isNaN(profit) || isNaN(close)) return null;
+    steps.push({profit_pct: profit, close_pct: close});
+  }
+  return steps;
 }
 
 function _ptAddTpRow(profit, close){
@@ -2840,8 +2975,26 @@ async function confirmAddTarget(){
     body.smart_trade_enabled  = document.getElementById('pt_st_on').checked;
     if(body.smart_trade_enabled){
       body.smart_trade_sell_pct = parseFloat(document.getElementById('pt_st_sell_pct').value) || 25;
-      body.smart_trade_tp_pct   = parseFloat(document.getElementById('pt_st_tp_pct').value)   || 3.0;
       body.smart_trade_sl_pct   = parseFloat(document.getElementById('pt_st_sl_pct').value)   || 1.5;
+
+      // Multi-step TP
+      const stTpSteps = _ptGetStTpSteps();
+      if(!stTpSteps || stTpSteps.length === 0){ toast('Add at least one SmartTrade TP level','err'); return; }
+      const stTotalClose = stTpSteps.reduce((s,r) => s + r.close_pct, 0);
+      if(Math.abs(stTotalClose - 100) > 0.5){ toast(`ST TP Close % must sum to 100 (got ${stTotalClose.toFixed(0)}%)`,'err'); return; }
+      for(let i=1;i<stTpSteps.length;i++){
+        if(stTpSteps[i].profit_pct <= stTpSteps[i-1].profit_pct){ toast('ST TP profit levels must be ascending','err'); return; }
+      }
+      body.smart_trade_tp_steps = stTpSteps;
+      // Keep legacy single TP from first step for backward compat
+      body.smart_trade_tp_pct = stTpSteps[0].profit_pct;
+
+      // Dual entry
+      body.smart_trade_dual_entry = document.getElementById('pt_st_dual')?.checked || false;
+      if(body.smart_trade_dual_entry){
+        body.smart_trade_scout_pct = parseFloat(document.getElementById('pt_st_scout_pct')?.value) || 30;
+        body.smart_trade_retest_tolerance_pct = parseFloat(document.getElementById('pt_st_retest_tol')?.value) || 0.5;
+      }
     }
   }
 

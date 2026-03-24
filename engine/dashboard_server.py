@@ -1398,6 +1398,10 @@ def create_target():
             smart_trade_sell_pct=float(body.get("smart_trade_sell_pct", 25.0)),
             smart_trade_tp_pct=float(body.get("smart_trade_tp_pct", 3.0)),
             smart_trade_sl_pct=float(body.get("smart_trade_sl_pct", 1.5)),
+            smart_trade_tp_steps=body.get("smart_trade_tp_steps"),
+            smart_trade_dual_entry=bool(body.get("smart_trade_dual_entry", False)),
+            smart_trade_scout_pct=float(body.get("smart_trade_scout_pct", 30.0)),
+            smart_trade_retest_tolerance_pct=float(body.get("smart_trade_retest_tolerance_pct", 0.5)),
         )
         return jsonify({"ok": True, "target": t})
     except Exception as e:

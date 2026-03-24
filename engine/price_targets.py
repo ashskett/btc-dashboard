@@ -348,6 +348,10 @@ def add_target(
     smart_trade_sell_pct: float = 25.0,
     smart_trade_tp_pct: float = 3.0,
     smart_trade_sl_pct: float = 1.5,
+    smart_trade_tp_steps: list = None,
+    smart_trade_dual_entry: bool = False,
+    smart_trade_scout_pct: float = 30.0,
+    smart_trade_retest_tolerance_pct: float = 0.5,
 ) -> dict:
     targets = load_targets()
     target = {
@@ -393,7 +397,13 @@ def add_target(
         "smart_trade_sell_pct":   smart_trade_sell_pct,
         "smart_trade_tp_pct":     smart_trade_tp_pct,
         "smart_trade_sl_pct":     smart_trade_sl_pct,
+        "smart_trade_tp_steps":   smart_trade_tp_steps or [],
+        "smart_trade_dual_entry": smart_trade_dual_entry,
+        "smart_trade_scout_pct":  smart_trade_scout_pct,
+        "smart_trade_retest_tolerance_pct": smart_trade_retest_tolerance_pct,
         "smart_trade_id":         None,
+        "smart_trade_scout_id":   None,
+        "smart_trade_retest_id":  None,
     }
     targets.append(target)
     save_targets(targets)
@@ -431,6 +441,7 @@ def clear_target(target_id: str) -> bool:
                       "cleared_at": None, "consec_above": 0,
                       "sf_phase": "watching", "sf_retest_high": None,
                       "sf_broken_at": None, "smart_trade_id": None,
+                      "smart_trade_scout_id": None, "smart_trade_retest_id": None,
                       "dca_scout_bot_id": None, "dca_retest_bot_id": None})
             save_targets(targets)
             return True
