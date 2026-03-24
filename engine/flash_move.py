@@ -10,7 +10,7 @@ DETECTION
 Two layers (either triggers):
 
 1. CYCLE-TO-CYCLE: price moved > FLASH_ATR_MULT × ATR since last engine cycle
-   (~5 min). At current ATR ~$565, 2.0× = $1,130 in 5 minutes. This is abnormal
+   (~2 min). At current ATR ~$565, 1.5× = $848 in 2 minutes. This is abnormal
    and almost always caused by a macro event (Trump post, Fed announcement, etc.)
 
 2. CANDLE BODY: any of the last 3 five-minute candles has a body > CANDLE_ATR_MULT
@@ -20,7 +20,7 @@ RESPONSE
 --------
 - Stop ALL bots immediately (capital protection)
 - Log direction (UP/DOWN) and magnitude
-- Enter cooldown for COOLDOWN_CYCLES engine cycles (~15 min default)
+- Enter cooldown for COOLDOWN_CYCLES engine cycles (~6 min default)
 - During cooldown: bots stay off, engine logs countdown
 
 RECOVERY
@@ -48,10 +48,11 @@ import time
 _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flash_move_state.json")
 
 # ── Tuning constants ──────────────────────────────────────────────────────────
-FLASH_ATR_MULT    = 2.0    # cycle-to-cycle move threshold (×ATR)
+FLASH_ATR_MULT    = 1.5    # cycle-to-cycle move threshold (×ATR) — ~$848 at current ATR
+                           # lowered from 2.0 for 2-min cycles (less time = smaller natural moves)
 CANDLE_ATR_MULT   = 1.5    # single 5m candle body threshold (×1H ATR)
 CANDLE_LOOKBACK   = 3      # check last N five-minute candles
-COOLDOWN_CYCLES   = 3      # minimum cycles with bots off (~15 min)
+COOLDOWN_CYCLES   = 5      # minimum cycles with bots off (~10 min at 2-min cycles)
 RECOVERY_ATR_MULT = 0.3    # all recent candle bodies must be < this × ATR to recover
 RECOVERY_CANDLES  = 3      # number of candles that must be calm
 

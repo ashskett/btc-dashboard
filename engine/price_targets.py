@@ -341,7 +341,7 @@ def add_target(
     dca_trailing_deviation_pct: float = 1.0,
     dca_dual_entry: bool = False,
     dca_scout_pct: float = 30.0,
-    dca_scout_buffer_cycles: int = 2,
+    dca_scout_buffer_cycles: int = 5,
     dca_retest_tolerance_pct: float = 0.5,
     # SmartTrade (support_failure DOWN)
     smart_trade_enabled: bool = False,

@@ -61,7 +61,7 @@ if os.path.exists(_fix_path):
 # ── End one-shot fix ──────────────────────────────────────────────────────
 
 DRY_RUN = False
-MAX_ACTIONS_PER_HOUR = 3
+MAX_ACTIONS_PER_HOUR = 5
 
 # Rate limiting — track bot actions in a rolling 1-hour window
 from collections import deque
@@ -296,8 +296,8 @@ def _inner_tier_gw(tiers):
 def run():
     global _last_run_ts, _prev_regime
     now = time.time()
-    if now - _last_run_ts < 240:
-        print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
+    if now - _last_run_ts < 90:
+        print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 90s between runs)")
         return
     _last_run_ts = now
     print("Checking market...")
@@ -704,7 +704,7 @@ def run():
                 DCA_LAUNCH_HOLD_SECS = 360   # 6 minutes
                 _fired_at   = _pt_state.get("fired_at") or 0
                 _hold_secs  = max(0, DCA_LAUNCH_HOLD_SECS - (time.time() - _fired_at))
-                _elapsed_cycles = max(0, round((time.time() - _fired_at) / 300)) if _fired_at else 0
+                _elapsed_cycles = max(0, round((time.time() - _fired_at) / 120)) if _fired_at else 0
                 if _hold_secs > 0:
                     print(f"  DCA launch held — sweep guard active ({_hold_secs:.0f}s remaining)")
 
@@ -1246,7 +1246,7 @@ def run():
             _prev_regime = state.regime
 
 if __name__ == "__main__":
-    schedule.every(5).minutes.do(run)
+    schedule.every(2).minutes.do(run)
 
     # Run once immediately on startup
     run()

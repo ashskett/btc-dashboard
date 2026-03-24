@@ -2540,7 +2540,7 @@ function showAddTargetModal(pickedPrice){
             </div>
             <div>
               <div style="font-size:9px;color:var(--muted);margin-bottom:4px;">BUFFER CYCLES</div>
-              <input id="pt_dca_scout_buf" type="number" value="2" min="0" max="12" step="1"
+              <input id="pt_dca_scout_buf" type="number" value="5" min="0" max="20" step="1"
                 style="width:100%;background:#080c10;border:1px solid #243044;color:#c9d4e0;
                 font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
             </div>
@@ -2662,7 +2662,7 @@ function _ptUpdateDualLabels(){
   const rp = document.getElementById('ptRetestPct');
   const st = document.getElementById('ptScoutTimer');
   if(rp) rp.textContent = (100 - sp);
-  if(st) st.textContent = `~${buf * 5} min`;
+  if(st) st.textContent = `~${buf * 2} min`;
 }
 
 function _ptToggleSt(on){
