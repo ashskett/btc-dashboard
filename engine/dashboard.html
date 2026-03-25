@@ -772,8 +772,8 @@
       <div id="summTable"   style="display:none;">
         <div class="summ-grid">
           <div></div>
-          <div class="summ-hdr">Realized</div>
-          <div class="summ-hdr">Unrealized</div>
+          <div class="summ-hdr" title="3Commas current_profit_usd — includes unrealised BTC appreciation, not purely grid cycle profit">Bot P&L †</div>
+          <div class="summ-hdr">Unrealised</div>
           <div class="summ-hdr">#</div>
 
           <div class="summ-lbl summ-row">Grid Bots</div>
@@ -792,6 +792,7 @@
           <div></div>
         </div>
         <div class="summ-note" id="summNote"></div>
+        <div style="font-size:8px;color:var(--muted);margin-top:4px;">† Bot P&L includes unrealised BTC price appreciation on open grid positions — can be inflated on pumps. Use Portfolio P&L page for accurate net P&L.</div>
       </div>
 
       <!-- DCA bot config -->
@@ -1755,7 +1756,9 @@ async function loadBots(){
       const col    = BOT_COLORS[i % BOT_COLORS.length];
       const feeOk  = tier ? tier.fee_ok !== false : true;
 
-      // P&L from bot config (realized = completed cycles, unrealized = open position)
+      // P&L from bot config. NOTE: current_profit_usd is NOT purely realized cycle profit —
+      // it includes unrealised BTC appreciation on open positions. Can be inflated on pumps.
+      // True realized profit is best measured via portfolio snapshot deltas.
       const pnlData    = pnlMap[String(b.id)] || {};
       const realized   = pnlData.realized_usd;
       const unrealized = pnlData.unrealized_usd;
@@ -1803,7 +1806,7 @@ async function loadBots(){
         </div>
         ${tierLine}
         <div class="bot-meta">
-          <div class="bm" title="Realized P&L from completed grid cycles${fillCnt ? ` (${fillCnt} cycles)` : ''}">Realized P&L<span>${pnlStr}${pctNote}${fillsNote}${unrStr}</span></div>
+          <div class="bm" title="3Commas Bot P&L — includes unrealised BTC appreciation on open grid positions, not purely grid cycle profit${fillCnt ? `. ${fillCnt} completed cycles.` : ''}">Bot P&L †<span>${pnlStr}${pctNote}${fillsNote}${unrStr}</span></div>
           <div class="bm">ID<span>#${b.id}</span></div>
         </div>
         <div class="bot-meta" style="margin-top:4px;">
@@ -4404,6 +4407,14 @@ function renderDailyProfit(allDays) {
   document.getElementById('dpGrandTotal').innerHTML  = `<span style="color:${clr(grandT)}">${fmtUsd(grandT)}</span>`;
   document.getElementById('dpDailyAvg').innerHTML    = `<span style="color:${clr(grandT/days.length)}">${fmtUsd(grandT / days.length)}</span>`;
 
+  // Sanity check: identify suspect days (>3× median of other days AND >$50)
+  // These may reflect 3Commas crystallising unrealised BTC appreciation on bot stop
+  const totals = days.map(d => d.total || 0);
+  const sorted = [...totals].sort((a,b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 1;
+  const _dpSuspect = new Set();
+  totals.forEach((t, i) => { if (t > Math.max(median * 3, 50)) _dpSuspect.add(i); });
+
   // Draw stacked bar chart
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -4464,6 +4475,7 @@ function renderDailyProfit(allDays) {
   // Draw bars
   days.forEach((d, i) => {
     const x = PAD_LEFT + i * (barW + barGap) + barGap / 2;
+    const suspect = _dpSuspect.has(i);
 
     // Stack positive values upward from zero line
     let posY = zeroY;
@@ -4471,7 +4483,7 @@ function renderDailyProfit(allDays) {
       const v = d[k] || 0;
       if (v > 0) {
         const h = v * pxPerDollarUp;
-        ctx.fillStyle = colors[ki];
+        ctx.fillStyle = suspect ? '#ff9900' : colors[ki];
         ctx.fillRect(x, posY - h, barW, h);
         posY -= h;
       }
@@ -4483,13 +4495,21 @@ function renderDailyProfit(allDays) {
       const v = d[k] || 0;
       if (v < 0) {
         const h = Math.abs(v) * pxPerDollarDown;
-        ctx.fillStyle = colors[ki];
+        ctx.fillStyle = suspect ? '#ff9900' : colors[ki];
         ctx.globalAlpha = 0.6;
         ctx.fillRect(x, negY, barW, h);
         ctx.globalAlpha = 1.0;
         negY += h;
       }
     });
+
+    // Suspect marker — small ⚠ above the bar
+    if (suspect) {
+      ctx.fillStyle = '#ff9900';
+      ctx.font = '8px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('?', x + barW / 2, Math.max(PAD_TOP, posY) - 2);
+    }
 
     // Date label (show every few bars to avoid overlap)
     const labelEvery = Math.max(1, Math.ceil(days.length / 10));

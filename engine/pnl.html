@@ -659,6 +659,13 @@ function renderGridProfit(allDays) {
 
   if (!days.length) return;
 
+  // Sanity check: flag days >3× median AND >$50 — may reflect crystallised unrealised P&L on bot stop
+  const _totals = days.map(d => d.total || 0);
+  const _sorted = [..._totals].sort((a,b) => a - b);
+  const _median = _sorted[Math.floor(_sorted.length / 2)] || 1;
+  const _suspect = new Set();
+  _totals.forEach((t, i) => { if (t > Math.max(_median * 3, 50)) _suspect.add(i); });
+
   // Canvas setup
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.parentElement.getBoundingClientRect();
@@ -719,17 +726,26 @@ function renderGridProfit(allDays) {
   // Bars
   days.forEach((d, i) => {
     const x = PAD_L + i * (barW + barGap) + barGap / 2;
+    const suspect = _suspect.has(i);
     let y = zeroY;
 
     ['inner', 'mid', 'outer'].forEach((k, ki) => {
       const v = d[k] || 0;
       if (v > 0) {
         const h = v * pxPerDollar;
-        ctx.fillStyle = colors[ki];
+        ctx.fillStyle = suspect ? '#ff9900' : colors[ki];
         ctx.fillRect(x, y - h, barW, h);
         y -= h;
       }
     });
+
+    // Suspect marker above bar
+    if (suspect) {
+      ctx.fillStyle = '#ff9900';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('?', x + barW / 2, Math.max(PAD_T, y) - 2);
+    }
 
     // Date labels
     const labelEvery = Math.max(1, Math.ceil(days.length / 12));
@@ -748,7 +764,8 @@ function renderGridProfit(allDays) {
     const idx = Math.floor((mx - PAD_L) / (barW + barGap));
     if (idx >= 0 && idx < days.length) {
       const d = days[idx];
-      canvas.title = `${d.date}\nInner: $${(d.inner||0).toFixed(2)}\nMid: $${(d.mid||0).toFixed(2)}\nOuter: $${(d.outer||0).toFixed(2)}\nTotal: $${d.total.toFixed(2)}`;
+      const flag = _suspect.has(idx) ? ' ⚠ suspect (may include unrealised P&L)' : '';
+      canvas.title = `${d.date}${flag}\nInner: $${(d.inner||0).toFixed(2)}\nMid: $${(d.mid||0).toFixed(2)}\nOuter: $${(d.outer||0).toFixed(2)}\nTotal: $${d.total.toFixed(2)}`;
     } else {
       canvas.title = '';
     }
