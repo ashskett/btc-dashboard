@@ -32,7 +32,7 @@ FEE_BUFFER      = 1.5      # safety multiplier: step must be 1.5× the break-eve
 TIERS = [
     {"name": "inner", "range_mult": 0.75, "base_levels": 10, "wkd_fee_buffer": 1.2, "compression_mult": 1.5},
     {"name": "mid",   "range_mult": 1.5,  "base_levels": 6,  "compression_mult": 1.2},  # was 8 — reduced to keep step ~30% above fee floor
-    {"name": "outer", "range_mult": 3.0,  "base_levels": 6,  "compression_mult": 1.0},  # wide safety net — no density boost needed
+    {"name": "outer", "range_mult": 2.0,  "base_levels": 6,  "compression_mult": 1.0},  # safety net — range tightened (recentre+flash guard cover extremes)
 ]
 
 
