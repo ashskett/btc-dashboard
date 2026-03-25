@@ -112,54 +112,55 @@ def signed_request(method, path, body=None, params=None):
     return req.request(method, BASE_3C + path, headers=headers, data=payload, params=params, timeout=10)
 
 
-# ── Health check (unauthenticated) ───────────────────────
+# ── Health check (unauthenticated — intentionally minimal) ───────────────
 @app.route("/ping")
 def ping():
-    # Debug: /ping?debug=balance returns raw 3Commas pie_chart_data
-    if request.args.get("debug") == "balance":
-        try:
-            signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
-            time.sleep(2)
-            r = signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
-            return jsonify({"status": r.status_code, "data": r.json() if r.ok else r.text[:500]})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-    # Debug: /ping?debug=version returns PUBLIC_PATHS to confirm code version
-    if request.args.get("debug") == "version":
-        return jsonify({"public_paths": list(_PUBLIC_PATHS), "pid": os.getpid()})
-    # Debug: /ping?debug=state returns engine state files for diagnosis
-    if request.args.get("debug") == "state":
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        result = {}
-        for fname in ["inventory_override.json", "breakout_state.json",
-                      "regime_state.json", "grid_state.json", "engine_status.json"]:
-            fpath = os.path.join(script_dir, fname)
+    # Public: just confirms the server is alive. No debug info exposed.
+    debug = request.args.get("debug")
+    if debug:
+        # Debug modes require auth
+        err = check_token()
+        if err:
+            return err
+        if debug == "balance":
             try:
-                result[fname] = json.load(open(fpath)) if os.path.exists(fpath) else None
+                signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
+                time.sleep(2)
+                r = signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
+                return jsonify({"status": r.status_code, "data": r.json() if r.ok else r.text[:500]})
             except Exception as e:
-                result[fname] = {"error": str(e)}
-        return jsonify(result)
-    # Debug: /ping?debug=log&limit=N returns last N engine log entries
-    if request.args.get("debug") == "log":
-        limit = int(request.args.get("limit", 30))
-        return jsonify(read_log(limit))
-    # Debug: /ping?debug=dcabots returns raw DCA bot list from 3Commas
-    if request.args.get("debug") == "dcabots":
-        try:
-            from threecommas_dca import get_dca_bots
-            bots = get_dca_bots()
-            # Return only fields useful for status diagnosis
-            slim = [{
-                "id": b.get("id"),
-                "name": b.get("name"),
-                "is_enabled": b.get("is_enabled"),
-                "enabled": b.get("enabled"),
-                "active_deals_count": b.get("active_deals_count"),
-                "pairs": b.get("pairs"),
-            } for b in bots]
-            return jsonify({"count": len(slim), "bots": slim})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+                return jsonify({"error": str(e)}), 500
+        if debug == "version":
+            return jsonify({"public_paths": list(_PUBLIC_PATHS), "pid": os.getpid()})
+        if debug == "state":
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            result = {}
+            for fname in ["inventory_override.json", "breakout_state.json",
+                          "regime_state.json", "grid_state.json", "engine_status.json"]:
+                fpath = os.path.join(script_dir, fname)
+                try:
+                    result[fname] = json.load(open(fpath)) if os.path.exists(fpath) else None
+                except Exception as e:
+                    result[fname] = {"error": str(e)}
+            return jsonify(result)
+        if debug == "log":
+            limit = int(request.args.get("limit", 30))
+            return jsonify(read_log(limit))
+        if debug == "dcabots":
+            try:
+                from threecommas_dca import get_dca_bots
+                bots = get_dca_bots()
+                slim = [{
+                    "id": b.get("id"),
+                    "name": b.get("name"),
+                    "is_enabled": b.get("is_enabled"),
+                    "enabled": b.get("enabled"),
+                    "active_deals_count": b.get("active_deals_count"),
+                    "pairs": b.get("pairs"),
+                } for b in bots]
+                return jsonify({"count": len(slim), "bots": slim})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True})
 
 

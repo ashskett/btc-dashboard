@@ -131,18 +131,35 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
-        # Verify GitHub signature if present (grid engine route only)
+        # Verify GitHub HMAC signature — mandatory for grid engine route
         if self.path in ("/deploy", "/"):
             sig_header = self.headers.get("X-Hub-Signature-256", "")
-            if sig_header:
-                expected = "sha256=" + hmac.new(
-                    WEBHOOK_SECRET.encode(), body, hashlib.sha256
-                ).hexdigest()
-                if not hmac.compare_digest(sig_header, expected):
-                    log.warning(f"Invalid signature from {self.client_address[0]}")
-                    self.send_response(403)
-                    self.end_headers()
-                    return
+            if not sig_header:
+                log.warning(f"Missing signature from {self.client_address[0]} — rejected")
+                self.send_response(403)
+                self.end_headers()
+                return
+            expected = "sha256=" + hmac.new(
+                WEBHOOK_SECRET.encode(), body, hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(sig_header, expected):
+                log.warning(f"Invalid signature from {self.client_address[0]} — rejected")
+                self.send_response(403)
+                self.end_headers()
+                return
+
+        # Verify deploy token for AI OS route
+        if self.path == "/deploy-ai-os":
+            ai_os_token = os.environ.get("DEPLOY_AI_OS_TOKEN", "")
+            if not ai_os_token:
+                # Fall back to WEBHOOK_SECRET if no dedicated token configured
+                ai_os_token = WEBHOOK_SECRET
+            request_token = self.headers.get("X-Deploy-Token", "")
+            if not request_token or not hmac.compare_digest(request_token, ai_os_token):
+                log.warning(f"Missing or invalid deploy token for /deploy-ai-os from {self.client_address[0]} — rejected")
+                self.send_response(403)
+                self.end_headers()
+                return
 
         self.send_response(200)
         self.end_headers()
