@@ -162,6 +162,97 @@ FLOOD_WINDOW_SECS     = 900    # 15 min — monitor window after redeploy (3 cyc
 FLOOD_BTC_THRESHOLD   = 0.10   # 10pp btc_ratio change = fill-flood signal
 FLOOD_COOLDOWN_SECS   = 1800   # 30 min bots-off after flood detected
 
+# ─── Post-drift stability cooldown ────────────────────────────────────────────
+# When a DOWN drift recentre fires, the market is actively falling. Redeploying
+# immediately risks placing bots into a still-moving market — they fill through
+# all levels between centre and price, consuming capital in the wrong direction.
+#
+# Guard logic (DOWN drifts only — UP drifts deploy immediately as normal):
+#  1. Drift fires DOWN → stop all bots, save pending_recentre state, return.
+#  2. Next cycle: check if price moved >STABILISE_MOVE_PCT in same direction.
+#     - Still falling → keep bots stopped, update reference price, wait.
+#     - Stabilised    → clear pending, execute redeploy at current price.
+#  3. After STABILISE_MAX_CYCLES: force redeploy regardless (don't stay flat
+#     forever — an extended drop will need a fresh grid at some point).
+# ──────────────────────────────────────────────────────────────────────────────
+RECENTRE_PENDING_FILE  = "recentre_pending.json"
+STABILISE_MOVE_PCT     = 0.005   # 0.5% per-cycle move = market still active
+STABILISE_MAX_CYCLES   = 6       # ~12 min max wait before forcing redeploy
+
+
+def _save_recentre_pending(price: float, direction: str) -> None:
+    """Record a deferred recentre so next cycle can check for stability."""
+    state = {
+        "ts":               time.time(),
+        "price_at_pending": price,
+        "direction":        direction,
+        "cycles_waited":    0,
+    }
+    try:
+        with open(RECENTRE_PENDING_FILE, "w") as f:
+            json.dump(state, f)
+        print(f"  Recentre pending saved: {direction} @ ${price:,.0f} — awaiting stability")
+    except Exception as e:
+        print(f"Warning: could not save recentre pending: {e}")
+
+
+def _check_recentre_pending(current_price: float) -> tuple:
+    """
+    Returns:
+        ("pending", rp)  — market still moving; keep bots stopped
+        ("deploy",  rp)  — price stabilised or max wait hit; proceed with redeploy
+        (None,      None) — no pending recentre
+    """
+    if not os.path.exists(RECENTRE_PENDING_FILE):
+        return None, None
+    try:
+        with open(RECENTRE_PENDING_FILE) as f:
+            rp = json.load(f)
+    except Exception:
+        return None, None
+
+    direction     = rp.get("direction", "DOWN")
+    ref_price     = rp.get("price_at_pending")
+    cycles_waited = rp.get("cycles_waited", 0)
+
+    # Force deploy after max wait
+    if cycles_waited >= STABILISE_MAX_CYCLES:
+        print(f"  Recentre cooldown: max wait ({STABILISE_MAX_CYCLES} cycles) reached — "
+              f"forcing redeploy at ${current_price:,.0f}")
+        return "deploy", rp
+
+    if ref_price:
+        still_falling = (direction == "DOWN" and
+                         current_price < ref_price * (1 - STABILISE_MOVE_PCT))
+        still_rising  = (direction == "UP" and
+                         current_price > ref_price * (1 + STABILISE_MOVE_PCT))
+
+        if still_falling or still_rising:
+            move_pct = abs(current_price - ref_price) / ref_price
+            rp["price_at_pending"] = current_price
+            rp["cycles_waited"]    = cycles_waited + 1
+            try:
+                with open(RECENTRE_PENDING_FILE, "w") as f:
+                    json.dump(rp, f)
+            except Exception:
+                pass
+            print(f"  Recentre cooldown [{direction}]: price still moving "
+                  f"${ref_price:,.0f} → ${current_price:,.0f} ({move_pct:.1%}) — "
+                  f"holding off, cycle {cycles_waited + 1}/{STABILISE_MAX_CYCLES}")
+            return "pending", rp
+
+    # Price has stabilised (or ref_price missing)
+    print(f"  Recentre cooldown: price stabilised — deploying at ${current_price:,.0f}")
+    return "deploy", rp
+
+
+def _clear_recentre_pending() -> None:
+    try:
+        if os.path.exists(RECENTRE_PENDING_FILE):
+            os.remove(RECENTRE_PENDING_FILE)
+    except Exception as e:
+        print(f"Warning: could not clear recentre pending: {e}")
+
 
 def _save_redeploy_state(price: float, btc_ratio: float) -> None:
     """Record a redeploy event so the fill-flood guard can monitor the next cycles."""
@@ -538,6 +629,48 @@ def run():
             for i, bot in enumerate(GRID_BOTS[:3]):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
                 _act(bot, False, f"{tier_name} (flash move cooldown)")
+            return
+
+        # ===============================
+        # POST-DRIFT STABILITY COOLDOWN
+        # ===============================
+        # If the previous cycle triggered a DOWN drift recentre, we deferred the
+        # redeploy to avoid deploying into an active falling market. Check now
+        # whether price has stabilised enough to deploy.
+        _pending_status, _pending_rp = _check_recentre_pending(state.price)
+        if _pending_status == "pending":
+            # Market still moving — keep bots stopped and wait
+            for i, bot in enumerate(GRID_BOTS[:3]):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, False, f"{tier_name} (recentre cooldown)")
+            return
+        elif _pending_status == "deploy":
+            # Price stabilised — clear pending and execute the redeploy now
+            _clear_recentre_pending()
+            print(f"  Executing deferred recentre at ${state.price:,.0f}")
+            if DRY_RUN:
+                print("[SIMULATION] Would redeploy grid after stability cooldown")
+                update_grid_center(state.price, grid_width=state.grid_width,
+                                   inner_grid_width=(_inner_tier_gw(state.tiers)),
+                                   inner_center=state.price)
+            elif _can_act():
+                _record_action()
+                redeploy_all_bots(GRID_BOTS, state.tiers)
+                update_grid_center(state.price, grid_width=state.grid_width,
+                                   inner_grid_width=(_inner_tier_gw(state.tiers)),
+                                   inner_center=state.price)
+                _save_redeploy_state(state.price, state.btc_ratio)
+            else:
+                print(f"Rate limit — deferred recentre skipped this cycle, will retry")
+                # Re-save pending so we try again next cycle (reset cycles_waited by 1)
+                if _pending_rp:
+                    _pending_rp["cycles_waited"] = max(0, _pending_rp.get("cycles_waited", 1) - 1)
+                    _pending_rp["price_at_pending"] = state.price
+                    try:
+                        with open(RECENTRE_PENDING_FILE, "w") as f:
+                            json.dump(_pending_rp, f)
+                    except Exception:
+                        pass
             return
 
         # ===============================
@@ -1062,6 +1195,10 @@ def run():
             print("Support:", state.support)
             print("Resistance:", state.resistance)
 
+            # DOWN drift: defer redeploy — stop bots now, wait for stability
+            # UP drift: deploy immediately (riding upward momentum is fine)
+            _drift_direction = "DOWN" if state.price < state.center else "UP"
+
             if DRY_RUN:
                 # In dry run: update center so simulation doesn't re-trigger drift every cycle
                 update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
@@ -1071,11 +1208,20 @@ def run():
                     print(f"  [SIM] Bot {bot_id} ({tier['name']}): "
                           f"${tier['grid_low']:,.0f}–${tier['grid_high']:,.0f}, "
                           f"{tier['levels']} levels, ${tier['step']:,.0f} step")
-            elif _can_act():
+            elif _drift_direction == "DOWN" and _can_act():
+                # Stop all bots immediately to protect capital, then defer redeploy
                 _record_action()
-                # Stop, reprice each bot to its tier range, restart
+                print(f"  DOWN drift: stopping bots and entering stability cooldown "
+                      f"(${state.center:,.0f} → ${state.price:,.0f})")
+                for i, bot in enumerate(GRID_BOTS[:3]):
+                    tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                    _act(bot, False, f"{tier_name} (DOWN drift — awaiting stability)")
+                _save_recentre_pending(state.price, "DOWN")
+                # Do NOT update grid center yet — update it when we actually redeploy
+            elif _can_act():
+                # UP drift — deploy immediately
+                _record_action()
                 redeploy_all_bots(GRID_BOTS, state.tiers)
-                # Only advance center AFTER bots successfully redeployed
                 update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
                 _save_redeploy_state(state.price, state.btc_ratio)
             else:
