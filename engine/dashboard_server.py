@@ -568,6 +568,24 @@ def redeploy_bot_endpoint(bot_id):
         time.sleep(1)
         signed_request("POST", f"/ver1/grid_bots/{bot_id}/enable")
 
+        # If this was the inner bot (index 0), persist deployed bounds so the
+        # OOB check in engine.py uses the actual deployed range, not a recalculated one.
+        if tier_idx == 0:
+            try:
+                from grid_logic import get_grid_state, update_grid_center
+                _gs = get_grid_state()
+                _inner_gw = tier.get("grid_width") or ((upper - lower) / 2)
+                update_grid_center(
+                    _gs["grid_center"],
+                    grid_width=_gs.get("grid_width_at_deploy"),
+                    inner_grid_width=_inner_gw,
+                    inner_center=(lower + upper) / 2,
+                    inner_grid_high=upper,
+                    inner_grid_low=lower,
+                )
+            except Exception as _ge:
+                pass  # non-fatal — bot is running, state update is best-effort
+
         return jsonify({
             "ok":     True,
             "bot_id": bot_id,
@@ -610,11 +628,15 @@ def force_redeploy_all():
         # Reset grid center to current price so drift detection stays accurate
         from grid_logic import update_grid_center
         inner_gw = None
+        inner_high = inner_low = None
         if tiers:
             t0 = tiers[0]
-            inner_gw = t0.get("grid_width") or ((t0.get("grid_high",0) - t0.get("grid_low",0)) / 2)
+            inner_gw   = t0.get("grid_width") or ((t0.get("grid_high",0) - t0.get("grid_low",0)) / 2)
+            inner_high = t0.get("grid_high")
+            inner_low  = t0.get("grid_low")
         update_grid_center(price, grid_width=grid_width,
-                          inner_grid_width=inner_gw, inner_center=price)
+                          inner_grid_width=inner_gw, inner_center=price,
+                          inner_grid_high=inner_high, inner_grid_low=inner_low)
 
         return jsonify({"ok": all_ok, "price": price, "center": price,
                        "msg": "All bots redeployed with budgets" if all_ok else "Some bots failed"})
