@@ -185,6 +185,8 @@ def get_grid_state():
         "grid_width_at_deploy":       data.get("grid_width_at_deploy"),
         "inner_grid_width_at_deploy": data.get("inner_grid_width_at_deploy"),
         "inner_center_at_deploy":     data.get("inner_center_at_deploy"),
+        "inner_grid_high_at_deploy":  data.get("inner_grid_high_at_deploy"),
+        "inner_grid_low_at_deploy":   data.get("inner_grid_low_at_deploy"),
     }
 
 
@@ -193,11 +195,13 @@ def get_grid_center():
 
 
 def update_grid_center(price, grid_width=None, inner_grid_width=None,
-                       inner_center=None):
+                       inner_center=None, inner_grid_high=None, inner_grid_low=None):
     """Save new grid center. grid_width should be the mid-tier width at deploy time
     so that the drift threshold stays locked to that deployment, not the current ATR.
     inner_grid_width: inner-tier half-range, used for inner-only drift detection.
-    inner_center: inner-tier centre after inner-only recentre (may differ from mid centre)."""
+    inner_center: inner-tier centre after inner-only recentre (may differ from mid centre).
+    inner_grid_high/low: actual deployed inner bot boundaries — used to detect when
+    the inner bot is out of sell/buy orders before the distance threshold fires."""
     state = {"grid_center": price}
     if grid_width is not None:
         state["grid_width_at_deploy"] = grid_width
@@ -205,6 +209,10 @@ def update_grid_center(price, grid_width=None, inner_grid_width=None,
         state["inner_grid_width_at_deploy"] = inner_grid_width
     if inner_center is not None:
         state["inner_center_at_deploy"] = inner_center
+    if inner_grid_high is not None:
+        state["inner_grid_high_at_deploy"] = inner_grid_high
+    if inner_grid_low is not None:
+        state["inner_grid_low_at_deploy"] = inner_grid_low
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 

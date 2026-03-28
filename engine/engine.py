@@ -450,9 +450,11 @@ def run():
         # of the last redeploy. Used for drift detection so that a temporary
         # ATR dip can't narrow the threshold and cause a premature recentre.
         # Falls back to current state.grid_width once it's calculated below.
-        state.deploy_grid_width  = _saved_grid.get("grid_width_at_deploy")
-        state.deploy_inner_gw    = _saved_grid.get("inner_grid_width_at_deploy")
-        state.deploy_inner_center = _saved_grid.get("inner_center_at_deploy")
+        state.deploy_grid_width       = _saved_grid.get("grid_width_at_deploy")
+        state.deploy_inner_gw         = _saved_grid.get("inner_grid_width_at_deploy")
+        state.deploy_inner_center     = _saved_grid.get("inner_center_at_deploy")
+        state.inner_grid_high_at_deploy = _saved_grid.get("inner_grid_high_at_deploy")
+        state.inner_grid_low_at_deploy  = _saved_grid.get("inner_grid_low_at_deploy")
         state.regime = detect_regime(df, TRENDLINE)
         state.session = get_session()
 
@@ -672,13 +674,17 @@ def run():
                 print("[SIMULATION] Would redeploy grid after stability cooldown")
                 update_grid_center(state.price, grid_width=state.grid_width,
                                    inner_grid_width=(_inner_tier_gw(state.tiers)),
-                                   inner_center=state.price)
+                                   inner_center=state.price,
+                                   inner_grid_high=state.tiers[0]["grid_high"] if state.tiers else None,
+                                   inner_grid_low=state.tiers[0]["grid_low"] if state.tiers else None)
             elif _can_act():
                 _record_action()
                 redeploy_all_bots(GRID_BOTS, state.tiers)
                 update_grid_center(state.price, grid_width=state.grid_width,
                                    inner_grid_width=(_inner_tier_gw(state.tiers)),
-                                   inner_center=state.price)
+                                   inner_center=state.price,
+                                   inner_grid_high=state.tiers[0]["grid_high"] if state.tiers else None,
+                                   inner_grid_low=state.tiers[0]["grid_low"] if state.tiers else None)
                 _save_redeploy_state(state.price, state.btc_ratio)
             else:
                 print(f"Rate limit — deferred recentre skipped this cycle, will retry")
@@ -744,7 +750,9 @@ def run():
                         redeploy_all_bots(GRID_BOTS, state.tiers)
                         update_grid_center(state.price, grid_width=state.grid_width,
                                           inner_grid_width=(_inner_tier_gw(state.tiers)),
-                                          inner_center=state.price)
+                                          inner_center=state.price,
+                                          inner_grid_high=state.tiers[0]["grid_high"] if state.tiers else None,
+                                          inner_grid_low=state.tiers[0]["grid_low"] if state.tiers else None)
                         _save_redeploy_state(state.price, state.btc_ratio)
                         print(f"  Grid redeployed at ${state.price:,.0f} after UP fakeout")
                     else:
@@ -763,7 +771,11 @@ def run():
                 print("Triggering grid redeploy at new price level")
 
                 if DRY_RUN:
-                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       inner_grid_width=(_inner_tier_gw(state.tiers)),
+                                       inner_center=state.price,
+                                       inner_grid_high=state.tiers[0]["grid_high"] if state.tiers else None,
+                                       inner_grid_low=state.tiers[0]["grid_low"] if state.tiers else None)
                     print(f"[SIMULATION] Would redeploy grid centered at ${state.price:,.0f}")
                     for i, bot_id in enumerate(GRID_BOTS[:3]):
                         tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
@@ -772,7 +784,11 @@ def run():
                 elif _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, state.tiers)
-                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       inner_grid_width=(_inner_tier_gw(state.tiers)),
+                                       inner_center=state.price,
+                                       inner_grid_high=state.tiers[0]["grid_high"] if state.tiers else None,
+                                       inner_grid_low=state.tiers[0]["grid_low"] if state.tiers else None)
                     _save_redeploy_state(state.price, state.btc_ratio)
                     clear_breakout_state()
                 else:
@@ -1227,7 +1243,11 @@ def run():
 
             if DRY_RUN:
                 # In dry run: update center so simulation doesn't re-trigger drift every cycle
-                update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
+                update_grid_center(state.price, grid_width=state.grid_width,
+                                   inner_grid_width=(_inner_tier_gw(state.tiers)),
+                                   inner_center=state.price,
+                                   inner_grid_high=state.tiers[0]["grid_high"] if state.tiers else None,
+                                   inner_grid_low=state.tiers[0]["grid_low"] if state.tiers else None)
                 print("[SIMULATION] Would redeploy grid bots with tiered ranges:")
                 for i, bot_id in enumerate(GRID_BOTS[:3]):
                     tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
@@ -1248,7 +1268,11 @@ def run():
                 # UP drift — deploy immediately
                 _record_action()
                 redeploy_all_bots(GRID_BOTS, state.tiers)
-                update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
+                update_grid_center(state.price, grid_width=state.grid_width,
+                                   inner_grid_width=(_inner_tier_gw(state.tiers)),
+                                   inner_center=state.price,
+                                   inner_grid_high=state.tiers[0]["grid_high"] if state.tiers else None,
+                                   inner_grid_low=state.tiers[0]["grid_low"] if state.tiers else None)
                 _save_redeploy_state(state.price, state.btc_ratio)
             else:
                 print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
@@ -1274,27 +1298,31 @@ def run():
             # Skip if we're already within 80% of the full drift threshold —
             # a full redeploy is imminent and will handle all 3 bots together.
             _near_full_drift = _inner_dist > _full_drift_threshold * 0.80
-            # Hard backstop: if deploy_inner_gw was missing (None), use the
-            # calculated inner tier bounds as a proxy. Fire if price has moved
-            # beyond the inner tier's upper or lower edge — bot is out of orders.
-            _inner_calc_tier = state.tiers[0] if state.tiers else {}
-            _inner_oob = (
-                state.price >= _inner_calc_tier.get("grid_high", float("inf")) * 0.98 or
-                state.price <= _inner_calc_tier.get("grid_low",  0)            * 1.02
-            )
-            # Also catch case where deploy_inner_gw was saved but inner bot is
-            # beyond its actual deployed boundary (price > ref + gw).
-            _inner_bound_breach = (
-                state.deploy_inner_gw is not None and (
-                    state.price > _inner_ref + state.deploy_inner_gw or
-                    state.price < _inner_ref - state.deploy_inner_gw
+            # Hard OOB: price has crossed the actual deployed inner bot boundary.
+            # Uses saved grid_high/grid_low from the last redeploy — exact values
+            # as configured on the bot, not recalculated from current ATR.
+            # Falls back to calculated tier bounds (with 98%/102% buffer) when
+            # no saved bounds exist (e.g. after a fresh state file).
+            _inner_deployed_high = getattr(state, 'inner_grid_high_at_deploy', None)
+            _inner_deployed_low  = getattr(state, 'inner_grid_low_at_deploy', None)
+            if _inner_deployed_high and _inner_deployed_low:
+                _inner_hard_oob = (
+                    state.price >= _inner_deployed_high or
+                    state.price <= _inner_deployed_low
                 )
-            )
-            if (_inner_dist > _inner_drift_threshold or _inner_oob or _inner_bound_breach) \
+                _inner_oob_source = f"deployed bounds ${_inner_deployed_low:,.0f}–${_inner_deployed_high:,.0f}"
+            else:
+                # Fallback: use calculated tier bounds with small buffer
+                _inner_calc_tier = state.tiers[0] if state.tiers else {}
+                _inner_hard_oob = (
+                    state.price >= _inner_calc_tier.get("grid_high", float("inf")) * 0.98 or
+                    state.price <= _inner_calc_tier.get("grid_low",  0)            * 1.02
+                )
+                _inner_oob_source = "calc tier (no saved bounds)"
+            if (_inner_dist > _inner_drift_threshold or _inner_hard_oob) \
                     and not _near_full_drift:
                 _trigger_reason = (
-                    "out-of-bounds (calc tier)" if _inner_oob else
-                    "bound breach (deploy ref)" if _inner_bound_breach else
+                    f"hard OOB — {_inner_oob_source}" if _inner_hard_oob else
                     f"dist ${_inner_dist:,.0f} > {_drift_inner_mult:.0%} of gw ${_inner_deploy_gw:,.0f} (threshold ${_inner_drift_threshold:,.0f})"
                 )
                 print(f"  Inner drift [{_trigger_reason}] — recentring narrow bot only")
@@ -1311,6 +1339,8 @@ def run():
                     state.deploy_inner_gw = _inner_tier_gw([inner_tier])
                     _new_inner_center = (inner_tier['grid_low'] + inner_tier['grid_high']) / 2
                     state.deploy_inner_center = _new_inner_center
+                    state.inner_grid_high_at_deploy = inner_tier["grid_high"]
+                    state.inner_grid_low_at_deploy  = inner_tier["grid_low"]
                     # Persist inner width + centre but keep mid centre unchanged
                     from grid_logic import get_grid_state as _get_gs
                     _gs = _get_gs()
@@ -1318,7 +1348,9 @@ def run():
                         _gs["grid_center"],
                         grid_width=_gs.get("grid_width_at_deploy"),
                         inner_grid_width=_inner_tier_gw([inner_tier]),
-                        inner_center=_new_inner_center)
+                        inner_center=_new_inner_center,
+                        inner_grid_high=inner_tier["grid_high"],
+                        inner_grid_low=inner_tier["grid_low"])
                     state._inner_drift_fired = True
                     print(f"  Narrow recentred. Mid/outer unchanged.")
                 else:
@@ -1412,7 +1444,11 @@ def run():
                 if _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, state.tiers)
-                    update_grid_center(state.price, grid_width=state.grid_width, inner_grid_width=(_inner_tier_gw(state.tiers)), inner_center=state.price)
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       inner_grid_width=(_inner_tier_gw(state.tiers)),
+                                       inner_center=state.price,
+                                       inner_grid_high=state.tiers[0]["grid_high"] if state.tiers else None,
+                                       inner_grid_low=state.tiers[0]["grid_low"] if state.tiers else None)
                     _save_redeploy_state(state.price, state.btc_ratio)
                 else:
                     print(f"  Rate limit reached — falling back to start_bot on regime transition")
