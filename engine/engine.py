@@ -175,9 +175,10 @@ FLOOD_COOLDOWN_SECS   = 1800   # 30 min bots-off after flood detected
 #  3. After STABILISE_MAX_CYCLES: force redeploy regardless (don't stay flat
 #     forever — an extended drop will need a fresh grid at some point).
 # ──────────────────────────────────────────────────────────────────────────────
-RECENTRE_PENDING_FILE  = "recentre_pending.json"
-STABILISE_MOVE_PCT     = 0.005   # 0.5% per-cycle move = market still active
-STABILISE_MAX_CYCLES   = 6       # ~12 min max wait before forcing redeploy
+RECENTRE_PENDING_FILE      = "recentre_pending.json"
+STABILISE_MOVE_PCT         = 0.005   # 0.5% per-cycle move = market still active
+STABILISE_MAX_CYCLES       = 6       # ~12 min max wait before forcing redeploy
+STABILISE_MIN_STABLE_CYCLES = 2      # require 2 consecutive stable cycles before deploying
 
 
 def _save_recentre_pending(price: float, direction: str) -> None:
@@ -221,6 +222,8 @@ def _check_recentre_pending(current_price: float) -> tuple:
               f"forcing redeploy at ${current_price:,.0f}")
         return "deploy", rp
 
+    stable_cycles = rp.get("stable_cycles", 0)
+
     if ref_price:
         still_falling = (direction == "DOWN" and
                          current_price < ref_price * (1 - STABILISE_MOVE_PCT))
@@ -228,9 +231,11 @@ def _check_recentre_pending(current_price: float) -> tuple:
                          current_price > ref_price * (1 + STABILISE_MOVE_PCT))
 
         if still_falling or still_rising:
+            # Price still moving — reset stable counter and update reference
             move_pct = abs(current_price - ref_price) / ref_price
             rp["price_at_pending"] = current_price
             rp["cycles_waited"]    = cycles_waited + 1
+            rp["stable_cycles"]    = 0
             try:
                 with open(RECENTRE_PENDING_FILE, "w") as f:
                     json.dump(rp, f)
@@ -241,9 +246,24 @@ def _check_recentre_pending(current_price: float) -> tuple:
                   f"holding off, cycle {cycles_waited + 1}/{STABILISE_MAX_CYCLES}")
             return "pending", rp
 
-    # Price has stabilised (or ref_price missing)
-    print(f"  Recentre cooldown: price stabilised — deploying at ${current_price:,.0f}")
-    return "deploy", rp
+    # Price is stable this cycle — increment stable counter
+    stable_cycles += 1
+    rp["stable_cycles"] = stable_cycles
+    rp["cycles_waited"] = cycles_waited + 1
+    try:
+        with open(RECENTRE_PENDING_FILE, "w") as f:
+            json.dump(rp, f)
+    except Exception:
+        pass
+
+    if stable_cycles >= STABILISE_MIN_STABLE_CYCLES:
+        print(f"  Recentre cooldown: {stable_cycles} stable cycles confirmed — "
+              f"deploying at ${current_price:,.0f}")
+        return "deploy", rp
+
+    print(f"  Recentre cooldown: stable cycle {stable_cycles}/{STABILISE_MIN_STABLE_CYCLES} — "
+          f"waiting for one more before deploy")
+    return "pending", rp
 
 
 def _clear_recentre_pending() -> None:
@@ -759,17 +779,23 @@ def run():
                     print(f"Rate limit reached — skipping exhaustion redeploy")
                 return   # redeploy done (or skipped) — don't fall through to bot-stop logic
 
-            # DOWN breakout recovery: clear only when price recovers > 1.5×ATR above
-            # the fire price. Until then bots stay off unconditionally.
+            # DOWN breakout recovery: clear when price recovers above threshold.
+            # Threshold is tighter (0.75×ATR) once regime has returned to RANGE —
+            # the regime detector has already confirmed the trend is over, so we
+            # don't need a full 1.5×ATR recovery to feel safe restarting bots.
             if _active_dir == "DOWN":
-                _recovery_threshold = _fire_price + state.atr * 1.5
+                _in_range = (state.regime == "RANGE")
+                _atr_mult = 0.75 if _in_range else 1.5
+                _recovery_threshold = _fire_price + state.atr * _atr_mult
                 if state.price >= _recovery_threshold:
                     print(f"BREAKOUT_DOWN recovery — ${state.price:,.0f} above "
-                          f"fire+1.5×ATR (${_recovery_threshold:,.0f}) — clearing breakout")
+                          f"fire+{_atr_mult}×ATR (${_recovery_threshold:,.0f}) — clearing breakout"
+                          f"{' [RANGE regime — reduced threshold]' if _in_range else ''}")
                     clear_breakout_state()
                     # Fall through: bots off this cycle, normal logic next cycle
                 else:
                     print(f"BREAKOUT_DOWN holding — recovery needs ${_recovery_threshold:,.0f} "
+                          f"({_atr_mult}×ATR, regime={state.regime}) "
                           f"(currently ${state.price:,.0f}, need +${_recovery_threshold - state.price:,.0f})")
                 for i, bot in enumerate(GRID_BOTS[:3]):
                     tier_name = state.tiers[i]["name"] if i < len(state.tiers) else "bot"
