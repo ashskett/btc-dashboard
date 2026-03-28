@@ -1873,7 +1873,12 @@ function applyFillMarkers(){
   fillsData
     .filter(f => f.price > 0 && f.time)
     .forEach(f => {
-      const snapped = Math.floor(new Date(f.time).getTime() / 1000 / gran) * gran;
+      // Normalise timestamp: handle Unix seconds, ISO strings, and "2026-03-25 08:43:00 UTC" format
+      const normMs = typeof f.time === 'number'
+        ? f.time * 1000
+        : new Date(String(f.time).replace(' UTC','Z').replace(' ','T')).getTime();
+      if (!normMs || isNaN(normMs)) return;
+      const snapped = Math.floor(normMs / 1000 / gran) * gran;
       const isSell  = f.side === 'SELL';
       const key     = `${snapped}_${isSell ? 'S' : 'B'}`;
       if (!seen.has(key)) {
@@ -3175,9 +3180,12 @@ function renderTlCanvas(){
     const ax1 = tToX(tl.t1), ay1 = pToY(tl.p1);
     const ax2 = tToX(tl.t2), ay2 = pToY(tl.p2);
 
+    const isActive = !!tl.active;
     tlCtx.save();
-    tlCtx.setLineDash([6,4]);
-    tlCtx.strokeStyle = tl.color; tlCtx.lineWidth = 1.5; tlCtx.globalAlpha = 0.9;
+    tlCtx.setLineDash(isActive ? [] : [6,4]);
+    tlCtx.strokeStyle = tl.color;
+    tlCtx.lineWidth   = isActive ? 3 : 1.5;
+    tlCtx.globalAlpha = isActive ? 1.0 : 0.65;
     tlCtx.beginPath(); tlCtx.moveTo(0, ly); tlCtx.lineTo(cvs.width, ry); tlCtx.stroke();
 
     [[ax1,ay1],[ax2,ay2]].forEach(([dx,dy])=>{

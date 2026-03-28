@@ -1724,20 +1724,33 @@ def notifications():
             events.append({"ts": ts, "type": "INNER_DRIFT", "severity": "info",
                            "msg": f"Narrow bot recentred (inner drift)  (${price:,.0f})"})
 
-        # Bot actions — log start/stop transitions with reasons
-        actions = e.get("bot_actions") or []
+        # Bot actions — group all 3 bot transitions into a single event per cycle
+        actions      = e.get("bot_actions") or []
         prev_actions = prev.get("bot_actions") or []
-        # Build current and previous bot states from actions
-        _cur_bots = {a["bot"]: a for a in actions}
-        _prev_bots = {a["bot"]: a for a in prev_actions}
+        _cur_bots    = {a["bot"]: a for a in actions}
+        _prev_bots   = {a["bot"]: a for a in prev_actions}
+        _stops, _starts = [], []
         for bot_id, a in _cur_bots.items():
             prev_a = _prev_bots.get(bot_id)
-            # Log when a bot transitions from start→stop or stop→start
             if prev_a and prev_a["action"] != a["action"]:
-                action_lbl = "STARTED" if a["action"] == "start" else "STOPPED"
-                sev = "info" if a["action"] == "start" else "warning"
-                events.append({"ts": ts, "type": "BOT_ACTION", "severity": sev,
-                               "msg": f"{a['reason']} {action_lbl}  (${price:,.0f})"})
+                if a["action"] == "stop":
+                    _stops.append(a.get("reason", bot_id))
+                else:
+                    _starts.append(a.get("reason", bot_id))
+        # Emit one grouped event instead of three individual ones
+        if _stops:
+            # Extract the unique reason (strip tier prefix — "inner (fill-flood)" → "fill-flood")
+            reasons = list({r.split("(")[-1].rstrip(")").strip() if "(" in r else r for r in _stops})
+            reason_str = " / ".join(reasons)
+            n = len(_stops)
+            events.append({"ts": ts, "type": "BOT_ACTION", "severity": "warning",
+                           "msg": f"{n} bot{'s' if n>1 else ''} STOPPED — {reason_str}  (${price:,.0f})"})
+        if _starts:
+            reasons = list({r.split("(")[-1].rstrip(")").strip() if "(" in r else r for r in _starts})
+            reason_str = " / ".join(reasons)
+            n = len(_starts)
+            events.append({"ts": ts, "type": "BOT_ACTION", "severity": "info",
+                           "msg": f"{n} bot{'s' if n>1 else ''} STARTED — {reason_str}  (${price:,.0f})"})
 
         prev = e
 
