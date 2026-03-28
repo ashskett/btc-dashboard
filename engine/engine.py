@@ -1274,10 +1274,30 @@ def run():
             # Skip if we're already within 80% of the full drift threshold —
             # a full redeploy is imminent and will handle all 3 bots together.
             _near_full_drift = _inner_dist > _full_drift_threshold * 0.80
-            if _inner_dist > _inner_drift_threshold and not _near_full_drift:
-                print(f"  Inner drift: dist=${_inner_dist:,.0f} > {_drift_inner_mult:.0%} of inner_gw "
-                      f"${_inner_deploy_gw:,.0f} (threshold=${_inner_drift_threshold:,.0f})"
-                      f" — recentring narrow bot only")
+            # Hard backstop: if deploy_inner_gw was missing (None), use the
+            # calculated inner tier bounds as a proxy. Fire if price has moved
+            # beyond the inner tier's upper or lower edge — bot is out of orders.
+            _inner_calc_tier = state.tiers[0] if state.tiers else {}
+            _inner_oob = (
+                state.price >= _inner_calc_tier.get("grid_high", float("inf")) * 0.98 or
+                state.price <= _inner_calc_tier.get("grid_low",  0)            * 1.02
+            )
+            # Also catch case where deploy_inner_gw was saved but inner bot is
+            # beyond its actual deployed boundary (price > ref + gw).
+            _inner_bound_breach = (
+                state.deploy_inner_gw is not None and (
+                    state.price > _inner_ref + state.deploy_inner_gw or
+                    state.price < _inner_ref - state.deploy_inner_gw
+                )
+            )
+            if (_inner_dist > _inner_drift_threshold or _inner_oob or _inner_bound_breach) \
+                    and not _near_full_drift:
+                _trigger_reason = (
+                    "out-of-bounds (calc tier)" if _inner_oob else
+                    "bound breach (deploy ref)" if _inner_bound_breach else
+                    f"dist ${_inner_dist:,.0f} > {_drift_inner_mult:.0%} of gw ${_inner_deploy_gw:,.0f} (threshold ${_inner_drift_threshold:,.0f})"
+                )
+                print(f"  Inner drift [{_trigger_reason}] — recentring narrow bot only")
                 inner_tier = state.tiers[0]
                 if DRY_RUN:
                     print(f"  [SIM] Would redeploy narrow bot: "
