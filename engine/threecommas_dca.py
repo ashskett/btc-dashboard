@@ -1,5 +1,5 @@
 """
-threecommas_dca.py — 3Commas DCA bot API integration.
+threecommas_dca.py — 3Commas DCA bot + SmartTrade API integration.
 
 DCA (Dollar-Cost Average) bots are directional. They place a base order
 when launched, then place safety orders at fixed % drops below entry,
@@ -293,3 +293,82 @@ def estimate_max_exposure(
         total += so
         so *= safety_order_volume_mult
     return round(total, 2)
+
+
+# ── SmartTrade API ─────────────────────────────────────────────────────────────
+
+def create_smart_trade(
+    pair: str,
+    sell_btc_qty: float,
+    tp_steps: list,
+    sl_pct: float,
+    label: str = "",
+) -> dict:
+    """
+    Create a spot SmartTrade SELL: sell BTC at market, take profit at steps
+    below entry, stop loss above entry.
+
+    Used by the engine when a support_failure DOWN target fires:
+      sell_btc_qty — BTC to sell (e.g. 0.15 for 15% of 1.0 BTC holdings)
+      tp_steps     — list of {profit_pct, close_pct} dicts, same format
+                     as DCA dca_tp_steps.  profit_pct = % below entry to TP;
+                     close_pct = % of position to close at that step.
+                     All close_pct values should sum to 100.
+      sl_pct       — % above entry price to cut losses (e.g. 1.5 = 1.5% above)
+      label        — human-readable note in 3Commas UI
+
+    Returns the full API response dict (contains 'id' for the SmartTrade).
+    Raises ValueError on API error.
+    """
+    # TP steps: profit_pct below entry (negative percent for sell position),
+    # close_pct is the volume (% of position) to close at each step.
+    tp_step_list = [
+        {
+            "order_type":  "limit",
+            "volume":      round(float(s["close_pct"]), 2),
+            "price": {
+                "value":   str(round(-abs(float(s["profit_pct"])), 2)),
+                "type":    "percent",     # relative to average entry price
+            },
+            "trailing": {"enabled": False},
+        }
+        for s in tp_steps
+    ]
+
+    body = {
+        "account_id": int(ACCOUNT_ID),
+        "pair":       pair,
+        "note":       label,
+        "position": {
+            "type":        "sell",
+            "units":       {"value": str(round(sell_btc_qty, 8))},
+            "order_type":  "market",
+        },
+        "take_profit": {
+            "enabled": True,
+            "steps":   tp_step_list,
+        },
+        "stop_loss": {
+            "enabled":    bool(sl_pct and sl_pct > 0),
+            "order_type": "market",
+            "price": {
+                "value": str(round(abs(float(sl_pct)), 2)),
+                "type":  "percent",   # positive = above entry for a sell
+            },
+        },
+        "leverage": {"enabled": False},
+    }
+
+    r = _signed_request("POST", "/ver1/smart_trades/v2", body=body)
+    if not r.ok:
+        raise ValueError(f"3Commas SmartTrade {r.status_code}: {r.text[:500]}")
+    return r.json()
+
+
+def close_smart_trade(smart_trade_id: str) -> bool:
+    """Close/cancel an open SmartTrade (market-close the position)."""
+    r = _signed_request("POST", f"/ver1/smart_trades/{smart_trade_id}/close_by_market")
+    ok = r.status_code in (200, 201)
+    if not ok:
+        print(f"Warning: close_smart_trade {smart_trade_id} returned {r.status_code}: {r.text[:200]}")
+    return ok

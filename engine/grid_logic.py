@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 from liquidity import find_liquidity_levels, generate_liquidity_grid
 
@@ -31,8 +32,8 @@ FEE_BUFFER      = 1.5      # safety multiplier: step must be 1.5× the break-eve
 # step (1.27× ATR floor) — still 4% above fee floor, meaningfully more fills.
 TIERS = [
     {"name": "inner", "range_mult": 0.75, "base_levels": 10, "wkd_fee_buffer": 1.2, "compression_mult": 1.5},
-    {"name": "mid",   "range_mult": 1.5,  "base_levels": 6,  "compression_mult": 1.2},  # was 8 — reduced to keep step ~30% above fee floor
-    {"name": "outer", "range_mult": 2.0,  "base_levels": 6,  "compression_mult": 1.0},  # safety net — range tightened (recentre+flash guard cover extremes)
+    {"name": "mid",   "range_mult": 1.5,  "base_levels": 6,  "compression_mult": 1.2},
+    {"name": "outer", "range_mult": 2.0,  "base_levels": 4,  "compression_mult": 1.0},  # tightened from 3.0/6 — extreme outer levels are never reached due to recentre logic
 ]
 
 
@@ -40,11 +41,18 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
                 range_mult, base_levels, compression, wkd_fee_buffer=None,
                 compression_mult=1.5, trend_tilt=0.0):
     """Build grid parameters for a single tier."""
+    # Volatility ratio vs historical mean — computed before weekend ATR floor
+    # so it reflects actual market conditions, not the artificial floor.
+    # Replaces the old session +2/-2 adjustment (ASIA +2, US -2) which was
+    # time-of-day bias; this is actual market-condition sensitivity.
+    atr_mean = df["atr"].mean() if df is not None and "atr" in df.columns and len(df) > 5 else atr
+    vol_ratio = atr / atr_mean if atr_mean > 0 else 1.0
+
     # Weekend ATR floor: quiet Sat/Sun can push ATR so low that the fee guard
     # collapses inner/mid to 2 levels with $500+ steps — no fills possible.
     # Floor at 1% of price (≈$840 at $84k) so there is always enough range
     # for at least 4–5 meaningful levels across the tiers.
-    if session.startswith("WKD_"):
+    if session == "WKD" or session.startswith("WKD_"):
         atr = max(atr, price * 0.010)
 
     grid_width = calculate_grid_width(atr) * range_mult
@@ -68,16 +76,20 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
         grid_low  = price - grid_width - tilt + trend_shift
         grid_high = price + grid_width - tilt + trend_shift
 
-    # Level count — compression and session adjustments
+    # Level count — compression boost + volatility-sensitive adjustment.
+    # High vol (ATR > 1.3× mean): add 2 levels — more oscillation = more fills.
+    # Low vol (ATR < 0.75× mean): remove 2 levels — fewer moves, steps need to stay
+    # wide enough to be profitable. Fee guard enforces the hard floor.
+    # This replaces the old session-based +2/-2 (ASIA/US) which was time-of-day
+    # bias and didn't adapt to actual market conditions.
     levels = base_levels
     if compression:
         levels = int(levels * compression_mult)   # denser grids when vol is squeezed
-    if session in ("ASIA", "WKD_ASIA"):
+    if vol_ratio > 1.3:
         levels += 2
-    elif session == "US":
+    elif vol_ratio < 0.75:
         levels -= 2
-    # WKD_US: no penalty — weekend US is already thin; don't reduce density further
-    levels = max(levels, 6)
+    levels = max(levels, 4)
 
     step = (grid_high - grid_low) / levels
 
@@ -86,7 +98,7 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
     # Step must exceed round-trip fees × safety buffer to guarantee profit.
     # On weekends the inner tier uses a tighter buffer (wkd_fee_buffer) so the
     # fee guard allows more levels within the same range.
-    effective_fee_buffer = (wkd_fee_buffer if wkd_fee_buffer and session.startswith("WKD_")
+    effective_fee_buffer = (wkd_fee_buffer if wkd_fee_buffer and (session == "WKD" or session.startswith("WKD_"))
                             else FEE_BUFFER)
     min_step = price * ROUND_TRIP_FEE * effective_fee_buffer
     if step < min_step:
@@ -169,64 +181,81 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df, trend_tilt=
     }
 
 
+MIN_REDEPLOY_INTERVAL_SECS = 1200  # 20 min minimum between grid recentres
+                                    # Prevents flood-recentring when price oscillates
+                                    # around the drift threshold on 2-min cycles.
+
+
 def get_grid_state():
     """Return saved grid state dict with grid_center and grid_width_at_deploy."""
     if not os.path.exists(STATE_FILE):
         center = 68000
         with open(STATE_FILE, "w") as f:
             json.dump({"grid_center": center}, f)
-        return {"grid_center": center, "grid_width_at_deploy": None}
+        return {"grid_center": center, "grid_width_at_deploy": None, "last_redeploy_ts": 0}
 
     with open(STATE_FILE) as f:
         data = json.load(f)
 
     return {
-        "grid_center":                data.get("grid_center", 68000),
-        "grid_width_at_deploy":       data.get("grid_width_at_deploy"),
-        "inner_grid_width_at_deploy": data.get("inner_grid_width_at_deploy"),
-        "inner_center_at_deploy":     data.get("inner_center_at_deploy"),
-        "inner_grid_high_at_deploy":  data.get("inner_grid_high_at_deploy"),
-        "inner_grid_low_at_deploy":   data.get("inner_grid_low_at_deploy"),
+        "grid_center":          data.get("grid_center", 68000),
+        "grid_width_at_deploy": data.get("grid_width_at_deploy"),
+        "last_redeploy_ts":     data.get("last_redeploy_ts", 0),
     }
+
+
+def redeploy_allowed() -> tuple[bool, float]:
+    """
+    Flood-fill guard: returns (allowed, secs_remaining).
+    Blocks grid recentres that happen too close together — if price oscillates
+    around the drift threshold on 2-min cycles we'd otherwise redeploy every
+    few minutes, eating fees and dragging the grid through a ranging market.
+    """
+    data = {}
+    if os.path.exists(STATE_FILE):
+        try:
+            data = json.load(open(STATE_FILE))
+        except Exception:
+            pass
+    last_ts = data.get("last_redeploy_ts", 0)
+    elapsed = time.time() - last_ts
+    remaining = max(0.0, MIN_REDEPLOY_INTERVAL_SECS - elapsed)
+    return remaining == 0, remaining
 
 
 def get_grid_center():
     return get_grid_state()["grid_center"]
 
 
-def update_grid_center(price, grid_width=None, inner_grid_width=None,
-                       inner_center=None, inner_grid_high=None, inner_grid_low=None):
-    """Save new grid center. grid_width should be the mid-tier width at deploy time
-    so that the drift threshold stays locked to that deployment, not the current ATR.
-    inner_grid_width: inner-tier half-range, used for inner-only drift detection.
-    inner_center: inner-tier centre after inner-only recentre (may differ from mid centre).
-    inner_grid_high/low: actual deployed inner bot boundaries — used to detect when
-    the inner bot is out of sell/buy orders before the distance threshold fires."""
-    state = {"grid_center": price}
+def update_grid_center(price, grid_width=None):
+    """Save new grid center and stamp last_redeploy_ts for the flood-fill guard.
+    grid_width should be the mid-tier width at deploy time so that the drift
+    threshold stays locked to that deployment, not the current ATR."""
+    # Preserve all existing fields (last_redeploy_ts etc.) — read first
+    existing = {}
+    if os.path.exists(STATE_FILE):
+        try:
+            existing = json.load(open(STATE_FILE))
+        except Exception:
+            pass
+    existing["grid_center"]      = price
+    existing["last_redeploy_ts"] = time.time()
     if grid_width is not None:
-        state["grid_width_at_deploy"] = grid_width
-    if inner_grid_width is not None:
-        state["inner_grid_width_at_deploy"] = inner_grid_width
-    if inner_center is not None:
-        state["inner_center_at_deploy"] = inner_center
-    if inner_grid_high is not None:
-        state["inner_grid_high_at_deploy"] = inner_grid_high
-    if inner_grid_low is not None:
-        state["inner_grid_low_at_deploy"] = inner_grid_low
+        existing["grid_width_at_deploy"] = grid_width
     with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
+        json.dump(existing, f)
 
 
-def drift_detected(price, center, grid_width, tilt=0, threshold_mult=0.85):
+def drift_detected(price, center, grid_width, tilt=0):
     """
     Check if price has drifted beyond the threshold from the tilt-adjusted
     grid center.
 
-    threshold_mult is session-aware: tighter in ASIA (0.65) for aggressive
-    recentring, wider in US (0.90) to ride bigger moves. Default 0.85
-    (EUROPE baseline) preserves old behaviour when not specified.
+    Threshold is 85% of grid_width (the mid-tier half-range locked at deploy
+    time). Using 85% instead of the old 75% gives the bots more room to
+    oscillate and complete grid cycles before recentring.
     """
     adjusted_center = center + tilt
     drift = abs(price - adjusted_center)
-    threshold = grid_width * threshold_mult
+    threshold = grid_width * 0.85
     return drift > threshold
