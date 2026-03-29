@@ -368,9 +368,10 @@ function initCharts() {
 // ── Load Data ──
 async function loadData() {
   try {
-    const r = await fetch('/portfolio/log');
+    const r = await apiFetch('/portfolio/log');
+    if (!r.ok) { console.error('portfolio/log error:', r.status); return; }
     allData = await r.json();
-    if (!allData.length) return;
+    if (!Array.isArray(allData) || !allData.length) return;
 
     updateKpis();
     updateCharts();
@@ -440,7 +441,7 @@ function updateKpis() {
 
 async function loadFillCount() {
   try {
-    const r = await fetch('/bots/fills');
+    const r = await apiFetch('/bots/fills');
     const fills = await r.json();
     if (Array.isArray(fills)) {
       document.getElementById('kFills').textContent = fills.length;
@@ -619,7 +620,7 @@ document.querySelectorAll('#dpTfPills .tf-pill').forEach(btn => {
 
 async function loadGridProfit() {
   try {
-    const r = await fetch('/bots/daily-profit');
+    const r = await apiFetch('/bots/daily-profit');
     if (!r.ok) return;
     const data = await r.json();
     if (data.error) return;
