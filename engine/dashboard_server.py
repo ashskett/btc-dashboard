@@ -1891,6 +1891,7 @@ def engine_stop():
 _DEPLOY_FILES = [
     "dashboard.html",
     "dashboard_mobile.html",
+    "pnl.html",
     "dashboard_server.py",
     "threecommas.py",
     "threecommas_dca.py",
