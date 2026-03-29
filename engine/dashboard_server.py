@@ -53,7 +53,7 @@ def _ensure_secret():
 
 _ensure_secret()
 
-_PUBLIC_PATHS = {"/", "/ping", "/deploy", "/account/balance/raw", "/macro", "/macro/mobile", "/mobile", "/notifications", "/pnl-page"}
+_PUBLIC_PATHS = {"/", "/ping", "/deploy", "/account/balance/raw", "/macro", "/macro/mobile", "/mobile", "/notifications", "/pnl-page", "/pnl-page/"}
 
 @app.before_request
 def check_token():
@@ -169,7 +169,7 @@ def ping():
 def index():
     return send_from_directory('.', 'dashboard.html')
 
-@app.route("/pnl-page")
+@app.route("/pnl-page", strict_slashes=False)
 def pnl_page():
     return send_from_directory('.', 'pnl.html')
 
