@@ -251,6 +251,18 @@ input[type="range"].skew-range { accent-color:var(--purple); }
 }
 #dryBanner.show { display:block; }
 
+/* ── FLASH MOVE ALERT ── */
+#fmAlert {
+  display:none; padding:10px 16px; font-size:12px; font-weight:700;
+  letter-spacing:.04em; text-align:center; border-bottom:2px solid; line-height:1.5;
+}
+#fmAlert.show { display:block; }
+#fmAlert .clr-btn {
+  display:inline-block; margin-top:6px; font-size:10px; padding:3px 10px;
+  border-radius:4px; background:rgba(255,255,255,.08); border:1px solid currentColor;
+  color:inherit; cursor:pointer;
+}
+
 .section-no-pad { padding:0; border-bottom:1px solid var(--border); }
 .section-inner  { padding:14px 16px; }
 
@@ -274,6 +286,12 @@ input[type="range"].skew-range { accent-color:var(--purple); }
 <div id="boAlert">
   <span id="boMsg"></span><br>
   <span class="clr-btn" onclick="clearBreakout()">Clear ✕</span>
+</div>
+
+<!-- FLASH MOVE ALERT -->
+<div id="fmAlert">
+  <span id="fmMsg"></span><br>
+  <span class="clr-btn" onclick="clearFlashMove()">Clear ✕</span>
 </div>
 
 <!-- STATUS SECTION -->
@@ -467,7 +485,7 @@ let invOverrideActive = false;
 let prevPrice = null;
 let overrideOpen = false;
 let trendlines = [];
-const KEY_LEVEL = 74000;
+let priceTargets = [];
 
 const f = v => `$${Number(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}`;
 const f2 = v => `$${Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
@@ -502,12 +520,19 @@ function updateTrendlineDisplay() {
     tlEl.style.color = 'var(--muted)';
   }
 
+  // Key level — nearest active armed target to current price
   const klEl = document.getElementById('sKeyLevel');
-  klEl.textContent = '$' + KEY_LEVEL.toLocaleString();
-  if (status.price) {
-    klEl.style.color = status.price >= KEY_LEVEL ? 'var(--green)' : 'var(--red)';
+  const armed = priceTargets.filter(t => t.active && !t.fired);
+  if (armed.length && status.price) {
+    const nearest = armed.reduce((a, b) =>
+      Math.abs(b.trigger_price - status.price) < Math.abs(a.trigger_price - status.price) ? b : a);
+    const phase = nearest.sf_phase ? ` [${nearest.sf_phase}]` : '';
+    klEl.textContent = '$' + Math.round(nearest.trigger_price).toLocaleString() + phase;
+    klEl.style.color = status.price >= nearest.trigger_price ? 'var(--green)' : 'var(--red)';
+    klEl.title = nearest.label || '';
   } else {
-    klEl.style.color = 'var(--text)';
+    klEl.textContent = '—';
+    klEl.style.color = 'var(--muted)';
   }
 }
 
@@ -614,6 +639,24 @@ async function pollStatus() {
     Object.entries(modes).forEach(([k,[id,cls]]) => {
       document.getElementById(id).className = `mbtn ${d.inventory_mode===k ? cls : ''}`;
     });
+
+    // Flash move alert
+    const fmEl = document.getElementById('fmAlert');
+    if (d.flash_move_active) {
+      const dir    = d.flash_move_active;
+      const isDown = dir === 'DOWN';
+      const col    = isDown ? 'var(--red)' : 'var(--green)';
+      const bg     = isDown ? 'rgba(255,61,90,.18)' : 'rgba(0,230,118,.12)';
+      const cd     = d.flash_move_cooldown || 0;
+      fmEl.style.background  = bg;
+      fmEl.style.borderColor = col;
+      fmEl.style.color       = col;
+      fmEl.classList.add('show');
+      document.getElementById('fmMsg').textContent =
+        `⚡ FLASH MOVE ${dir} — bots paused  cooldown: ${cd} cycle${cd===1?'':'s'}`;
+    } else {
+      fmEl.classList.remove('show');
+    }
 
     // Breakout alert
     const boEl = document.getElementById('boAlert');
@@ -875,6 +918,28 @@ async function clearBreakout() {
   } catch(e) { toast(`Error: ${e.message}`, 'err'); }
 }
 
+// ── FLASH MOVE ────────────────────────────────────────────────────────────────
+async function clearFlashMove() {
+  try {
+    await fetch('/flash-move/clear', { method:'POST' });
+    document.getElementById('fmAlert').classList.remove('show');
+    toast('Flash move cleared', 'ok');
+  } catch(e) { toast(`Error: ${e.message}`, 'err'); }
+}
+
+// ── PRICE TARGETS ─────────────────────────────────────────────────────────────
+async function loadTargets() {
+  try {
+    const r = await fetch('/targets');
+    if (!r.ok) return;
+    const data = await r.json();
+    if (Array.isArray(data)) {
+      priceTargets = data;
+      updateTrendlineDisplay();
+    }
+  } catch(e) {}
+}
+
 // ── MACRO ────────────────────────────────────────────────────────────────────
 function sigCol(s) {
   return s==='bull'?'#00e676': s==='bear'?'#ff3d5a': '#ffab00';
@@ -954,14 +1019,16 @@ fetchBalance();
 fetchInventoryStatus();
 fetchMacro();
 loadTrendlines();
+loadTargets();
 
 setInterval(pollStatus,             30000);
 setInterval(loadBots,               60000);
 setInterval(fetchBalance,           60000);
 setInterval(fetchInventoryStatus,  120000);
 setInterval(fetchMacro,           300000);
-setInterval(loadTrendlines,         60000);  // refresh trendline from server each minute
-setInterval(updateTrendlineDisplay,  5000); // tick level every 5s (slope moves it over time)
+setInterval(loadTrendlines,         60000);
+setInterval(loadTargets,            60000);
+setInterval(updateTrendlineDisplay,  5000);
 </script>
 </body>
 </html>
