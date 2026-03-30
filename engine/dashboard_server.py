@@ -1898,6 +1898,7 @@ _DEPLOY_FILES = [
     "grid_logic.py",
     "session.py",
     "engine.py",
+    "notify.py",
     "regime.py",
     "market_data.py",
     "breakout.py",

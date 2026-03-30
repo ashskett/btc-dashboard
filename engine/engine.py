@@ -139,9 +139,10 @@ MIN_BTC = 0.20   # hard stop — staggered below inventory.py LOWER_BAND (0.55)
 
 
 _last_run_ts = 0
+_prev_regime: str | None = None
 
 def run():
-    global _last_run_ts
+    global _last_run_ts, _prev_regime
     now = time.time()
     if now - _last_run_ts < 100:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
@@ -690,6 +691,27 @@ def run():
                 return
 
         # ===============================
+        # REGIME TRANSITION REDEPLOY
+        # ===============================
+        # When coming out of a "stopped" regime (TREND_DOWN / COMPRESSION) into
+        # an active one, bots were off for hours and their stored grid ranges are
+        # stale. Redeploy at the current price rather than calling start_bot(),
+        # which would restart bots at their old, potentially distant ranges.
+        _STOPPED_REGIMES = {"TREND_DOWN", "COMPRESSION"}
+        if _prev_regime in _STOPPED_REGIMES and state.regime not in _STOPPED_REGIMES:
+            print(f"Regime transition {_prev_regime} → {state.regime} — redeploying at ${state.price:,.0f}")
+            notify(f"Regime {_prev_regime} → {state.regime} — grid redeployed at ${state.price:,.0f}")
+            if DRY_RUN:
+                print(f"[SIMULATION] Would redeploy grid at ${state.price:,.0f}")
+            elif _can_act():
+                _record_action()
+                redeploy_all_bots(GRID_BOTS, state.tiers)
+                update_grid_center(state.price, grid_width=state.grid_width)
+            else:
+                print(f"Rate limit reached — skipping regime-transition redeploy")
+            return
+
+        # ===============================
         # INVENTORY PROTECTION
         # ===============================
         if state.inventory_mode == "SELL_ONLY":
@@ -758,10 +780,10 @@ def run():
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
                 _act(bot, i >= 2, tier_name)
 
-        elif state.trending_up and state.regime != "RANGE":
+        elif state.trending_up and state.regime not in ("RANGE", "TREND_UP"):
             # Price running hard above trendline AND regime confirms directional move.
-            # In RANGE regime, high gap_ratio just means price is sitting comfortably
-            # above a support trendline — not actually trending. Inner should run there.
+            # Excludes RANGE (price above support, not a real trend) and TREND_UP
+            # (already confirmed uptrend — all bots run for pullback fills).
             print(f"TRENDING UP (gap={state.gap_ratio:.2f}×ATR, regime={state.regime}) — inner off, mid+outer running")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
@@ -842,16 +864,21 @@ def run():
                 except Exception as _e:
                     print(f"Warning: could not write portfolio_log.jsonl: {_e}")
 
-schedule.every(2).minutes.do(run)
+            # Track regime across cycles for transition detection
+            if state.regime:
+                _prev_regime = state.regime
 
-# Run once immediately
-run()
+if __name__ == "__main__":
+    schedule.every(2).minutes.do(run)
 
-print("Engine running...")
+    # Run once immediately on startup
+    run()
 
-try:
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-except KeyboardInterrupt:
-    print("\nEngine stopped safely.")
+    print("Engine running...")
+
+    try:
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nEngine stopped safely.")

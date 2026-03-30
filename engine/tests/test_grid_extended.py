@@ -113,51 +113,73 @@ class TestFeeGuard:
         assert inner_wkd >= inner_wkday
 
 
-# ── Session level adjustments ─────────────────────────────────────────────
+# ── Volatility-based level adjustments ────────────────────────────────────
 
 class TestSessionLevelAdjustments:
     """
-    Base levels for mid tier = 6.
-    ASIA    → +2 → 8
-    US      → -2 → 4 (minimum 6 due to max(..., 6))
-    EUROPE  → no adjustment → 6
-    WKD_ASIA → +2 → 8
+    Session-based +2/-2 level adjustments were replaced with volatility-based
+    adjustments (ATR vs rolling ATR mean). Session is no longer the driver.
 
-    Note: fee guard may further reduce levels if step < min_step.
-    We use a large ATR to keep step well above the fee floor.
+    New rules (in _build_tier):
+      vol_ratio = atr / df.atr.mean()
+      vol_ratio > 1.3  → levels +2  (high vol: more fills possible)
+      vol_ratio < 0.75 → levels -2  (low vol: fewer fills)
+      otherwise        → base levels unchanged
+
+    df.atr is a constant column in test DataFrames (all rows = atr),
+    so mean == atr and vol_ratio == 1.0 → no adjustment in normal tests.
     """
 
     def _mid_levels(self, session):
         return _calc(price=70000, atr=2000, session=session)["tiers"][1]["levels"]
 
-    def test_asia_adds_two_levels_to_mid(self):
-        assert self._mid_levels("ASIA") == 8
-
-    def test_wkd_asia_adds_two_levels_to_mid(self):
-        assert self._mid_levels("WKD_ASIA") == 8
-
-    def test_europe_no_adjustment(self):
+    def test_normal_vol_no_adjustment(self):
+        # vol_ratio = 1.0 (atr == mean) → no change → mid base=6
         assert self._mid_levels("EUROPE") == 6
 
-    def test_us_removes_two_levels(self):
-        # base=6, US → 6-2=4, but clamped to max(4,6) → 6
-        assert self._mid_levels("US") == 6
+    def test_normal_vol_consistent_across_sessions(self):
+        # Session no longer drives level count — all should be equal at vol_ratio=1.0
+        assert self._mid_levels("ASIA") == self._mid_levels("US") == self._mid_levels("EUROPE")
 
-    def test_inner_asia_adds_two(self):
-        """Inner tier base=10; ASIA → 12."""
-        inner = _calc(price=70000, atr=2000, session="ASIA")["tiers"][0]["levels"]
-        assert inner == 12
+    def test_high_vol_adds_two_levels(self):
+        # Build a df where last ATR (2700) > mean (~2014) × 1.3 → vol_ratio ≈ 1.34 → +2
+        # Note: with 49 bars at 2000 and 1 bar at 2700, mean = (49*2000+2700)/50 = 2014
+        # vol_ratio = 2700/2014 ≈ 1.34 > 1.3 → +2 levels
+        import pandas as pd
+        n = 50
+        atrs = [2000.0] * (n - 1) + [2700.0]
+        df = pd.DataFrame(
+            {"open": [70000.0]*n, "high": [70000.0]*n, "low": [70000.0]*n,
+             "close": [70000.0]*n, "volume": [1000.0]*n, "atr": atrs,
+             "bb_width": [0.02]*n},
+            index=pd.date_range("2026-01-01", periods=n, freq="1h"),
+        )
+        from grid_logic import calculate_grid_parameters
+        result = calculate_grid_parameters(70000, 2700.0, "RANGE", "EUROPE", 0.0, df)
+        mid_levels = result["tiers"][1]["levels"]
+        assert mid_levels == 8   # base 6 + 2
 
-    def test_outer_asia_adds_two(self):
-        """Outer tier base=6; ASIA → 8."""
-        outer = _calc(price=70000, atr=2000, session="ASIA")["tiers"][2]["levels"]
-        assert outer == 8
+    def test_low_vol_removes_two_levels(self):
+        # Build a df where last ATR (1400) < mean (2000) × 0.75 → -2
+        import pandas as pd
+        n = 50
+        atrs = [2000.0] * (n - 1) + [1400.0]   # last bar drops
+        df = pd.DataFrame(
+            {"open": [70000.0]*n, "high": [70000.0]*n, "low": [70000.0]*n,
+             "close": [70000.0]*n, "volume": [1000.0]*n, "atr": atrs,
+             "bb_width": [0.02]*n},
+            index=pd.date_range("2026-01-01", periods=n, freq="1h"),
+        )
+        from grid_logic import calculate_grid_parameters
+        result = calculate_grid_parameters(70000, 1400.0, "RANGE", "EUROPE", 0.0, df)
+        mid_levels = result["tiers"][1]["levels"]
+        assert mid_levels == 4   # base 6 - 2
 
-    def test_us_level_minimum_is_6(self):
-        """No tier should drop below 6 levels due to the max(levels, 6) guard."""
+    def test_minimum_levels_is_4(self):
+        """No tier should drop below 4 levels (new minimum after outer shrink)."""
         result = _calc(price=70000, atr=2000, session="US")
         for tier in result["tiers"]:
-            assert tier["levels"] >= 6
+            assert tier["levels"] >= 4
 
 
 # ── Compression density boost ──────────────────────────────────────────────
