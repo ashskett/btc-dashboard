@@ -524,22 +524,23 @@ function updateCharts() {
   sampled.forEach(d => deduped.set(Math.floor(d.ts), d));
   sampled = Array.from(deduped.values()).sort((a, b) => a.ts - b.ts);
 
-  // Portfolio value
+  // Portfolio value — subtract cumulative deposits from window start
+  const windowStart = sampled[0].ts;
   const pfData = sampled.map(d => ({
     time: Math.floor(d.ts),
-    value: d.portfolio_usd,
+    value: d.portfolio_usd - depositsInWindow(windowStart, d.ts),
   }));
   pfSeries.setData(pfData);
   pfChart.timeScale().fitContent();
 
-  // Grid vs HODL (both normalised to 100 at start)
-  const basePortfolio = sampled[0].portfolio_usd;
+  // Grid vs HODL (both normalised to 100 at start, grid is deposit-adjusted)
+  const basePortfolio = pfData[0].value;  // adjusted base
   const baseBtcPrice = sampled[0].btc_price;
   const baseBtcQty = sampled[0].btc_qty + sampled[0].usdc_qty / sampled[0].btc_price;
 
-  const gridData = sampled.map(d => ({
-    time: Math.floor(d.ts),
-    value: (d.portfolio_usd / basePortfolio) * 100,
+  const gridData = pfData.map(d => ({
+    time: d.time,
+    value: (d.value / basePortfolio) * 100,
   }));
   const hodlData = sampled.map(d => ({
     time: Math.floor(d.ts),
