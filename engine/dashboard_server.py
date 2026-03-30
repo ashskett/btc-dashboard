@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import json, os, base64, time, subprocess, signal, sys, secrets, threading
+import json, os, base64, time, subprocess, signal, sys, secrets, threading, shutil
 import requests as req
 from dotenv import load_dotenv
 from cryptography.hazmat.primitives import hashes, serialization
@@ -1979,6 +1979,38 @@ def deploy_endpoint():
         return jsonify({"error": "unauthorized"}), 403
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # ── Pre-deploy backup ─────────────────────────────────────────────────────
+    # Save all deployable files + credentials + state JSONs before overwriting.
+    # Backups live in /root/grid-engine-backups/<timestamp>/
+    # Use /deploy/rollback to restore any backup.
+    _backup_ts  = time.strftime("%Y-%m-%d-%H%M%S")
+    _backup_dir = os.path.join(os.path.dirname(script_dir), "grid-engine-backups", _backup_ts)
+    try:
+        os.makedirs(_backup_dir, exist_ok=True)
+        # Code files
+        for _fname in _DEPLOY_FILES + list(_DEPLOY_FILES_ROOT):
+            _src = os.path.join(script_dir, _fname)
+            if os.path.exists(_src):
+                shutil.copy2(_src, os.path.join(_backup_dir, _fname))
+        # Credentials and state (not in git — most critical to preserve)
+        for _critical in [".env", "3commas_private.pem",
+                          "grid_state.json", "inventory_settings.json",
+                          "inventory_override.json", "trendlines.json",
+                          "tier_budgets.json", "regime_state.json"]:
+            _src = os.path.join(script_dir, _critical)
+            if os.path.exists(_src):
+                shutil.copy2(_src, os.path.join(_backup_dir, _critical))
+        # Write a human-readable manifest
+        with open(os.path.join(_backup_dir, "_manifest.json"), "w") as _mf:
+            json.dump({
+                "timestamp":  _backup_ts,
+                "branch":     _DEPLOY_BRANCH,
+                "created_by": "pre-deploy auto-backup",
+            }, _mf, indent=2)
+    except Exception as _be:
+        print(f"Warning: pre-deploy backup failed: {_be}")
+
     results = {}
     for fname in _DEPLOY_FILES:
         url  = f"{_DEPLOY_BASE}/{fname}"
@@ -2042,8 +2074,126 @@ def deploy_endpoint():
         time.sleep(0.5)
         os._exit(0)
 
+    # ── Post-deploy Notion memory log ────────────────────────────────────────
+    # Fire-and-forget: log each deploy to the AI OS memory so there's a
+    # permanent record of what was deployed and when.
+    def _log_deploy_to_notion():
+        try:
+            ok_files  = [f for f, s in results.items() if s == "ok"]
+            fail_files = [f for f, s in results.items() if s != "ok"]
+            entry = (
+                f"DEPLOY [{_backup_ts}] branch={_DEPLOY_BRANCH} "
+                f"ok={len(ok_files)} fail={len(fail_files)} "
+                f"backup={_backup_ts}"
+            )
+            if fail_files:
+                entry += f" FAILURES: {', '.join(fail_files)}"
+            req.post(
+                "https://api.uncrewedmaritime.com/memory/log",
+                json={"content": entry, "tags": ["deploy", "grid-engine"]},
+                timeout=10,
+            )
+        except Exception as _le:
+            print(f"Warning: deploy Notion log failed: {_le}")
+
+    threading.Thread(target=_log_deploy_to_notion, daemon=True).start()
     threading.Thread(target=_restart, daemon=True).start()
-    return jsonify({"status": "deploying", "branch": _DEPLOY_BRANCH, "files": results})
+    return jsonify({"status": "deploying", "branch": _DEPLOY_BRANCH,
+                    "files": results, "backup": _backup_ts})
+
+
+# ── Deploy backup management ──────────────────────────────────────────────────
+
+_BACKUP_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "grid-engine-backups")
+
+@app.route("/deploy/backups")
+@require_token
+def list_deploy_backups():
+    """List all available pre-deploy backups, newest first."""
+    try:
+        if not os.path.exists(_BACKUP_ROOT):
+            return jsonify({"backups": []})
+        backups = []
+        for name in sorted(os.listdir(_BACKUP_ROOT), reverse=True):
+            d = os.path.join(_BACKUP_ROOT, name)
+            if not os.path.isdir(d):
+                continue
+            manifest_path = os.path.join(d, "_manifest.json")
+            manifest = {}
+            if os.path.exists(manifest_path):
+                try:
+                    manifest = json.load(open(manifest_path))
+                except Exception:
+                    pass
+            files = [f for f in os.listdir(d) if not f.startswith("_")]
+            backups.append({"timestamp": name, "files": files, **manifest})
+        return jsonify({"backups": backups, "count": len(backups)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/deploy/rollback", methods=["POST"])
+@require_token
+def deploy_rollback():
+    """
+    Restore a named backup to the engine directory and restart.
+    Body: {"timestamp": "2026-03-30-143012"}
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        ts = body.get("timestamp", "").strip()
+        if not ts:
+            return jsonify({"error": "timestamp required"}), 400
+        backup_dir = os.path.join(_BACKUP_ROOT, ts)
+        if not os.path.exists(backup_dir):
+            return jsonify({"error": f"Backup '{ts}' not found"}), 404
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        restored, skipped = [], []
+        for fname in os.listdir(backup_dir):
+            if fname.startswith("_"):
+                continue   # skip _manifest.json
+            src = os.path.join(backup_dir, fname)
+            dst = os.path.join(script_dir, fname)
+            try:
+                shutil.copy2(src, dst)
+                restored.append(fname)
+            except Exception as fe:
+                skipped.append(f"{fname}: {fe}")
+
+        # Log rollback to Notion
+        def _log_rollback():
+            try:
+                req.post(
+                    "https://api.uncrewedmaritime.com/memory/log",
+                    json={"content": f"ROLLBACK to {ts} — restored: {', '.join(restored)}",
+                          "tags": ["rollback", "grid-engine"]},
+                    timeout=10,
+                )
+            except Exception:
+                pass
+        threading.Thread(target=_log_rollback, daemon=True).start()
+
+        # Restart engine and server
+        def _restart_after_rollback():
+            time.sleep(1.0)
+            script_dir2 = os.path.dirname(os.path.abspath(__file__))
+            restart_cmd = (
+                "tmux send-keys -t grid C-c Enter ; sleep 2 ; "
+                f"tmux send-keys -t grid 'cd {script_dir2} && "
+                "source venv/bin/activate && python dashboard_server.py' Enter"
+            )
+            subprocess.Popen(restart_cmd, shell=True, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)
+            os._exit(0)
+        threading.Thread(target=_restart_after_rollback, daemon=True).start()
+
+        return jsonify({"ok": True, "restored_from": ts,
+                        "restored": restored, "skipped": skipped})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
