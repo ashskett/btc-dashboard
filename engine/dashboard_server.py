@@ -950,8 +950,16 @@ def bot_daily_profit():
 def set_inventory_mode():
     try:
         mode = request.json.get("mode", "NORMAL")
+        # Merge with existing file so manual btc_ratio override is preserved
+        existing = {}
+        if os.path.exists("inventory_override.json"):
+            try:
+                existing = json.load(open("inventory_override.json"))
+            except Exception:
+                pass
+        existing["mode"] = mode
         with open("inventory_override.json", "w") as f:
-            json.dump({"mode": mode}, f)
+            json.dump(existing, f)
         return jsonify({"ok": True, "mode": mode})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
