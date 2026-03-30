@@ -18,7 +18,7 @@ An adaptive BTC/USDC grid trading bot running on a DigitalOcean VPS. It manages 
 | IP | `165.232.101.253` (London, Ubuntu 24.04) |
 | SSH | `ssh root@165.232.101.253` |
 | Project dir | `/root/grid-engine/` |
-| Dashboard URL | `http://165.232.101.253:5050` |
+| Dashboard URL | `http://100.94.227.121:5050` (Tailscale) — requires Tailscale connected |
 | Dashboard Secret | `dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369` |
 | Process manager | tmux session named `grid` |
 | Start command | `cd /root/grid-engine && source venv/bin/activate && python dashboard_server.py` |
@@ -70,7 +70,7 @@ GRID_BOT_IDS=2743193,2743191,2743190
 |--------|------|------|-----------|
 | 2743885 | Narrow | range_mult 0.75×, 10 base levels | Catches small oscillations |
 | 2743889 | Mid | range_mult 1.5×, 6 base levels | Main workhorse |
-| 2743888 | Wider | range_mult 3.0×, 6 base levels | Safety net, stays on longest |
+| 2743888 | Wider | range_mult 2.0×, 6 base levels | Safety net (tightened from 3.0× Mar 25 — recentre+flash guard make extreme levels unreachable) |
 
 All bots trade `USDC_BTC` on Coinbase Spot via 3Commas.
 
@@ -150,9 +150,9 @@ BREAKOUT_DOWN    │  OFF  │  OFF  │  OFF
 
 ```python
 TIERS = [
-    {"name": "inner", "range_mult": 0.75, "base_levels": 20},
-    {"name": "mid",   "range_mult": 1.5,  "base_levels": 14},
-    {"name": "outer", "range_mult": 3.0,  "base_levels": 10},
+    {"name": "inner", "range_mult": 0.75, "base_levels": 10},
+    {"name": "mid",   "range_mult": 1.5,  "base_levels": 6},
+    {"name": "outer", "range_mult": 2.0,  "base_levels": 6},   # tightened from 3.0 Mar 25
 ]
 TAKER_FEE = 0.0020
 ROUND_TRIP_FEE = 0.0040
@@ -266,20 +266,23 @@ The macro dashboard will be served as static files by the Flask server and linke
 | RSA PEM MalformedFraming on server | `sed -i 's/\r//' 3commas_private.pem` |
 | Breakout state persisting across restarts | `rm -f breakout_state.json` before restarting |
 | IP whitelist blocking API calls | Use Self-generated RSA key type (not System-generated) |
-| **[BUG — pending]** Controls tab inventory bar: BTC % and USDC % labels are swapped | Fix label ordering in `dashboard.html` inventory bar HTML |
+| ~~Controls tab inventory bar labels swapped~~ | Fixed |
+| 3Commas "Realized P&L" inflated on pumps | Relabelled "Bot P&L †" with footnote — includes unrealised BTC appreciation. Daily profit bars flag suspect values amber. |
 
 ---
 
-## Pending Work (as of Mar 16 2026)
+## Pending Work (as of Mar 25 2026)
 
-### Immediate / infrastructure
-1. **Fix PEM line endings** (immediate if not done): `sed -i 's/\r//' /root/grid-engine/3commas_private.pem`
-2. **Fix inventory live feed** — falling back to 50/50 neutral. `POST /ver1/accounts/{id}/pie_chart_data` may need `load_balances` trigger first; verify RSA signing path once PEM is fixed.
-3. **Clear inventory manual override** in dashboard (click Clear on override sliders)
-4. **Fix red dashboard banner** — cosmetic. Dashboard checks localhost:5050 on initial load; fails remotely. Real data loads fine.
-5. **Set up systemd service** — currently using tmux; no auto-restart on reboot.
-6. **Add trendline** — draw a support/resistance trendline in the dashboard for TREND_DOWN regime detection.
-7. **Set up auto-deploy from this git repo** — webhook or cron so Claude's git pushes deploy automatically.
+### Security (immediate)
+1. **Wrap port 5050 in nginx HTTPS** — dashboard token currently travels in plaintext and appears in server logs as query string. Same nginx/Let's Encrypt setup as the AI OS API.
+
+### Engine
+2. **Support level timeout** — fired targets should auto-clear after 2h if price doesn't recover. Agreed but not built.
+3. **Loosen `trending_down` threshold** — `gap_ratio < -1.5` → `gap_ratio < -2.0` in `regime.py`. Fires too aggressively on normal pullbacks.
+4. **Faster compression exit** — single large 5m candle body trigger (>0.4×ATR), volume spike trigger (>2.5× rolling mean), lower existing thresholds.
+
+### Dashboard / reporting
+5. **P&L chart lines invisible** — noted in earlier session, not confirmed fixed.
 
 ### Next engine update (gather data first — do NOT deploy yet)
 8. **Loosen `trending_down` threshold** — change `gap_ratio < -1.5` to `gap_ratio < -2.0` in `regime.py:93`. The -1.5×ATR threshold fires too aggressively on normal pullbacks when the trendline is slightly optimistic. The TREND_DOWN hysteresis (2-cycle, ATR×0.15) already guards real downtrends; -2.0 avoids shutting inner off unnecessarily. Monitor current session logs before deploying.
@@ -379,11 +382,25 @@ flask flask-cors ccxt requests python-dotenv ta cryptography schedule rich panda
 
 ---
 
-## Current Status (Mar 14 2026)
+## Current Status (Mar 25 2026)
 
 - `DRY_RUN = False` — **LIVE**
 - Engine running on droplet in tmux session `grid`
-- Three bots: Inner (2743193), Mid (2743191), Outer (2743190) — all BTC/USDC on Coinbase
+- Three bots: Narrow (2743885), Mid (2743889), Wider (2743888) — all BTC/USDC on Coinbase
+- ASIA drift thresholds loosened to (0.70, 0.80) — was (0.65, 0.75)
+- Outer bot range_mult = 2.0 (tightened from 3.0)
+- UFW firewall active — ports 5050/9001/8080 restricted to Ash's home IP
+- Session-aware drift: ASIA (0.70, 0.80), EUROPE (0.75, 0.85), US (0.90, 0.95)
+
+## Server Security (Mar 25 2026)
+
+- UFW rules: 5050, 9001, 8080 → allow from 86.137.18.160 only; 443/22 open to world
+- `~/update-firewall.sh` on Mac — updates UFW if home IP changes
+- `/ping` debug modes require dashboard token (previously unauthenticated)
+- Webhook HMAC signature mandatory on `/deploy` (previously optional)
+- `/deploy-ai-os` requires `X-Deploy-Token` header (previously unauthenticated)
+- **Pending:** port 5050 still plain HTTP — nginx HTTPS wrapping not yet done
+- **Side effect:** port 9001 firewalled means GitHub auto-webhooks can't reach it. Deploy manually via POST /deploy on port 5050.
 
 ---
 
@@ -436,7 +453,7 @@ sed -i 's/DRY_RUN = False/DRY_RUN = True/' /root/grid-engine/engine.py
 2. POST to `/deploy` on the running Flask server:
 
 ```bash
-curl -s -X POST "http://165.232.101.253:5050/deploy?token=grid-deploy-2026"
+curl -s -X POST "http://100.94.227.121:5050/deploy?token=grid-deploy-2026"
 ```
 
 The `/deploy` endpoint downloads all engine files from the feature branch on GitHub
@@ -495,7 +512,7 @@ lsof -ti:5050 | xargs kill -9 2>/dev/null; python dashboard_server.py
 
 Then immediately call `/deploy` from Claude to pull all files and fix the webhook:
 ```bash
-curl -s -X POST "http://165.232.101.253:5050/deploy?token=grid-deploy-2026"
+curl -s -X POST "http://100.94.227.121:5050/deploy?token=grid-deploy-2026"
 ```
 
 After this, no further manual steps are needed.

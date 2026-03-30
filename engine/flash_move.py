@@ -52,6 +52,9 @@ FLASH_ATR_MULT    = 1.5    # cycle-to-cycle move threshold (×ATR) — ~$848 at 
                            # lowered from 2.0 for 2-min cycles (less time = smaller natural moves)
 CANDLE_ATR_MULT   = 1.5    # single 5m candle body threshold (×1H ATR)
 CANDLE_LOOKBACK   = 3      # check last N five-minute candles
+WICK_ATR_MULT     = 2.0    # lower/upper wick threshold for sweep detection (×1H ATR)
+                           # higher than body threshold — wicks are naturally larger than bodies.
+                           # Catches liquidity sweeps where body is small but wick is large.
 COOLDOWN_CYCLES   = 5      # minimum cycles with bots off (~10 min at 2-min cycles)
 RECOVERY_ATR_MULT = 0.3    # all recent candle bodies must be < this × ATR to recover
 RECOVERY_CANDLES  = 3      # number of candles that must be calm
@@ -169,6 +172,37 @@ def detect_flash_move(current_price: float, atr: float, df_5m=None) -> dict:
                 print(f"FLASH_MOVE detected (5m candle body) — "
                       f"${abs_body:,.0f} body = {abs_body/atr:.1f}×ATR "
                       f"(threshold {CANDLE_ATR_MULT}×ATR = ${threshold:,.0f})")
+                break
+
+    # Layer 3: Large wick (liquidity sweep detection)
+    # Sweep candles have a large wick but small body — body detection misses them entirely.
+    # Lower wick = min(open, close) - low  (tail below the body)
+    # Upper wick = high - max(open, close) (tail above the body)
+    if not triggered and df_5m is not None and atr > 0:
+        wick_threshold = atr * WICK_ATR_MULT
+        lookback = min(CANDLE_LOOKBACK, len(df_5m))
+        for i in range(1, lookback + 1):
+            high   = df_5m["high"].iloc[-i]
+            low    = df_5m["low"].iloc[-i]
+            close  = df_5m["close"].iloc[-i]
+            open_  = df_5m["open"].iloc[-i]
+            down_wick = min(open_, close) - low
+            up_wick   = high - max(open_, close)
+            if down_wick > wick_threshold:
+                triggered = True
+                direction = "DOWN"
+                magnitude = down_wick
+                print(f"FLASH_MOVE detected (sweep wick DOWN) — "
+                      f"${down_wick:,.0f} lower wick = {down_wick/atr:.1f}×ATR "
+                      f"(threshold {WICK_ATR_MULT}×ATR = ${wick_threshold:,.0f})")
+                break
+            elif up_wick > wick_threshold:
+                triggered = True
+                direction = "UP"
+                magnitude = up_wick
+                print(f"FLASH_MOVE detected (sweep wick UP) — "
+                      f"${up_wick:,.0f} upper wick = {up_wick/atr:.1f}×ATR "
+                      f"(threshold {WICK_ATR_MULT}×ATR = ${wick_threshold:,.0f})")
                 break
 
     if triggered:
