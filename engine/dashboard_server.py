@@ -2108,7 +2108,6 @@ _BACKUP_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
                              "grid-engine-backups")
 
 @app.route("/deploy/backups")
-@require_token
 def list_deploy_backups():
     """List all available pre-deploy backups, newest first."""
     try:
@@ -2134,7 +2133,6 @@ def list_deploy_backups():
 
 
 @app.route("/deploy/rollback", methods=["POST"])
-@require_token
 def deploy_rollback():
     """
     Restore a named backup to the engine directory and restart.
