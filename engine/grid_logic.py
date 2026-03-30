@@ -39,7 +39,8 @@ TIERS = [
 
 def _build_tier(price, atr, regime, session, skew, df, support, resistance,
                 range_mult, base_levels, compression, wkd_fee_buffer=None,
-                compression_mult=1.5, trend_tilt=0.0):
+                compression_mult=1.5, trend_tilt=0.0,
+                drift_limit=None, deploy_center=None):
     """Build grid parameters for a single tier."""
     # Volatility ratio vs historical mean — computed before weekend ATR floor
     # so it reflects actual market conditions, not the artificial floor.
@@ -75,6 +76,24 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
         trend_shift = trend_tilt * grid_width
         grid_low  = price - grid_width - tilt + trend_shift
         grid_high = price + grid_width - tilt + trend_shift
+
+    # Drift-zone cap — ensures no levels are placed beyond where the engine
+    # will recentre. Without this, wide tiers (outer range_mult 2.0) place
+    # buy orders permanently below the recentre trigger, freezing capital
+    # in orders that can never fill before the grid shifts. Cap both edges
+    # to the saved deploy centre ± drift threshold. Only applies when a
+    # prior deployment exists; first run skips the cap.
+    if drift_limit is not None and deploy_center is not None:
+        cap_low  = deploy_center - drift_limit
+        cap_high = deploy_center + drift_limit
+        grid_low  = max(grid_low,  cap_low)
+        grid_high = min(grid_high, cap_high)
+        # Safety: if the cap collapses the range (shouldn't happen normally)
+        # fall back to a minimal band around current price.
+        if grid_high <= grid_low:
+            half = drift_limit * 0.5
+            grid_low  = price - half
+            grid_high = price + half
 
     # Level count — compression boost + volatility-sensitive adjustment.
     # High vol (ATR > 1.3× mean): add 2 levels — more oscillation = more fills.
@@ -143,6 +162,13 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df, trend_tilt=
 
     support, resistance = find_liquidity_levels(df)
 
+    # Drift-zone cap: load deploy state so each tier can be clamped to the
+    # zone the engine will actually let price reach before recentring.
+    gs = get_grid_state()
+    _deploy_gw     = gs.get("grid_width_at_deploy")
+    _deploy_center = gs.get("grid_center")
+    _drift_limit   = (_deploy_gw * 0.85) if _deploy_gw else None
+
     tiers = []
     for i, t in enumerate(TIERS):
         # trend_tilt only applies to the inner tier (index 0)
@@ -156,6 +182,8 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df, trend_tilt=
             wkd_fee_buffer=t.get("wkd_fee_buffer"),
             compression_mult=t.get("compression_mult", 1.5),
             trend_tilt=tier_trend_tilt,
+            drift_limit=_drift_limit,
+            deploy_center=_deploy_center,
         )
         tier_grid["name"] = t["name"]
         tiers.append(tier_grid)
