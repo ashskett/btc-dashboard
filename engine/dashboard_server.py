@@ -2148,11 +2148,28 @@ def deploy_rollback():
         if not os.path.exists(backup_dir):
             return jsonify({"error": f"Backup '{ts}' not found"}), 404
 
+        # Live state files that belong to the running system — never roll back
+        # these because they contain user-drawn trendlines, active bot config,
+        # and real-time grid state that is independent of the code version.
+        _ROLLBACK_SKIP = {
+            "trendlines.json",
+            "tier_budgets.json",
+            "inventory_settings.json",
+            "inventory_override.json",
+            "breakout_targets.json",
+            "grid_state.json",
+            "regime_state.json",
+            "redeploy_state.json",
+        }
+
         script_dir = os.path.dirname(os.path.abspath(__file__))
         restored, skipped = [], []
         for fname in os.listdir(backup_dir):
             if fname.startswith("_"):
                 continue   # skip _manifest.json
+            if fname in _ROLLBACK_SKIP:
+                skipped.append(f"{fname}: protected live state — not rolled back")
+                continue
             src = os.path.join(backup_dir, fname)
             dst = os.path.join(script_dir, fname)
             try:
