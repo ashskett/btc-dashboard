@@ -140,9 +140,10 @@ MIN_BTC = 0.20   # hard stop — staggered below inventory.py LOWER_BAND (0.55)
 
 _last_run_ts = 0
 _prev_regime: str | None = None
+_prev_trending_down: bool = False
 
 def run():
-    global _last_run_ts, _prev_regime
+    global _last_run_ts, _prev_regime, _prev_trending_down
     now = time.time()
     if now - _last_run_ts < 100:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
@@ -758,7 +759,8 @@ def run():
         # Note: trending_up in RANGE regime = price above support, NOT a trend — all bots ON
 
         if state.regime == "COMPRESSION":
-            notify(f"COMPRESSION — inner+mid off, outer running at ${state.price:,.0f}")
+            if _prev_regime != "COMPRESSION":
+                notify(f"COMPRESSION — inner+mid off, outer running at ${state.price:,.0f}")
             print("COMPRESSION — inner+mid off, outer running (wide range catches low-vol oscillations)")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
@@ -766,7 +768,8 @@ def run():
 
         elif state.trending_down:
             # Strong downside move — inner and mid OFF, outer ON as safety net
-            notify(f"Trending DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off at ${state.price:,.0f}")
+            if not _prev_trending_down:
+                notify(f"Trending DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off at ${state.price:,.0f}")
             print(f"TRENDING DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off, outer holding")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
@@ -774,7 +777,8 @@ def run():
 
         elif state.regime == "TREND_DOWN":
             # Confirmed TREND_DOWN (hysteresis-filtered) — same as trending_down
-            notify_critical(f"TREND_DOWN confirmed — inner+mid off, outer holding at ${state.price:,.0f}")
+            if _prev_regime != "TREND_DOWN":
+                notify_critical(f"TREND_DOWN confirmed — inner+mid off, outer holding at ${state.price:,.0f}")
             print(f"TREND_DOWN — inner+mid off, outer holding")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
@@ -864,9 +868,10 @@ def run():
                 except Exception as _e:
                     print(f"Warning: could not write portfolio_log.jsonl: {_e}")
 
-            # Track regime across cycles for transition detection
+            # Track regime and flags across cycles for transition detection
             if state.regime:
                 _prev_regime = state.regime
+            _prev_trending_down = bool(state.trending_down)
 
 if __name__ == "__main__":
     schedule.every(2).minutes.do(run)
