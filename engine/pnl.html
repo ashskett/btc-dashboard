@@ -352,11 +352,39 @@ let dailyPnlChart, dailyPnlSeries;
 let _lastPnlBarMode = 'daily';
 let currentTf = '7d';
 
-// Sum of capital deposits between two unix timestamps (inclusive)
+// For a deposit/withdrawal event, find the first portfolio snapshot where
+// the balance actually moved by ~that amount (within ±2h of the recorded ts).
+// This corrects for the gap between "deposit recorded" and "snapshot captures it",
+// which would otherwise create a dip in the adjusted chart.
+function effectiveEventTs(event, data) {
+  if (!data || data.length < 2) return event.ts;
+  const WINDOW = 2 * 3600;  // only look ±2h around the recorded timestamp
+  const TOLERANCE = 0.65;   // jump must be at least 65% of the event amount
+
+  // Only consider snapshots within the time window
+  const slice = data.filter(d => Math.abs(d.ts - event.ts) <= WINDOW);
+  for (let i = 1; i < slice.length; i++) {
+    const jump = slice[i].portfolio_usd - slice[i - 1].portfolio_usd;
+    // Match deposit (positive jump) or withdrawal (negative jump)
+    if (event.amount_usd > 0 && jump >= event.amount_usd * TOLERANCE) return slice[i].ts;
+    if (event.amount_usd < 0 && jump <= event.amount_usd * TOLERANCE) return slice[i].ts;
+  }
+  return event.ts;  // fallback to recorded time if no jump found
+}
+
+// Effective deposit timestamps cache (rebuilt after data loads)
+let _effectiveTsCache = [];
+function buildEffectiveTsCache() {
+  _effectiveTsCache = capitalEvents.map(e => effectiveEventTs(e, allData));
+}
+
+// Sum of capital deposits between two unix timestamps (inclusive),
+// using effective (jump-detected) timestamps for each event.
 function depositsInWindow(startTs, endTs) {
-  return capitalEvents
-    .filter(e => e.ts >= startTs && e.ts <= endTs)
-    .reduce((s, e) => s + e.amount_usd, 0);
+  return capitalEvents.reduce((s, e, i) => {
+    const ets = _effectiveTsCache[i] !== undefined ? _effectiveTsCache[i] : e.ts;
+    return (ets >= startTs && ets <= endTs) ? s + e.amount_usd : s;
+  }, 0);
 }
 
 // ── Init Charts ──
@@ -426,6 +454,7 @@ async function loadData() {
     if (rCe.ok) capitalEvents = await rCe.json();
     if (!Array.isArray(allData) || !allData.length) return;
 
+    buildEffectiveTsCache();
     updateKpis();
     updateCharts();
     updateDaily();
