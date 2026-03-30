@@ -282,6 +282,47 @@
   </table>
 </div>
 
+<!-- CAPITAL EVENTS -->
+<div class="breakdown" style="border-top:1px solid var(--border);margin-top:8px;">
+  <div class="chart-header" style="margin-bottom:12px;">
+    <span class="chart-title">Capital Events — Deposits &amp; Withdrawals</span>
+    <span style="font-size:9px;color:var(--muted);">P&amp;L figures above are adjusted to exclude these</span>
+  </div>
+  <table id="capitalTable">
+    <thead>
+      <tr>
+        <th>Date / Time</th>
+        <th>Amount (USD)</th>
+        <th>Description</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="capitalBody"></tbody>
+  </table>
+  <div style="margin-top:16px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+    <div>
+      <div class="kpi-lbl" style="margin-bottom:4px;">Amount USD</div>
+      <input id="ceAmount" type="number" step="any" placeholder="e.g. 19350 or -5000"
+        style="background:var(--panel);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:4px;width:160px;">
+    </div>
+    <div>
+      <div class="kpi-lbl" style="margin-bottom:4px;">Description (optional)</div>
+      <input id="ceLabel" type="text" placeholder="e.g. GBP 15k deposit"
+        style="background:var(--panel);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:4px;width:220px;">
+    </div>
+    <div>
+      <div class="kpi-lbl" style="margin-bottom:4px;">Date (defaults to now)</div>
+      <input id="ceDate" type="datetime-local"
+        style="background:var(--panel);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:4px;width:200px;">
+    </div>
+    <button onclick="addCapitalEvent()"
+      style="background:rgba(0,212,255,.12);border:1px solid var(--accent);color:var(--accent);font-family:var(--mono);font-size:11px;padding:7px 18px;border-radius:4px;cursor:pointer;white-space:nowrap;">
+      Record Event
+    </button>
+  </div>
+  <div id="ceMsg" style="margin-top:8px;font-size:11px;color:var(--muted);"></div>
+</div>
+
 <script>
 // ── Auth ──
 (function() {
@@ -303,12 +344,20 @@ const f2 = v => '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits
 const pct = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 
 let allData = [];
+let capitalEvents = [];   // [{ts, amount_usd, label}]
 let pfChart, pfSeries;
 let vsChart, gridSeries, hodlSeries;
 let allocChart, allocSeries;
 let dailyPnlChart, dailyPnlSeries;
 let _lastPnlBarMode = 'daily';
 let currentTf = '7d';
+
+// Sum of capital deposits between two unix timestamps (inclusive)
+function depositsInWindow(startTs, endTs) {
+  return capitalEvents
+    .filter(e => e.ts >= startTs && e.ts <= endTs)
+    .reduce((s, e) => s + e.amount_usd, 0);
+}
 
 // ── Init Charts ──
 function initCharts() {
@@ -368,14 +417,19 @@ function initCharts() {
 // ── Load Data ──
 async function loadData() {
   try {
-    const r = await fetch('/portfolio/log');
-    if (!r.ok) { console.error('portfolio/log error:', r.status); return; }
-    allData = await r.json();
+    const [rPf, rCe] = await Promise.all([
+      fetch('/portfolio/log'),
+      fetch('/capital/events'),
+    ]);
+    if (!rPf.ok) { console.error('portfolio/log error:', rPf.status); return; }
+    allData = await rPf.json();
+    if (rCe.ok) capitalEvents = await rCe.json();
     if (!Array.isArray(allData) || !allData.length) return;
 
     updateKpis();
     updateCharts();
     updateDaily();
+    renderCapitalEvents();
   } catch (e) {
     console.error('loadData error:', e);
   }
@@ -400,28 +454,30 @@ function updateKpis() {
   document.getElementById('kPortfolioSub').textContent =
     `${latest.btc_qty.toFixed(4)} BTC + ${f(latest.usdc_qty)} USDC`;
 
-  // 24h change
+  // 24h change (capital-adjusted)
   const d24 = allData.filter(d => d.ts <= now - 86400);
   if (d24.length) {
-    const base = d24[d24.length - 1].portfolio_usd;
-    const chg = latest.portfolio_usd - base;
-    const chgPct = (chg / base) * 100;
+    const baseSnap = d24[d24.length - 1];
+    const deps = depositsInWindow(baseSnap.ts, now);
+    const chg = (latest.portfolio_usd - baseSnap.portfolio_usd) - deps;
+    const chgPct = (chg / baseSnap.portfolio_usd) * 100;
     const el = document.getElementById('k24h');
     el.textContent = (chg >= 0 ? '+' : '') + f(chg);
     el.className = 'kpi-val ' + (chg >= 0 ? 'pos' : 'neg');
-    document.getElementById('k24hSub').textContent = pct(chgPct);
+    document.getElementById('k24hSub').textContent = pct(chgPct) + (deps ? ' adj' : '');
   }
 
-  // 7d change
+  // 7d change (capital-adjusted)
   const d7 = allData.filter(d => d.ts <= now - 7*86400);
   if (d7.length) {
-    const base = d7[d7.length - 1].portfolio_usd;
-    const chg = latest.portfolio_usd - base;
-    const chgPct = (chg / base) * 100;
+    const baseSnap = d7[d7.length - 1];
+    const deps = depositsInWindow(baseSnap.ts, now);
+    const chg = (latest.portfolio_usd - baseSnap.portfolio_usd) - deps;
+    const chgPct = (chg / baseSnap.portfolio_usd) * 100;
     const el = document.getElementById('k7d');
     el.textContent = (chg >= 0 ? '+' : '') + f(chg);
     el.className = 'kpi-val ' + (chg >= 0 ? 'pos' : 'neg');
-    document.getElementById('k7dSub').textContent = pct(chgPct);
+    document.getElementById('k7dSub').textContent = pct(chgPct) + (deps ? ' adj' : '');
   }
 
   // BTC
@@ -529,7 +585,8 @@ function updateCharts() {
     const barData = Object.entries(bucketMap)
       .sort((a, b) => a[0] - b[0])
       .map(([ts, {first, last}]) => {
-        const chg = last.portfolio_usd - first.portfolio_usd;
+        const deps = depositsInWindow(first.ts, last.ts);
+        const chg = (last.portfolio_usd - first.portfolio_usd) - deps;
         return {
           time: parseInt(ts),
           value: Math.round(chg * 100) / 100,
@@ -546,7 +603,8 @@ function updateCharts() {
     const barData = Object.entries(bucketMap)
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, {first, last}]) => {
-        const chg = last.portfolio_usd - first.portfolio_usd;
+        const deps = depositsInWindow(first.ts, last.ts);
+        const chg = (last.portfolio_usd - first.portfolio_usd) - deps;
         return {
           time: date,
           value: Math.round(chg * 100) / 100,
@@ -571,7 +629,8 @@ function updateDaily() {
   const rows = Object.entries(days)
     .sort((a, b) => b[0].localeCompare(a[0]))  // newest first
     .map(([date, {first, last}]) => {
-      const chg = last.portfolio_usd - first.portfolio_usd;
+      const deps = depositsInWindow(first.ts, last.ts);
+      const chg = (last.portfolio_usd - first.portfolio_usd) - deps;
       const chgPct = (chg / first.portfolio_usd) * 100;
       const btcChg = ((last.btc_price - first.btc_price) / first.btc_price) * 100;
       // HODL change: if you held the starting BTC allocation as 100% BTC
@@ -771,6 +830,75 @@ function renderGridProfit(allDays) {
       canvas.title = '';
     }
   };
+}
+
+// ── Capital Events ──
+function renderCapitalEvents() {
+  const body = document.getElementById('capitalBody');
+  if (!body) return;
+  if (!capitalEvents.length) {
+    body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:12px;">No capital events recorded.</td></tr>';
+    return;
+  }
+  body.innerHTML = [...capitalEvents]
+    .sort((a, b) => b.ts - a.ts)
+    .map((e, i) => {
+      const ridx = capitalEvents.length - 1 - i;  // index in sorted-by-ts array
+      const d = new Date(e.ts * 1000).toISOString().replace('T', ' ').slice(0, 16);
+      const cls = e.amount_usd >= 0 ? 'pos' : 'neg';
+      const sign = e.amount_usd >= 0 ? '+' : '';
+      return `<tr>
+        <td>${d}</td>
+        <td class="${cls}">${sign}${f2(e.amount_usd)}</td>
+        <td style="color:var(--muted)">${e.label || '—'}</td>
+        <td><button onclick="deleteCapitalEvent(${ridx})"
+          style="background:transparent;border:1px solid var(--border);color:var(--muted);font-size:10px;padding:2px 8px;border-radius:3px;cursor:pointer;">
+          Delete
+        </button></td>
+      </tr>`;
+    }).join('');
+}
+
+async function addCapitalEvent() {
+  const amtRaw = document.getElementById('ceAmount').value.trim();
+  if (!amtRaw) { document.getElementById('ceMsg').textContent = 'Enter an amount.'; return; }
+  const amount_usd = parseFloat(amtRaw);
+  if (isNaN(amount_usd)) { document.getElementById('ceMsg').textContent = 'Invalid amount.'; return; }
+  const label = document.getElementById('ceLabel').value.trim();
+  const dateVal = document.getElementById('ceDate').value;
+  const ts = dateVal ? new Date(dateVal).getTime() / 1000 : Date.now() / 1000;
+
+  const r = await fetch('/capital/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount_usd, label, ts }),
+  });
+  if (r.ok) {
+    const j = await r.json();
+    capitalEvents = j.events;
+    document.getElementById('ceAmount').value = '';
+    document.getElementById('ceLabel').value = '';
+    document.getElementById('ceDate').value = '';
+    document.getElementById('ceMsg').textContent = 'Recorded.';
+    renderCapitalEvents();
+    updateKpis();
+    updateCharts();
+    updateDaily();
+  } else {
+    document.getElementById('ceMsg').textContent = 'Error saving event.';
+  }
+}
+
+async function deleteCapitalEvent(idx) {
+  const r = await fetch(`/capital/events/${idx}`, { method: 'DELETE' });
+  if (r.ok) {
+    const j = await r.json();
+    capitalEvents = j.events;
+    renderCapitalEvents();
+    updateKpis();
+    updateCharts();
+    updateDaily();
+  }
 }
 
 // ── Init ──

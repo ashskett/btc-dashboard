@@ -1809,6 +1809,52 @@ def portfolio_log():
     return jsonify(rows)
 
 
+# ── Capital events (deposits / withdrawals) ───────────────
+_CAPITAL_EVENTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "capital_events.json")
+
+
+def _load_capital_events():
+    if not os.path.exists(_CAPITAL_EVENTS_FILE):
+        return []
+    try:
+        with open(_CAPITAL_EVENTS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+@app.route("/capital/events", methods=["GET"])
+def capital_events_get():
+    return jsonify(_load_capital_events())
+
+
+@app.route("/capital/events", methods=["POST"])
+def capital_events_post():
+    data = request.get_json(silent=True) or {}
+    amount_usd = data.get("amount_usd")
+    if amount_usd is None:
+        return jsonify({"error": "amount_usd required"}), 400
+    label = data.get("label", "")
+    ts    = data.get("ts", time.time())
+    events = _load_capital_events()
+    events.append({"ts": float(ts), "amount_usd": float(amount_usd), "label": label})
+    events.sort(key=lambda e: e["ts"])
+    with open(_CAPITAL_EVENTS_FILE, "w") as f:
+        json.dump(events, f, indent=2)
+    return jsonify({"ok": True, "events": events})
+
+
+@app.route("/capital/events/<int:idx>", methods=["DELETE"])
+def capital_events_delete(idx):
+    events = _load_capital_events()
+    if idx < 0 or idx >= len(events):
+        return jsonify({"error": "index out of range"}), 404
+    events.pop(idx)
+    with open(_CAPITAL_EVENTS_FILE, "w") as f:
+        json.dump(events, f, indent=2)
+    return jsonify({"ok": True, "events": events})
+
+
 # ── Engine process management ────────────────────────────
 _engine_proc   = None
 _engine_output = []   # rolling buffer of last 200 lines
@@ -2160,6 +2206,7 @@ def deploy_rollback():
             "grid_state.json",
             "regime_state.json",
             "redeploy_state.json",
+            "capital_events.json",
         }
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
