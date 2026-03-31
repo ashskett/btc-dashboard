@@ -2754,9 +2754,11 @@ function showAddTargetModal(pickedPrice, editTarget){
 
   document.body.appendChild(div);
 
-  // In edit mode, trigger visibility toggles to match existing state
+  // In edit mode, trigger visibility toggles to match existing state.
+  // Pass skipReset=true so _ptOnDirChange only sets section visibility
+  // without wiping the checkbox states the template just initialised.
   if(isEdit){
-    _ptOnDirChange();
+    _ptOnDirChange(true);
     if(et.direction === 'DOWN' && et.detection_mode === 'support_failure') _ptOnDetectModeChange();
     if(et.dca_enabled){
       _ptToggleDca(true);
@@ -2782,17 +2784,22 @@ function showAddTargetModal(pickedPrice, editTarget){
   document.getElementById('pt_label').focus();
 }
 
-function _ptOnDirChange(){
+function _ptOnDirChange(skipReset = false){
   const dir = document.getElementById('pt_dir').value;
   const isDown = dir === 'DOWN';
   document.getElementById('ptDetectModeRow').style.display = isDown ? 'block' : 'none';
   document.getElementById('ptDcaToggleRow').style.display  = isDown ? 'none'  : 'flex';
-  document.getElementById('ptDcaFields').style.display     = 'none';
-  document.getElementById('pt_dca_on').checked             = false;
-  const _trailEl = document.getElementById('pt_dca_trailing');
-  if(_trailEl) { _trailEl.checked = false; _ptToggleTrailing(false); }
-  const _dualEl = document.getElementById('pt_dca_dual');
-  if(_dualEl) { _dualEl.checked = false; _ptToggleDual(false); }
+  // Only wipe checkbox state when the user actually changes direction.
+  // During edit-mode init (skipReset=true) the template has already set
+  // the correct checked values — resetting them here would blank everything.
+  if(!skipReset){
+    document.getElementById('ptDcaFields').style.display     = 'none';
+    document.getElementById('pt_dca_on').checked             = false;
+    const _trailEl = document.getElementById('pt_dca_trailing');
+    if(_trailEl) { _trailEl.checked = false; _ptToggleTrailing(false); }
+    const _dualEl = document.getElementById('pt_dca_dual');
+    if(_dualEl) { _dualEl.checked = false; _ptToggleDual(false); }
+  }
   if(isDown) _ptOnDetectModeChange();
   else { document.getElementById('ptRetestRow').style.display = 'none';
          document.getElementById('ptSmartTradeSection').style.display = 'none'; }
