@@ -417,7 +417,8 @@ def run():
                     elif _can_act():
                         _record_action()
                         redeploy_all_bots(GRID_BOTS, state.tiers)
-                        update_grid_center(state.price, grid_width=state.grid_width)
+                        update_grid_center(state.price, grid_width=state.grid_width,
+                                           deployed_tiers=state.tiers)
                         clear_breakout_state()
                     else:
                         print(f"Rate limit reached — skipping exhaustion redeploy")
@@ -720,7 +721,8 @@ def run():
                 elif _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, state.tiers)
-                    update_grid_center(state.price, grid_width=state.grid_width)
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       deployed_tiers=state.tiers)
                 else:
                     print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
                     print(f"  Bots remain on current ranges — center NOT advanced")

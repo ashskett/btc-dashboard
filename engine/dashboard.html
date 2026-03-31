@@ -1384,10 +1384,10 @@ function redrawLines(){
     gridLines.push(l);
   };
 
-  // Always use engine's live tier data (recalculated every cycle around current centre).
-  // Never use deployed bot lower_price/upper_price — those are stale 3Commas config
-  // from whenever the bots were last started and drift out of sync after recentres/restarts.
-  const tiers = status.tiers;
+  // Use deployed_tiers (saved at last redeploy) so chart lines match actual
+  // 3Commas order positions. Falls back to current-cycle tiers only when no
+  // deployment has happened yet (first run or missing grid_state data).
+  const tiers = status.deployed_tiers || status.tiers;
 
   if (tiers && tiers.length) {
     tiers.forEach((tier, i) => {

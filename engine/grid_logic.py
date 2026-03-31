@@ -229,6 +229,7 @@ def get_grid_state():
         "grid_center":          data.get("grid_center", 68000),
         "grid_width_at_deploy": data.get("grid_width_at_deploy"),
         "last_redeploy_ts":     data.get("last_redeploy_ts", 0),
+        "deployed_tiers":       data.get("deployed_tiers"),
     }
 
 
@@ -255,10 +256,13 @@ def get_grid_center():
     return get_grid_state()["grid_center"]
 
 
-def update_grid_center(price, grid_width=None):
+def update_grid_center(price, grid_width=None, deployed_tiers=None):
     """Save new grid center and stamp last_redeploy_ts for the flood-fill guard.
     grid_width should be the mid-tier width at deploy time so that the drift
-    threshold stays locked to that deployment, not the current ATR."""
+    threshold stays locked to that deployment, not the current ATR.
+    deployed_tiers: the actual tier bounds sent to 3Commas — stored so the
+    chart can render lines that match the real bot orders, not the
+    current-cycle recalculation."""
     # Preserve all existing fields (last_redeploy_ts etc.) — read first
     existing = {}
     if os.path.exists(STATE_FILE):
@@ -270,6 +274,18 @@ def update_grid_center(price, grid_width=None):
     existing["last_redeploy_ts"] = time.time()
     if grid_width is not None:
         existing["grid_width_at_deploy"] = grid_width
+    if deployed_tiers is not None:
+        # Strip heavy grid_levels arrays — only need bounds + levels count for display
+        existing["deployed_tiers"] = [
+            {
+                "name":       t.get("name"),
+                "grid_low":   t.get("grid_low"),
+                "grid_high":  t.get("grid_high"),
+                "levels":     t.get("levels"),
+                "grid_levels": t.get("grid_levels", []),
+            }
+            for t in deployed_tiers
+        ]
     with open(STATE_FILE, "w") as f:
         json.dump(existing, f)
 

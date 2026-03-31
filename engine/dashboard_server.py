@@ -193,7 +193,21 @@ def status():
         return jsonify({"engine_running": False, "no_status_file": True})
     try:
         with open(STATUS_FILE) as f:
-            return jsonify(json.load(f))
+            data = json.load(f)
+        # Inject deployed_tiers from grid_state.json so the chart can render
+        # lines that match the actual 3Commas order positions (fixed at deploy
+        # time), rather than the current-cycle recalculation which drifts with
+        # every price tick.
+        grid_state_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "grid_state.json")
+        if os.path.exists(grid_state_file):
+            try:
+                gs = json.load(open(grid_state_file))
+                if gs.get("deployed_tiers"):
+                    data["deployed_tiers"] = gs["deployed_tiers"]
+            except Exception:
+                pass
+        return jsonify(data)
     except Exception as e:
         return jsonify({"engine_running": False, "parse_error": str(e)})
 
@@ -1504,6 +1518,51 @@ def cancel_smart_trade_route(st_id):
 
 
 # ── Regime state management ───────────────────────────────
+@app.route("/grid/set-deployed-tiers", methods=["POST"])
+def grid_set_deployed_tiers():
+    """
+    Write deployed_tiers into grid_state.json so the chart renders lines
+    that match the real 3Commas order positions.
+    Body: {"tiers": [{"name":"inner","grid_low":X,"grid_high":Y,"levels":N}, ...]}
+    Each tier's grid_levels are auto-generated as evenly-spaced from low to high.
+    """
+    data = request.get_json(silent=True) or {}
+    tiers_in = data.get("tiers")
+    if not tiers_in:
+        return jsonify({"error": "tiers array required"}), 400
+
+    # Generate evenly-spaced grid_levels for each tier
+    built = []
+    for t in tiers_in:
+        low    = float(t.get("grid_low",  0))
+        high   = float(t.get("grid_high", 0))
+        levels = int(t.get("levels", 5))
+        if high <= low or levels < 2:
+            gl = [low, high]
+        else:
+            step = (high - low) / (levels - 1)
+            gl   = [round(low + step * i, 2) for i in range(levels)]
+        built.append({
+            "name":        t.get("name", ""),
+            "grid_low":    round(low,  2),
+            "grid_high":   round(high, 2),
+            "levels":      levels,
+            "grid_levels": gl,
+        })
+
+    gs_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grid_state.json")
+    existing = {}
+    if os.path.exists(gs_file):
+        try:
+            existing = json.load(open(gs_file))
+        except Exception:
+            pass
+    existing["deployed_tiers"] = built
+    with open(gs_file, "w") as f:
+        json.dump(existing, f, indent=2)
+    return jsonify({"ok": True, "deployed_tiers": built})
+
+
 @app.route("/regime/clear", methods=["POST"])
 def regime_clear():
     """Reset regime_state.json — clears TREND_DOWN lock and trending_up state."""
