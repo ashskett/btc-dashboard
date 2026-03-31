@@ -139,6 +139,38 @@ GRID_BOTS = [bot.strip() for bot in os.getenv("GRID_BOT_IDS", "").split(",") if 
 # dashboard changes take effect immediately without an engine restart.
 
 
+def _make_intensive_buy_tiers(price: float, tiers: list) -> list:
+    """
+    Build buy-biased tier parameters for BUY_ONLY mode.
+
+    Shifts each tier's range entirely below current price so the bot's initial
+    orders are buys only (no sell orders sit above price at deployment time).
+    Range is compressed to 60% of normal width to create a denser buy cluster.
+
+        grid_high = price × 0.9995  (fractional buffer — avoids placing orders
+                                     right on the live price spread)
+        grid_low  = grid_high − (original_width × 0.60)
+
+    Levels and step are recalculated proportionally.
+    """
+    import copy as _copy
+    result = []
+    for tier in tiers:
+        t = _copy.deepcopy(tier)
+        orig_width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
+        new_width  = round(orig_width * 0.60, 2)
+        new_high   = round(price * 0.9995, 2)
+        new_low    = round(new_high - new_width, 2)
+        n          = max(int(t.get("levels", 5)), 2)
+        new_step   = round(new_width / (n - 1), 2)
+        t["grid_high"]   = new_high
+        t["grid_low"]    = new_low
+        t["step"]        = new_step
+        t["grid_levels"] = [round(new_low + i * new_step, 2) for i in range(n)]
+        result.append(t)
+    return result
+
+
 _last_run_ts = 0
 _prev_regime: str | None = None
 _prev_trending_down: bool = False
@@ -486,10 +518,21 @@ def run():
                   + (f"  → target=${_pt_tp:,.0f} ({to_target:+.1f}%)" if _pt_tp else ""))
 
             if _pt_dir == "UP":
-                print(f"  [Target] inner+mid off, outer running")
-                for i, bot in enumerate(GRID_BOTS[:3]):
-                    tier_name = ["inner", "mid", "outer"][i]
-                    _act(bot, i >= 2, f"{tier_name} (target: {_pt_label})")
+                _dca_live = _pt_state.get("dca_bot_id")
+                if _dca_live:
+                    # DCA bot is running — stop ALL grid bots so the DCA bot has
+                    # maximum free capital for its safety order chain.
+                    print(f"  [Target] DCA bot {_dca_live} active — ALL bots OFF (capital reserved for DCA)")
+                    for i, bot in enumerate(GRID_BOTS[:3]):
+                        tier_name = ["inner", "mid", "outer"][i]
+                        _act(bot, False, f"{tier_name} (DCA active: {_pt_label})")
+                else:
+                    # DCA not yet launched (hold period or DCA not configured).
+                    # Keep outer running as a safety net; inner+mid off.
+                    print(f"  [Target] inner+mid off, outer running (DCA pending or not configured)")
+                    for i, bot in enumerate(GRID_BOTS[:3]):
+                        tier_name = ["inner", "mid", "outer"][i]
+                        _act(bot, i >= 2, f"{tier_name} (target: {_pt_label})")
 
                 # ── DCA bot launch ─────────────────────────────────────────
                 # Sweep guard: hold DCA launch for DCA_LAUNCH_HOLD_SECS after the
@@ -697,46 +740,52 @@ def run():
               f"  threshold=${_drift_gw * 0.85:,.0f}")
         if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0):
             state.drift_triggered = True
-            # ── Flood-fill guard ──────────────────────────────────────────────
-            # Prevent rapid recentres when price oscillates around the drift
-            # threshold on 2-min cycles. Min 20 min between recentres.
-            _can_redeploy, _redeploy_wait = redeploy_allowed()
-            if not _can_redeploy:
-                print(f"  Flood guard: drift detected but suppressing redeploy — "
-                      f"{_redeploy_wait/60:.1f}min remaining "
-                      f"(min {1200//60}min between recentres)")
-                # Fall through to normal tiered bot decisions on current ranges
+            if state.inventory_mode == "BUY_ONLY":
+                # Intensive buy mode — grid is intentionally deployed below current
+                # price. A drift redeployment here would replace it with normal
+                # symmetric tiers, undoing the buy bias. Suppress and fall through.
+                print(f"  Drift suppressed — BUY_ONLY intensive mode active, preserving buy-biased grid")
             else:
-                notify(f"Grid drift — recentring to ${state.price:,.0f} (was ${state.center:,.0f})")
-                print("Grid drift detected")
-                print("New Grid Parameters")
-                print("Center:", state.price)
-                print("Low:", state.grid_low)
-                print("High:", state.grid_high)
-                print("Levels:", state.levels)
-                print("Step:", state.step)
-                print("Tilt:", state.tilt)
-                print("Support:", state.support)
-                print("Resistance:", state.resistance)
-
-                if DRY_RUN:
-                    update_grid_center(state.price, grid_width=state.grid_width)
-                    print("[SIMULATION] Would redeploy grid bots with tiered ranges:")
-                    for i, bot_id in enumerate(GRID_BOTS[:3]):
-                        tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
-                        print(f"  [SIM] Bot {bot_id} ({tier['name']}): "
-                              f"${tier['grid_low']:,.0f}–${tier['grid_high']:,.0f}, "
-                              f"{tier['levels']} levels, ${tier['step']:,.0f} step")
-                elif _can_act():
-                    _record_action()
-                    redeploy_all_bots(GRID_BOTS, state.tiers)
-                    update_grid_center(state.price, grid_width=state.grid_width,
-                                       deployed_tiers=state.tiers)
+                # ── Flood-fill guard ──────────────────────────────────────────
+                # Prevent rapid recentres when price oscillates around the drift
+                # threshold on 2-min cycles. Min 20 min between recentres.
+                _can_redeploy, _redeploy_wait = redeploy_allowed()
+                if not _can_redeploy:
+                    print(f"  Flood guard: drift detected but suppressing redeploy — "
+                          f"{_redeploy_wait/60:.1f}min remaining "
+                          f"(min {1200//60}min between recentres)")
+                    # Fall through to normal tiered bot decisions on current ranges
                 else:
-                    print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
-                    print(f"  Bots remain on current ranges — center NOT advanced")
+                    notify(f"Grid drift — recentring to ${state.price:,.0f} (was ${state.center:,.0f})")
+                    print("Grid drift detected")
+                    print("New Grid Parameters")
+                    print("Center:", state.price)
+                    print("Low:", state.grid_low)
+                    print("High:", state.grid_high)
+                    print("Levels:", state.levels)
+                    print("Step:", state.step)
+                    print("Tilt:", state.tilt)
+                    print("Support:", state.support)
+                    print("Resistance:", state.resistance)
 
-                return
+                    if DRY_RUN:
+                        update_grid_center(state.price, grid_width=state.grid_width)
+                        print("[SIMULATION] Would redeploy grid bots with tiered ranges:")
+                        for i, bot_id in enumerate(GRID_BOTS[:3]):
+                            tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
+                            print(f"  [SIM] Bot {bot_id} ({tier['name']}): "
+                                  f"${tier['grid_low']:,.0f}–${tier['grid_high']:,.0f}, "
+                                  f"{tier['levels']} levels, ${tier['step']:,.0f} step")
+                    elif _can_act():
+                        _record_action()
+                        redeploy_all_bots(GRID_BOTS, state.tiers)
+                        update_grid_center(state.price, grid_width=state.grid_width,
+                                           deployed_tiers=state.tiers)
+                    else:
+                        print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
+                        print(f"  Bots remain on current ranges — center NOT advanced")
+
+                    return
 
         # ===============================
         # REGIME TRANSITION REDEPLOY
@@ -746,7 +795,9 @@ def run():
         # stale. Redeploy at the current price rather than calling start_bot(),
         # which would restart bots at their old, potentially distant ranges.
         _STOPPED_REGIMES   = {"TREND_DOWN", "COMPRESSION"}
-        _STOPPED_INV_MODES = {"SELL_ONLY"}   # modes that stop all bots
+        # BUY_ONLY included here: when ratio recovers to NORMAL the intensive
+        # buy grid must be replaced with a fresh normal-parameter deployment.
+        _STOPPED_INV_MODES = {"SELL_ONLY", "BUY_ONLY"}
         _regime_recovery  = _prev_regime in _STOPPED_REGIMES and state.regime not in _STOPPED_REGIMES
         _invmode_recovery = (_prev_inventory_mode in _STOPPED_INV_MODES
                              and state.inventory_mode not in _STOPPED_INV_MODES)
@@ -786,14 +837,30 @@ def run():
             return
 
         if state.inventory_mode == "BUY_ONLY":
-            # BTC ratio too low — keep bots running so the grid continues to
-            # accumulate on dips. The skew mechanism already tilts the grid
-            # toward buying at this ratio. Stopping bots here would prevent any
-            # buying, which is the opposite of the intended behaviour.
             if _prev_inventory_mode != "BUY_ONLY":
-                notify_critical(f"BUY ONLY — BTC ratio {state.btc_ratio:.0%} critically low, bots kept running to accumulate")
-            print(f"Inventory protection: BUY ONLY (ratio {state.btc_ratio:.0%}) — bots remain ON, skew buying")
-            # Fall through to normal tiered bot decisions — do NOT return here.
+                # First cycle at critically low BTC ratio — redeploy in intensive
+                # buy mode: all tier ranges shifted below current price (initial
+                # orders are buys only) and compressed to 60% width for a denser
+                # buy cluster. Drift redeployment is suppressed while this mode
+                # is active. Recovery to normal triggers a fresh redeploy above.
+                notify_critical(
+                    f"BUY ONLY — BTC ratio {state.btc_ratio:.0%} critically low, "
+                    f"entering intensive buy mode (grid shifted below price)"
+                )
+                _intensive_tiers = _make_intensive_buy_tiers(state.price, state.tiers)
+                if DRY_RUN:
+                    print(f"  [SIM] Would redeploy intensive buy: "
+                          f"inner {_intensive_tiers[0]['grid_low']:,.0f}–"
+                          f"{_intensive_tiers[0]['grid_high']:,.0f}")
+                elif _can_act():
+                    _record_action()
+                    redeploy_all_bots(GRID_BOTS, _intensive_tiers)
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       deployed_tiers=_intensive_tiers)
+                else:
+                    print(f"  Rate limit reached — intensive buy redeploy deferred to next cycle")
+            print(f"BUY ONLY: ratio {state.btc_ratio:.0%} — intensive buy mode active, accumulating below price")
+            # Fall through to tiered bot decisions — bots remain ON to accumulate.
 
         # ===============================
         # TIERED BOT DECISIONS
