@@ -763,13 +763,15 @@ def run():
         # INVENTORY PROTECTION
         # ===============================
         if state.inventory_mode == "SELL_ONLY":
+            # BTC ratio too high — stop all bots so the grid cannot buy more.
+            # Existing 3Commas sell orders remain live and will fill naturally.
             if _prev_inventory_mode != "SELL_ONLY":
                 notify_critical(f"SELL ONLY — BTC ratio {state.btc_ratio:.0%} too high, all bots stopped")
-            print(f"Inventory protection: SELL ONLY (ratio {state.btc_ratio:.0%})")
+            print(f"Inventory protection: SELL ONLY (ratio {state.btc_ratio:.0%}) — bots stopped")
 
             for bot in GRID_BOTS:
                 if DRY_RUN:
-                    print(f"[SIMULATION] Sell-only mode bot {bot}")
+                    print(f"[SIMULATION] Stopping bot {bot} (SELL_ONLY)")
                 else:
                     stop_bot(bot)
 
@@ -777,18 +779,14 @@ def run():
             return
 
         if state.inventory_mode == "BUY_ONLY":
+            # BTC ratio too low — keep bots running so the grid continues to
+            # accumulate on dips. The skew mechanism already tilts the grid
+            # toward buying at this ratio. Stopping bots here would prevent any
+            # buying, which is the opposite of the intended behaviour.
             if _prev_inventory_mode != "BUY_ONLY":
-                notify_critical(f"BUY ONLY — BTC ratio {state.btc_ratio:.0%} too low, all bots stopped")
-            print(f"Inventory protection: BUY ONLY (ratio {state.btc_ratio:.0%})")
-
-            for bot in GRID_BOTS:
-                if DRY_RUN:
-                    print(f"[SIMULATION] Buy-only mode bot {bot}")
-                else:
-                    stop_bot(bot)
-
-            _prev_inventory_mode = "BUY_ONLY"
-            return
+                notify_critical(f"BUY ONLY — BTC ratio {state.btc_ratio:.0%} critically low, bots kept running to accumulate")
+            print(f"Inventory protection: BUY ONLY (ratio {state.btc_ratio:.0%}) — bots remain ON, skew buying")
+            # Fall through to normal tiered bot decisions — do NOT return here.
 
         # ===============================
         # TIERED BOT DECISIONS
