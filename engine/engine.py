@@ -142,9 +142,10 @@ GRID_BOTS = [bot.strip() for bot in os.getenv("GRID_BOT_IDS", "").split(",") if 
 _last_run_ts = 0
 _prev_regime: str | None = None
 _prev_trending_down: bool = False
+_prev_inventory_mode: str | None = None
 
 def run():
-    global _last_run_ts, _prev_regime, _prev_trending_down
+    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode
     now = time.time()
     if now - _last_run_ts < 100:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
@@ -762,8 +763,9 @@ def run():
         # INVENTORY PROTECTION
         # ===============================
         if state.inventory_mode == "SELL_ONLY":
-            notify_critical(f"SELL ONLY — BTC ratio {state.btc_ratio:.0%} too high, all bots stopped")
-            print("Inventory protection: SELL ONLY")
+            if _prev_inventory_mode != "SELL_ONLY":
+                notify_critical(f"SELL ONLY — BTC ratio {state.btc_ratio:.0%} too high, all bots stopped")
+            print(f"Inventory protection: SELL ONLY (ratio {state.btc_ratio:.0%})")
 
             for bot in GRID_BOTS:
                 if DRY_RUN:
@@ -771,11 +773,13 @@ def run():
                 else:
                     stop_bot(bot)
 
+            _prev_inventory_mode = "SELL_ONLY"
             return
 
         if state.inventory_mode == "BUY_ONLY":
-            notify_critical(f"BUY ONLY — BTC ratio {state.btc_ratio:.0%} too low, all bots stopped")
-            print("Inventory protection: BUY ONLY")
+            if _prev_inventory_mode != "BUY_ONLY":
+                notify_critical(f"BUY ONLY — BTC ratio {state.btc_ratio:.0%} too low, all bots stopped")
+            print(f"Inventory protection: BUY ONLY (ratio {state.btc_ratio:.0%})")
 
             for bot in GRID_BOTS:
                 if DRY_RUN:
@@ -783,6 +787,7 @@ def run():
                 else:
                     stop_bot(bot)
 
+            _prev_inventory_mode = "BUY_ONLY"
             return
 
         # ===============================
@@ -917,7 +922,8 @@ def run():
             # Track regime and flags across cycles for transition detection
             if state.regime:
                 _prev_regime = state.regime
-            _prev_trending_down = bool(state.trending_down)
+            _prev_trending_down    = bool(state.trending_down)
+            _prev_inventory_mode   = state.inventory_mode
 
 if __name__ == "__main__":
     schedule.every(2).minutes.do(run)
