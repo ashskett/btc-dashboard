@@ -641,16 +641,7 @@ def force_redeploy_all():
 
         # Reset grid center to current price so drift detection stays accurate
         from grid_logic import update_grid_center
-        inner_gw = None
-        inner_high = inner_low = None
-        if tiers:
-            t0 = tiers[0]
-            inner_gw   = t0.get("grid_width") or ((t0.get("grid_high",0) - t0.get("grid_low",0)) / 2)
-            inner_high = t0.get("grid_high")
-            inner_low  = t0.get("grid_low")
-        update_grid_center(price, grid_width=grid_width,
-                          inner_grid_width=inner_gw, inner_center=price,
-                          inner_grid_high=inner_high, inner_grid_low=inner_low)
+        update_grid_center(price, grid_width=grid_width, deployed_tiers=tiers)
 
         return jsonify({"ok": all_ok, "price": price, "center": price,
                        "msg": "All bots redeployed with budgets" if all_ok else "Some bots failed"})

@@ -745,18 +745,25 @@ def run():
         # an active one, bots were off for hours and their stored grid ranges are
         # stale. Redeploy at the current price rather than calling start_bot(),
         # which would restart bots at their old, potentially distant ranges.
-        _STOPPED_REGIMES = {"TREND_DOWN", "COMPRESSION"}
-        if _prev_regime in _STOPPED_REGIMES and state.regime not in _STOPPED_REGIMES:
-            print(f"Regime transition {_prev_regime} → {state.regime} — redeploying at ${state.price:,.0f}")
-            notify(f"Regime {_prev_regime} → {state.regime} — grid redeployed at ${state.price:,.0f}")
+        _STOPPED_REGIMES   = {"TREND_DOWN", "COMPRESSION"}
+        _STOPPED_INV_MODES = {"SELL_ONLY"}   # modes that stop all bots
+        _regime_recovery  = _prev_regime in _STOPPED_REGIMES and state.regime not in _STOPPED_REGIMES
+        _invmode_recovery = (_prev_inventory_mode in _STOPPED_INV_MODES
+                             and state.inventory_mode not in _STOPPED_INV_MODES)
+        if _regime_recovery or _invmode_recovery:
+            _reason = (f"Regime {_prev_regime} → {state.regime}" if _regime_recovery
+                       else f"Inventory mode {_prev_inventory_mode} → {state.inventory_mode}")
+            print(f"{_reason} — redeploying at ${state.price:,.0f}")
+            notify(f"{_reason} — grid redeployed at ${state.price:,.0f}")
             if DRY_RUN:
                 print(f"[SIMULATION] Would redeploy grid at ${state.price:,.0f}")
             elif _can_act():
                 _record_action()
                 redeploy_all_bots(GRID_BOTS, state.tiers)
-                update_grid_center(state.price, grid_width=state.grid_width)
+                update_grid_center(state.price, grid_width=state.grid_width,
+                                   deployed_tiers=state.tiers)
             else:
-                print(f"Rate limit reached — skipping regime-transition redeploy")
+                print(f"Rate limit reached — skipping recovery redeploy")
             return
 
         # ===============================
