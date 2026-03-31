@@ -2604,6 +2604,21 @@ function showAddTargetModal(pickedPrice, editTarget){
             font-family:'Space Mono',monospace;font-size:10px;padding:5px 7px;border-radius:4px;"/>
         </div>
       </div>
+      <!-- DCA Stop Loss -->
+      <div style="margin-top:10px;padding:8px;background:#100a06;border:1px solid #3a2010;border-radius:4px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-size:9px;color:#ff6b35;text-transform:uppercase;
+            letter-spacing:.08em;font-weight:700;">Stop Loss</span>
+          <div style="display:flex;align-items:center;gap:6px;flex:1;">
+            <input id="pt_dca_sl_pct" type="number"
+              value="${isEdit && et.dca_stop_loss_pct ? et.dca_stop_loss_pct : ''}"
+              min="0.5" max="20" step="0.5" placeholder="e.g. 3.0"
+              style="width:80px;background:#080c10;border:1px solid #3a2010;color:#ff6b35;
+              font-family:'Space Mono',monospace;font-size:11px;padding:5px 7px;border-radius:4px;"/>
+            <span style="font-size:9px;color:var(--muted);">% below entry — triggers panic-sell, frees capital to grid. Leave blank = no stop loss.</span>
+          </div>
+        </div>
+      </div>
       <!-- Dual Entry -->
       <div style="margin-top:10px;padding:8px;background:#060a0e;border:1px solid #1c2433;border-radius:4px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
@@ -2995,6 +3010,8 @@ async function confirmAddTarget(){
     body.dca_scout_pct              = parseFloat(document.getElementById('pt_dca_scout_pct')?.value) || 30;
     body.dca_scout_buffer_cycles    = parseInt(document.getElementById('pt_dca_scout_buf')?.value) || 2;
     body.dca_retest_tolerance_pct   = parseFloat(document.getElementById('pt_dca_retest_tol')?.value) || 0.5;
+    const _slRaw = document.getElementById('pt_dca_sl_pct')?.value;
+    body.dca_stop_loss_pct          = _slRaw ? parseFloat(_slRaw) : null;
   }
 
   const editId = document.getElementById('pt_edit_id')?.value;

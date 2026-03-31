@@ -541,6 +541,42 @@ def run():
                     else:
                         print(f"  Rate limit reached — DCA bot launch deferred to next cycle")
 
+                # ── DCA stop loss ──────────────────────────────────────────
+                # If dca_stop_loss_pct is configured and an active DCA bot has
+                # capital deployed, check whether price has fallen below the
+                # stop level. If so: panic-sell (closes the deal and returns
+                # BTC to available balance), clear the bot ID so the grid can
+                # operate normally, and notify. This prevents capital being
+                # permanently locked in unfillable safety orders.
+                _dca_sl_pct = float(_pt_state.get("dca_stop_loss_pct") or 0)
+                _active_dca_id = _pt_state.get("dca_bot_id")
+                if _active_dca_id and _dca_sl_pct > 0:
+                    _sl_entry = float(_pt_state.get("fired_price") or state.price)
+                    _sl_level = _sl_entry * (1.0 - _dca_sl_pct / 100.0)
+                    if state.price < _sl_level:
+                        print(f"  DCA stop loss triggered — price ${state.price:,.0f} < "
+                              f"${_sl_level:,.0f} ({_dca_sl_pct}% below entry "
+                              f"${_sl_entry:,.0f})")
+                        if DRY_RUN:
+                            print(f"  [SIM] Would panic_sell DCA bot {_active_dca_id}")
+                        else:
+                            try:
+                                panic_sell_dca_bot(_active_dca_id)
+                                update_target(_pt_state["id"], {"dca_bot_id": None})
+                                notify_critical(
+                                    f"DCA STOP LOSS '{_pt_label}' — "
+                                    f"${state.price:,.0f} hit {_dca_sl_pct:.1f}% SL "
+                                    f"(entry ${_sl_entry:,.0f}). "
+                                    f"Position closed, capital released to grid."
+                                )
+                                print(f"  DCA bot {_active_dca_id} panic-sold, capital freed")
+                            except Exception as _sl_err:
+                                print(f"  Warning: DCA stop loss failed: {_sl_err}")
+                    else:
+                        print(f"  DCA SL watch: ${state.price:,.0f} | "
+                              f"SL at ${_sl_level:,.0f} ({_dca_sl_pct}% below "
+                              f"${_sl_entry:,.0f})")
+
             else:  # DOWN target (support_failure or breakout DOWN)
                 print(f"  [Target] all bots off (capital protection)")
                 for bot in GRID_BOTS:

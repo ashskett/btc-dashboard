@@ -54,6 +54,9 @@ SCHEMA FIELDS
   dca_retest_tolerance_pct   float  — price must pull back to within this % of trigger for retest bot
   dca_scout_bot_id           str|null — 3Commas bot ID for scout
   dca_retest_bot_id          str|null — 3Commas bot ID for retest
+  dca_stop_loss_pct          float|null — if set, engine calls panic_sell when price drops this %
+                                below fired_price. Closes the deal, frees capital back to grid.
+                                e.g. 3.0 = stop loss 3% below entry. null = no stop loss.
 """
 
 import os
@@ -343,6 +346,7 @@ def add_target(
     dca_scout_pct: float = 30.0,
     dca_scout_buffer_cycles: int = 5,
     dca_retest_tolerance_pct: float = 0.5,
+    dca_stop_loss_pct: float = None,
     # SmartTrade (support_failure DOWN)
     smart_trade_enabled: bool = False,
     smart_trade_sell_pct: float = 25.0,
@@ -389,6 +393,7 @@ def add_target(
         "dca_scout_pct":          dca_scout_pct,
         "dca_scout_buffer_cycles": dca_scout_buffer_cycles,
         "dca_retest_tolerance_pct": dca_retest_tolerance_pct,
+        "dca_stop_loss_pct":      dca_stop_loss_pct,
         "dca_bot_id":             None,
         "dca_scout_bot_id":       None,
         "dca_retest_bot_id":      None,
