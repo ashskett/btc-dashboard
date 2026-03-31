@@ -1,4 +1,4 @@
-from inventory import calculate_inventory, portfolio_snapshot
+from inventory import calculate_inventory, portfolio_snapshot, get_inventory_settings
 from engine_state import EngineState
 import os
 import json
@@ -134,8 +134,9 @@ def get_active_trendline(current_price=None):
         return None
 GRID_BOTS = [bot.strip() for bot in os.getenv("GRID_BOT_IDS", "").split(",") if bot.strip()]
 
-MAX_BTC = 0.80   # hard stop — staggered above inventory.py UPPER_BAND (0.72)
-MIN_BTC = 0.20   # hard stop — staggered below inventory.py LOWER_BAND (0.55)
+# MAX_BTC / MIN_BTC are no longer hardcoded here — they are read dynamically
+# from inventory_settings.json via get_inventory_settings() each cycle so that
+# dashboard changes take effect immediately without an engine restart.
 
 
 _last_run_ts = 0
@@ -271,12 +272,19 @@ def run():
                 print(f"Warning: could not read inventory override: {e}")
 
         if not override.get("mode"):
-            if state.btc_ratio > MAX_BTC:
+            # Read min_btc/max_btc dynamically so dashboard changes take effect
+            # immediately without an engine restart.
+            _inv_s  = get_inventory_settings()
+            _min_btc = _inv_s["min_btc"]
+            _max_btc = _inv_s["max_btc"]
+            if state.btc_ratio > _max_btc:
                 state.inventory_mode = "SELL_ONLY"
-            elif state.btc_ratio < MIN_BTC:
+            elif state.btc_ratio < _min_btc:
                 state.inventory_mode = "BUY_ONLY"
             else:
                 state.inventory_mode = "NORMAL"
+            print(f"Inventory hard stops: min_btc={_min_btc:.0%}, max_btc={_max_btc:.0%} "
+                  f"(current ratio {state.btc_ratio:.0%} → {state.inventory_mode})")
 
         # ===============================
         # GRID PARAMETERS
