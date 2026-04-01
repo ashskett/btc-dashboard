@@ -1212,6 +1212,7 @@ let currentTf='1h';
 let fillsData=[];
 let status={};
 let bots=[];
+let botOverrides={};   // manual overrides: {bot_id: "stopped"} — engine won't restart these
 let dryRun=false;   // synced from engine status on first poll; default false (live)
 let prevPrice=null;
 let prevPortfolioTotal=null;
@@ -1688,15 +1689,17 @@ async function forceRedeploy(){
 // ── BOTS ─────────────────────────────────────────────────
 async function loadBots(){
   try {
-    const [r, rp] = await Promise.all([
+    const [r, rp, ro] = await Promise.all([
       fetch(`${API}/bots`),
       fetch(`${API}/bots/pnl`),
+      fetch(`${API}/bots/overrides`),
     ]);
     if(!r.ok) throw new Error(r.status);
     const data = await r.json();
     if(!Array.isArray(data)) throw new Error('bad');
     bots = data;
     const pnlMap = rp.ok ? await rp.json() : {};
+    botOverrides = ro.ok ? await ro.json() : {};
     document.getElementById('gridBotCountLbl').textContent = `(${bots.length})`;
 
     const cont = document.getElementById('gridBotCards');
@@ -1797,6 +1800,21 @@ async function loadBots(){
           <button class="bot-btn start" onclick="botAct(${b.id},'start')">▶ Start</button>
           <button class="bot-btn stop"  onclick="botAct(${b.id},'stop')">■ Stop</button>
         </div>
+        ${botOverrides[String(b.id)] === 'stopped'
+          ? `<div style="margin-top:5px;display:flex;align-items:center;gap:6px;">
+               <span style="font-size:9px;color:var(--amber,#ffb300);letter-spacing:.05em;">ENGINE OVERRIDE LOCKED OFF</span>
+               <button class="bot-btn" onclick="botUnlock('${b.id}')"
+                 style="font-size:9px;padding:3px 8px;background:rgba(255,179,0,.12);border-color:#ffb300;color:#ffb300;">
+                 Unlock
+               </button>
+             </div>`
+          : `<div style="margin-top:5px;">
+               <button class="bot-btn stop" onclick="botLock('${b.id}')"
+                 style="font-size:9px;padding:3px 10px;width:100%;opacity:.7;">
+                 Lock Off (prevent engine restart)
+               </button>
+             </div>`
+        }
       </div>`;
     }).join('');
 
@@ -1887,6 +1905,25 @@ async function botAct(id, action){
 async function allBots(action){
   if(dryRun){ toast(`[DRY RUN] Would ${action} all bots`,'ok'); return; }
   for(const b of bots) await botAct(b.id, action);
+}
+
+async function botLock(id){
+  // Stop bot AND set manual override — engine will not restart it next cycle
+  if(dryRun){ toast(`[DRY RUN] Would lock off bot ${id}`,'ok'); return; }
+  try {
+    await fetch(`${API}/bots/${id}/override`, {method:'POST'});
+    toast(`Bot ${id} locked off — engine will not restart it`,'ok');
+    setTimeout(loadBots, 1200);
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+
+async function botUnlock(id){
+  // Clear override — engine resumes normal control
+  try {
+    await fetch(`${API}/bots/${id}/override`, {method:'DELETE'});
+    toast(`Bot ${id} unlocked — engine will resume control`,'ok');
+    setTimeout(loadBots, 800);
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
 }
 
 async function setGridCapital(id){

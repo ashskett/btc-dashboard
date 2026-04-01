@@ -382,6 +382,53 @@ def stop_bot(bot_id):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Bot manual overrides ──────────────────────────────────
+_BOT_OVERRIDES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_overrides.json")
+
+def _load_bot_overrides() -> dict:
+    try:
+        if os.path.exists(_BOT_OVERRIDES_FILE):
+            with open(_BOT_OVERRIDES_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_bot_overrides(overrides: dict):
+    with open(_BOT_OVERRIDES_FILE, "w") as f:
+        json.dump(overrides, f)
+
+
+@app.route("/bots/overrides", methods=["GET"])
+def get_bot_overrides():
+    return jsonify(_load_bot_overrides())
+
+
+@app.route("/bots/<bot_id>/override", methods=["POST"])
+def set_bot_override(bot_id):
+    """Lock a bot off — engine will not restart it automatically."""
+    if bot_id not in _engine_bot_ids():
+        return jsonify({"error": "Bot not managed by this engine"}), 403
+    overrides = _load_bot_overrides()
+    overrides[bot_id] = "stopped"
+    _save_bot_overrides(overrides)
+    # Also physically stop the bot on 3Commas right now
+    try:
+        signed_request("POST", f"/ver1/grid_bots/{bot_id}/disable")
+    except Exception:
+        pass
+    return jsonify({"ok": True, "bot_id": bot_id, "override": "stopped"})
+
+
+@app.route("/bots/<bot_id>/override", methods=["DELETE"])
+def clear_bot_override(bot_id):
+    """Remove manual override — engine resumes normal control of this bot."""
+    overrides = _load_bot_overrides()
+    overrides.pop(bot_id, None)
+    _save_bot_overrides(overrides)
+    return jsonify({"ok": True, "bot_id": bot_id, "override": None})
+
+
 # ── Tier budget config ────────────────────────────────────
 from threecommas import load_tier_budgets, save_tier_budgets
 

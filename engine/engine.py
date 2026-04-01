@@ -138,6 +138,22 @@ GRID_BOTS = [bot.strip() for bot in os.getenv("GRID_BOT_IDS", "").split(",") if 
 # from inventory_settings.json via get_inventory_settings() each cycle so that
 # dashboard changes take effect immediately without an engine restart.
 
+_BOT_OVERRIDES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_overrides.json")
+
+def _load_bot_overrides() -> dict:
+    """
+    Load manual bot overrides from bot_overrides.json.
+    Returns dict of {bot_id_str: "stopped"} for each manually locked-off bot.
+    Returns {} if file doesn't exist or is unreadable.
+    """
+    try:
+        if os.path.exists(_BOT_OVERRIDES_FILE):
+            with open(_BOT_OVERRIDES_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
 
 def _make_intensive_buy_tiers(price: float, tiers: list) -> list:
     """
@@ -374,9 +390,14 @@ def run():
             state.compression
         )
 
-        # Helper: start or stop a bot (respects DRY_RUN)
+        # Helper: start or stop a bot (respects DRY_RUN and manual overrides)
         # Defined here so it's available to the breakout block AND tiered decisions below
+        _bot_overrides = _load_bot_overrides()
+
         def _act(bot_id, should_run, label):
+            if should_run and _bot_overrides.get(str(bot_id)) == "stopped":
+                print(f"  Manual override ACTIVE — skipping start for bot {bot_id} ({label})")
+                return
             if DRY_RUN:
                 action = "start" if should_run else "stop"
                 print(f"[SIMULATION] Would {action} bot {bot_id} ({label})")
