@@ -609,14 +609,24 @@ def run():
                     if not _dual:
                         # ── Single entry ──────────────────────────────────────
                         if not _main_id:
-                            if DRY_RUN:
+                            _last_attempt = float(_pt_state.get("dca_last_attempt_ts") or 0)
+                            _attempt_age  = time.time() - _last_attempt
+                            _RETRY_COOLDOWN = 300
+                            if _attempt_age < _RETRY_COOLDOWN:
+                                print(f"  DCA launch: retry cooldown — "
+                                      f"{int(_RETRY_COOLDOWN - _attempt_age)}s remaining")
+                            elif DRY_RUN:
                                 print(f"  [SIM] Would launch DCA bot '{_pt_label}' "
                                       f"base=${bo_usd} TP={tp_desc} trailing={_trailing}")
                             elif _can_act():
+                                update_target(_pt_state["id"], {"dca_last_attempt_ts": time.time()})
                                 try:
                                     bid = _launch_dca(_pt_label, bo_usd, _tp_steps, _trailing, _trail_dev)
                                     _record_action()   # only after success
-                                    update_target(_pt_state["id"], {"dca_bot_id": bid})
+                                    update_target(_pt_state["id"], {
+                                        "dca_bot_id": bid,
+                                        "dca_last_attempt_ts": None,
+                                    })
                                     notify(f"DCA bot launched '{_pt_label}' id={bid} base=${bo_usd:.0f}")
                                     print(f"  DCA bot launched: id={bid} base=${bo_usd} TP={tp_desc}")
                                 except Exception as _dca_err:
@@ -633,28 +643,39 @@ def run():
                         _cycles_active = int(_pt_state.get("dca_scout_cycles_active") or 0)
 
                         if not _scout_id:
-                            # Phase 1 — launch scout bot immediately
-                            scout_capital = round(bo_usd * _scout_pct, 2)
-                            if DRY_RUN:
-                                print(f"  [SIM] Would launch SCOUT DCA '{_pt_label}' "
-                                      f"capital=${scout_capital} ({_scout_pct:.0%} of ${bo_usd})")
-                            elif _can_act():
-                                try:
-                                    scout_label = f"{_pt_label} [scout]"
-                                    bid = _launch_dca(scout_label, scout_capital, _tp_steps, _trailing, _trail_dev)
-                                    _record_action()
-                                    update_target(_pt_state["id"], {
-                                        "dca_scout_bot_id": bid,
-                                        "dca_scout_cycles_active": 0,
-                                    })
-                                    notify(f"DCA scout launched '{_pt_label}' id={bid} "
-                                           f"capital=${scout_capital:.0f} ({_scout_pct:.0%})")
-                                    print(f"  DCA scout launched: id={bid} capital=${scout_capital}")
-                                except Exception as _e:
-                                    notify_critical(f"DCA scout launch FAILED '{_pt_label}': {_e}")
-                                    print(f"  ERROR: DCA scout launch failed: {_e}")
+                            # Phase 1 — launch scout bot immediately.
+                            # Back off 5 min after a failed attempt to avoid spamming
+                            # 3Commas and Telegram on every cycle.
+                            _last_attempt = float(_pt_state.get("dca_last_attempt_ts") or 0)
+                            _attempt_age  = time.time() - _last_attempt
+                            _RETRY_COOLDOWN = 300  # 5 minutes between retries
+                            if _attempt_age < _RETRY_COOLDOWN:
+                                print(f"  DCA scout: retry cooldown — "
+                                      f"{int(_RETRY_COOLDOWN - _attempt_age)}s remaining")
                             else:
-                                print(f"  Rate limit — DCA scout launch deferred")
+                                scout_capital = round(bo_usd * _scout_pct, 2)
+                                if DRY_RUN:
+                                    print(f"  [SIM] Would launch SCOUT DCA '{_pt_label}' "
+                                          f"capital=${scout_capital} ({_scout_pct:.0%} of ${bo_usd})")
+                                elif _can_act():
+                                    update_target(_pt_state["id"], {"dca_last_attempt_ts": time.time()})
+                                    try:
+                                        scout_label = f"{_pt_label} [scout]"
+                                        bid = _launch_dca(scout_label, scout_capital, _tp_steps, _trailing, _trail_dev)
+                                        _record_action()
+                                        update_target(_pt_state["id"], {
+                                            "dca_scout_bot_id": bid,
+                                            "dca_scout_cycles_active": 0,
+                                            "dca_last_attempt_ts": None,
+                                        })
+                                        notify(f"DCA scout launched '{_pt_label}' id={bid} "
+                                               f"capital=${scout_capital:.0f} ({_scout_pct:.0%})")
+                                        print(f"  DCA scout launched: id={bid} capital=${scout_capital}")
+                                    except Exception as _e:
+                                        notify_critical(f"DCA scout launch FAILED '{_pt_label}': {_e}")
+                                        print(f"  ERROR: DCA scout launch failed: {_e}")
+                                else:
+                                    print(f"  Rate limit — DCA scout launch deferred")
 
                         elif not _retest_id:
                             # Phase 2 — wait for retest then launch main bot

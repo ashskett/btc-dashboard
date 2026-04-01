@@ -136,10 +136,12 @@ def create_dca_bot(
         "leverage_type":                   "not_specified",
     }
     if take_profit_steps and len(take_profit_steps) > 0:
-        # Step mode: each step closes a portion of the position at a different profit %.
-        # API fields: amount_percentage (share to close) + profit_percentage (target %).
-        # amount_percentage values must sum to 100.
-        body["take_profit_type"]  = "step"
+        # Step TP: 3Commas requires take_profit_type="total" and take_profit to
+        # always be present even when steps are provided. Use the highest step's
+        # profit_pct as the take_profit value (the final close level).
+        max_step_pct = max(s["profit_pct"] for s in take_profit_steps)
+        body["take_profit_type"]  = "total"
+        body["take_profit"]       = str(round(max_step_pct, 2))
         body["take_profit_steps"] = [
             {
                 "amount_percentage": round(s["close_pct"], 2),
