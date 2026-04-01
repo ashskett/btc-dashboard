@@ -136,9 +136,10 @@ def create_dca_bot(
         "leverage_type":                   "not_specified",
     }
     if take_profit_steps and len(take_profit_steps) > 0:
-        # Step TP: send ONLY take_profit_steps — 3Commas rejects requests that
-        # include both take_profit and take_profit_steps simultaneously.
-        # take_profit_type must be omitted (or left as default) when using steps.
+        # Step TP: take_profit_type="step" + take_profit_steps array.
+        # Do NOT include take_profit — 3Commas rejects the request if both
+        # take_profit and take_profit_steps are present simultaneously.
+        body["take_profit_type"]  = "step"
         body["take_profit_steps"] = [
             {
                 "amount_percentage": round(s["close_pct"], 2),
@@ -146,7 +147,6 @@ def create_dca_bot(
             }
             for s in take_profit_steps
         ]
-        # Do NOT set take_profit or take_profit_type when steps are provided.
     else:
         body["take_profit_type"] = "total"
         body["take_profit"]      = str(round(take_profit_pct, 2))
