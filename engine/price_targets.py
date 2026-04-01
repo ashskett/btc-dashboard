@@ -448,7 +448,8 @@ def clear_target(target_id: str) -> bool:
                       "sf_broken_at": None, "smart_trade_id": None,
                       "smart_trade_scout_id": None, "smart_trade_retest_id": None,
                       "dca_scout_bot_id": None, "dca_retest_bot_id": None,
-                      "dca_scout_cycles_active": 0})
+                      "dca_scout_cycles_active": 0, "dca_fail_count": 0,
+                      "dca_last_attempt_ts": None})
             save_targets(targets)
             return True
     return False

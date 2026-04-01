@@ -619,6 +619,7 @@ def run():
                                 print(f"  [SIM] Would launch DCA bot '{_pt_label}' "
                                       f"base=${bo_usd} TP={tp_desc} trailing={_trailing}")
                             elif _can_act():
+                                _fail_count = int(_pt_state.get("dca_fail_count") or 0)
                                 update_target(_pt_state["id"], {"dca_last_attempt_ts": time.time()})
                                 try:
                                     bid = _launch_dca(_pt_label, bo_usd, _tp_steps, _trailing, _trail_dev)
@@ -626,12 +627,16 @@ def run():
                                     update_target(_pt_state["id"], {
                                         "dca_bot_id": bid,
                                         "dca_last_attempt_ts": None,
+                                        "dca_fail_count": 0,
                                     })
                                     notify(f"DCA bot launched '{_pt_label}' id={bid} base=${bo_usd:.0f}")
                                     print(f"  DCA bot launched: id={bid} base=${bo_usd} TP={tp_desc}")
                                 except Exception as _dca_err:
-                                    notify_critical(f"DCA launch FAILED '{_pt_label}': {_dca_err}")
-                                    print(f"  ERROR: DCA bot launch failed: {_dca_err}")
+                                    new_fails = _fail_count + 1
+                                    update_target(_pt_state["id"], {"dca_fail_count": new_fails})
+                                    print(f"  ERROR: DCA bot launch failed (attempt {new_fails}): {_dca_err}")
+                                    if new_fails == 1:
+                                        notify_critical(f"DCA launch FAILED '{_pt_label}': {_dca_err}")
                             else:
                                 print(f"  Rate limit — DCA launch deferred to next cycle")
 
@@ -658,7 +663,10 @@ def run():
                                     print(f"  [SIM] Would launch SCOUT DCA '{_pt_label}' "
                                           f"capital=${scout_capital} ({_scout_pct:.0%} of ${bo_usd})")
                                 elif _can_act():
-                                    update_target(_pt_state["id"], {"dca_last_attempt_ts": time.time()})
+                                    _fail_count = int(_pt_state.get("dca_fail_count") or 0)
+                                    update_target(_pt_state["id"], {
+                                        "dca_last_attempt_ts": time.time(),
+                                    })
                                     try:
                                         scout_label = f"{_pt_label} [scout]"
                                         bid = _launch_dca(scout_label, scout_capital, _tp_steps, _trailing, _trail_dev)
@@ -667,13 +675,18 @@ def run():
                                             "dca_scout_bot_id": bid,
                                             "dca_scout_cycles_active": 0,
                                             "dca_last_attempt_ts": None,
+                                            "dca_fail_count": 0,
                                         })
                                         notify(f"DCA scout launched '{_pt_label}' id={bid} "
                                                f"capital=${scout_capital:.0f} ({_scout_pct:.0%})")
                                         print(f"  DCA scout launched: id={bid} capital=${scout_capital}")
                                     except Exception as _e:
-                                        notify_critical(f"DCA scout launch FAILED '{_pt_label}': {_e}")
-                                        print(f"  ERROR: DCA scout launch failed: {_e}")
+                                        new_fails = _fail_count + 1
+                                        update_target(_pt_state["id"], {"dca_fail_count": new_fails})
+                                        print(f"  ERROR: DCA scout launch failed (attempt {new_fails}): {_e}")
+                                        # Only notify on first failure — subsequent retries are silent
+                                        if new_fails == 1:
+                                            notify_critical(f"DCA scout launch FAILED '{_pt_label}': {_e}")
                                 else:
                                     print(f"  Rate limit — DCA scout launch deferred")
 

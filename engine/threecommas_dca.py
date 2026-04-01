@@ -136,12 +136,9 @@ def create_dca_bot(
         "leverage_type":                   "not_specified",
     }
     if take_profit_steps and len(take_profit_steps) > 0:
-        # Step TP: 3Commas requires take_profit_type="total" and take_profit to
-        # always be present even when steps are provided. Use the highest step's
-        # profit_pct as the take_profit value (the final close level).
-        max_step_pct = max(s["profit_pct"] for s in take_profit_steps)
-        body["take_profit_type"]  = "total"
-        body["take_profit"]       = str(round(max_step_pct, 2))
+        # Step TP: send ONLY take_profit_steps — 3Commas rejects requests that
+        # include both take_profit and take_profit_steps simultaneously.
+        # take_profit_type must be omitted (or left as default) when using steps.
         body["take_profit_steps"] = [
             {
                 "amount_percentage": round(s["close_pct"], 2),
@@ -149,6 +146,7 @@ def create_dca_bot(
             }
             for s in take_profit_steps
         ]
+        # Do NOT set take_profit or take_profit_type when steps are provided.
     else:
         body["take_profit_type"] = "total"
         body["take_profit"]      = str(round(take_profit_pct, 2))
