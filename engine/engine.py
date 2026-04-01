@@ -518,11 +518,12 @@ def run():
                   + (f"  → target=${_pt_tp:,.0f} ({to_target:+.1f}%)" if _pt_tp else ""))
 
             if _pt_dir == "UP":
-                _dca_live = _pt_state.get("dca_bot_id")
-                if _dca_live:
-                    # DCA bot is running — stop ALL grid bots so the DCA bot has
-                    # maximum free capital for its safety order chain.
-                    print(f"  [Target] DCA bot {_dca_live} active — ALL bots OFF (capital reserved for DCA)")
+                # Any DCA capital deployed (single bot, scout, or retest) means
+                # stop ALL grid bots to free maximum capital for safety orders.
+                _any_dca_live = any(_pt_state.get(k) for k in (
+                    "dca_bot_id", "dca_scout_bot_id", "dca_retest_bot_id"))
+                if _any_dca_live:
+                    print(f"  [Target] DCA capital deployed — ALL bots OFF (capital reserved for DCA)")
                     for i, bot in enumerate(GRID_BOTS[:3]):
                         tier_name = ["inner", "mid", "outer"][i]
                         _act(bot, False, f"{tier_name} (DCA active: {_pt_label})")
@@ -545,90 +546,200 @@ def run():
                 if _hold_secs > 0:
                     print(f"  DCA launch held — sweep guard active ({_hold_secs:.0f}s remaining)")
 
-                # Only on the first cycle after firing (dca_bot_id not yet set).
-                # DCA bot launches if either dca_tp_steps (multi-level TP) is set
-                # or a price_target is set (single TP derived from the absolute $target).
-                _tp_steps = _pt_state.get("dca_tp_steps") or []
-                _has_tp   = bool(_tp_steps) or bool(_pt_tp)
-                if _pt_state.get("dca_enabled") and not _pt_state.get("dca_bot_id") and _has_tp and _hold_secs == 0:
-                    bo_usd   = float(_pt_state.get("dca_base_order_usd", 500))
-                    so_usd   = round(bo_usd * 0.5, 2)
-                    so_count = int(_pt_state.get("dca_safety_count", 5))
-                    so_step  = float(_pt_state.get("dca_safety_step_pct", 1.5))
-                    so_mult  = float(_pt_state.get("dca_safety_volume_mult", 1.2))
-                    max_exp  = estimate_max_exposure(bo_usd, so_usd, so_count, so_mult)
+                # DCA bot launch — single or dual entry.
+                #
+                # Single entry: one bot launched immediately with full capital.
+                #
+                # Dual entry (dca_dual_entry=True):
+                #   Scout  — fires immediately at dca_scout_pct% of base order capital.
+                #             Tracked via dca_scout_bot_id.
+                #   Retest — fires when price pulls back within dca_retest_tolerance_pct%
+                #             of the fire price, after dca_scout_buffer_cycles cycles.
+                #             Uses remaining (100-scout)% capital. Tracked via dca_retest_bot_id.
+                #             dca_bot_id is only set once the retest bot is live — this is
+                #             the "DCA active" marker used by the capital guard and SL logic.
+                #
+                # Rate limit fix: _record_action() moved inside the success path so
+                # a failed launch does not consume a rate-limit slot.
+                _tp_steps   = _pt_state.get("dca_tp_steps") or []
+                _has_tp     = bool(_tp_steps) or bool(_pt_tp)
+                _dual       = bool(_pt_state.get("dca_dual_entry"))
+                _scout_id   = _pt_state.get("dca_scout_bot_id")
+                _retest_id  = _pt_state.get("dca_retest_bot_id")
+                _main_id    = _pt_state.get("dca_bot_id")
 
-                    # TP config: prefer explicit steps; fall back to single % from price_target
+                if _pt_state.get("dca_enabled") and _has_tp and _hold_secs == 0:
+                    bo_usd    = float(_pt_state.get("dca_base_order_usd", 500))
+                    so_usd    = round(bo_usd * 0.5, 2)
+                    so_count  = int(_pt_state.get("dca_safety_count", 5))
+                    so_step   = float(_pt_state.get("dca_safety_step_pct", 1.5))
+                    so_mult   = float(_pt_state.get("dca_safety_volume_mult", 1.2))
+                    _trailing = bool(_pt_state.get("dca_trailing_enabled"))
+                    _trail_dev= float(_pt_state.get("dca_trailing_deviation_pct") or 1.0)
+
+                    # TP config: prefer explicit steps; fall back to % derived from price_target
                     if _tp_steps:
-                        tp_desc = " | ".join(f"{s['profit_pct']}%→close {s['close_pct']}%" for s in _tp_steps)
+                        tp_desc = " | ".join(f"{s['profit_pct']}%→{s['close_pct']}%" for s in _tp_steps)
+                        tp_pct  = 2.0   # fallback not used when steps provided
                     else:
                         tp_pct  = round((_pt_tp - state.price) / state.price * 100, 2)
                         tp_desc = f"{tp_pct:.1f}%"
 
-                    if DRY_RUN:
-                        print(f"  [SIM] Would create DCA bot '{_pt_label}' | "
-                              f"base=${bo_usd} SO=${so_usd}×{so_count} "
-                              f"step={so_step}% mult={so_mult}× | "
-                              f"TP={tp_desc} | max_exposure=${max_exp:,.0f}")
-                    elif _can_act():
-                        _record_action()
-                        try:
-                            bot_data = create_dca_bot(
-                                label=_pt_label,
-                                base_order_usd=bo_usd,
-                                safety_order_usd=so_usd,
-                                take_profit_pct=tp_pct if not _tp_steps else 2.0,
-                                take_profit_steps=_tp_steps if _tp_steps else None,
-                                safety_order_count=so_count,
-                                safety_order_step_pct=so_step,
-                                safety_order_volume_mult=so_mult,
-                            )
-                            dca_id = str(bot_data.get("id", ""))
-                            if dca_id:
-                                enable_dca_bot(dca_id)
-                                update_target(_pt_state["id"], {"dca_bot_id": dca_id})
-                                print(f"  DCA bot launched: id={dca_id} "
-                                      f"base=${bo_usd} TP={tp_pct:.1f}% max_exp=${max_exp:,.0f}")
-                        except Exception as _dca_err:
-                            print(f"  Warning: DCA bot launch failed: {_dca_err}")
+                    def _launch_dca(label, capital_usd, steps, trailing, trail_dev):
+                        """Create, enable, and return bot id. Raises on failure."""
+                        so = round(capital_usd * 0.5, 2)
+                        bd = create_dca_bot(
+                            label=label,
+                            base_order_usd=capital_usd,
+                            safety_order_usd=so,
+                            take_profit_pct=tp_pct if not steps else 2.0,
+                            take_profit_steps=steps if steps else None,
+                            safety_order_count=so_count,
+                            safety_order_step_pct=so_step,
+                            safety_order_volume_mult=so_mult,
+                            trailing_enabled=trailing,
+                            trailing_deviation_pct=trail_dev,
+                        )
+                        bid = str(bd.get("id", ""))
+                        if not bid:
+                            raise ValueError(f"3Commas returned no bot id: {bd}")
+                        enable_dca_bot(bid)
+                        return bid
+
+                    if not _dual:
+                        # ── Single entry ──────────────────────────────────────
+                        if not _main_id:
+                            if DRY_RUN:
+                                print(f"  [SIM] Would launch DCA bot '{_pt_label}' "
+                                      f"base=${bo_usd} TP={tp_desc} trailing={_trailing}")
+                            elif _can_act():
+                                try:
+                                    bid = _launch_dca(_pt_label, bo_usd, _tp_steps, _trailing, _trail_dev)
+                                    _record_action()   # only after success
+                                    update_target(_pt_state["id"], {"dca_bot_id": bid})
+                                    notify(f"DCA bot launched '{_pt_label}' id={bid} base=${bo_usd:.0f}")
+                                    print(f"  DCA bot launched: id={bid} base=${bo_usd} TP={tp_desc}")
+                                except Exception as _dca_err:
+                                    notify_critical(f"DCA launch FAILED '{_pt_label}': {_dca_err}")
+                                    print(f"  ERROR: DCA bot launch failed: {_dca_err}")
+                            else:
+                                print(f"  Rate limit — DCA launch deferred to next cycle")
+
                     else:
-                        print(f"  Rate limit reached — DCA bot launch deferred to next cycle")
+                        # ── Dual entry ────────────────────────────────────────
+                        _scout_pct = float(_pt_state.get("dca_scout_pct") or 30) / 100.0
+                        _buf_cycles= int(_pt_state.get("dca_scout_buffer_cycles") or 5)
+                        _retest_tol= float(_pt_state.get("dca_retest_tolerance_pct") or 0.5) / 100.0
+                        _cycles_active = int(_pt_state.get("dca_scout_cycles_active") or 0)
+
+                        if not _scout_id:
+                            # Phase 1 — launch scout bot immediately
+                            scout_capital = round(bo_usd * _scout_pct, 2)
+                            if DRY_RUN:
+                                print(f"  [SIM] Would launch SCOUT DCA '{_pt_label}' "
+                                      f"capital=${scout_capital} ({_scout_pct:.0%} of ${bo_usd})")
+                            elif _can_act():
+                                try:
+                                    scout_label = f"{_pt_label} [scout]"
+                                    bid = _launch_dca(scout_label, scout_capital, _tp_steps, _trailing, _trail_dev)
+                                    _record_action()
+                                    update_target(_pt_state["id"], {
+                                        "dca_scout_bot_id": bid,
+                                        "dca_scout_cycles_active": 0,
+                                    })
+                                    notify(f"DCA scout launched '{_pt_label}' id={bid} "
+                                           f"capital=${scout_capital:.0f} ({_scout_pct:.0%})")
+                                    print(f"  DCA scout launched: id={bid} capital=${scout_capital}")
+                                except Exception as _e:
+                                    notify_critical(f"DCA scout launch FAILED '{_pt_label}': {_e}")
+                                    print(f"  ERROR: DCA scout launch failed: {_e}")
+                            else:
+                                print(f"  Rate limit — DCA scout launch deferred")
+
+                        elif not _retest_id:
+                            # Phase 2 — wait for retest then launch main bot
+                            new_cycles = _cycles_active + 1
+                            update_target(_pt_state["id"], {"dca_scout_cycles_active": new_cycles})
+
+                            _fire_px  = float(_pt_state.get("fired_price") or state.price)
+                            _retest_lo = _fire_px * (1.0 - _retest_tol)
+                            _retest_hi = _fire_px * (1.0 + _retest_tol)
+                            _in_retest = _retest_lo <= state.price <= _retest_hi
+                            _buf_met   = new_cycles >= _buf_cycles
+
+                            print(f"  DCA retest watch: fire=${_fire_px:,.0f} "
+                                  f"zone={_retest_lo:,.0f}–{_retest_hi:,.0f} "
+                                  f"now=${state.price:,.0f} "
+                                  f"cycles={new_cycles}/{_buf_cycles} "
+                                  f"in_zone={_in_retest}")
+
+                            if _buf_met and _in_retest:
+                                retest_capital = round(bo_usd * (1.0 - _scout_pct), 2)
+                                if DRY_RUN:
+                                    print(f"  [SIM] Retest confirmed — would launch main DCA "
+                                          f"capital=${retest_capital} ({1-_scout_pct:.0%} of ${bo_usd})")
+                                elif _can_act():
+                                    try:
+                                        retest_label = f"{_pt_label} [retest]"
+                                        bid = _launch_dca(retest_label, retest_capital, _tp_steps, _trailing, _trail_dev)
+                                        _record_action()
+                                        update_target(_pt_state["id"], {
+                                            "dca_retest_bot_id": bid,
+                                            "dca_bot_id": bid,   # marks DCA as fully live
+                                        })
+                                        notify(f"DCA retest confirmed '{_pt_label}' — "
+                                               f"main bot launched id={bid} capital=${retest_capital:.0f}")
+                                        print(f"  DCA retest bot launched: id={bid} capital=${retest_capital}")
+                                    except Exception as _e:
+                                        notify_critical(f"DCA retest launch FAILED '{_pt_label}': {_e}")
+                                        print(f"  ERROR: DCA retest launch failed: {_e}")
+                                else:
+                                    print(f"  Rate limit — DCA retest launch deferred")
+                        else:
+                            print(f"  Dual DCA active — scout={_scout_id} retest={_retest_id}")
 
                 # ── DCA stop loss ──────────────────────────────────────────
-                # If dca_stop_loss_pct is configured and an active DCA bot has
-                # capital deployed, check whether price has fallen below the
-                # stop level. If so: panic-sell (closes the deal and returns
-                # BTC to available balance), clear the bot ID so the grid can
-                # operate normally, and notify. This prevents capital being
-                # permanently locked in unfillable safety orders.
-                _dca_sl_pct = float(_pt_state.get("dca_stop_loss_pct") or 0)
-                _active_dca_id = _pt_state.get("dca_bot_id")
-                if _active_dca_id and _dca_sl_pct > 0:
+                # Covers both single-entry (dca_bot_id) and dual-entry (scout
+                # and/or retest bots). Any live bot gets panic-sold and all IDs
+                # are cleared so capital returns to the grid.
+                _dca_sl_pct   = float(_pt_state.get("dca_stop_loss_pct") or 0)
+                _sl_bots_live = [b for b in [
+                    _pt_state.get("dca_bot_id"),
+                    _pt_state.get("dca_scout_bot_id"),
+                    _pt_state.get("dca_retest_bot_id"),
+                ] if b]
+                if _sl_bots_live and _dca_sl_pct > 0:
                     _sl_entry = float(_pt_state.get("fired_price") or state.price)
                     _sl_level = _sl_entry * (1.0 - _dca_sl_pct / 100.0)
                     if state.price < _sl_level:
                         print(f"  DCA stop loss triggered — price ${state.price:,.0f} < "
                               f"${_sl_level:,.0f} ({_dca_sl_pct}% below entry "
-                              f"${_sl_entry:,.0f})")
+                              f"${_sl_entry:,.0f}) — panic-selling {len(_sl_bots_live)} bot(s)")
                         if DRY_RUN:
-                            print(f"  [SIM] Would panic_sell DCA bot {_active_dca_id}")
+                            print(f"  [SIM] Would panic_sell: {_sl_bots_live}")
                         else:
                             try:
-                                panic_sell_dca_bot(_active_dca_id)
-                                update_target(_pt_state["id"], {"dca_bot_id": None})
+                                for _sl_bid in _sl_bots_live:
+                                    panic_sell_dca_bot(_sl_bid)
+                                update_target(_pt_state["id"], {
+                                    "dca_bot_id": None,
+                                    "dca_scout_bot_id": None,
+                                    "dca_retest_bot_id": None,
+                                    "dca_scout_cycles_active": 0,
+                                })
                                 notify_critical(
                                     f"DCA STOP LOSS '{_pt_label}' — "
                                     f"${state.price:,.0f} hit {_dca_sl_pct:.1f}% SL "
                                     f"(entry ${_sl_entry:,.0f}). "
-                                    f"Position closed, capital released to grid."
+                                    f"All positions closed, capital released to grid."
                                 )
-                                print(f"  DCA bot {_active_dca_id} panic-sold, capital freed")
+                                print(f"  DCA stop loss: {len(_sl_bots_live)} bot(s) panic-sold")
                             except Exception as _sl_err:
                                 print(f"  Warning: DCA stop loss failed: {_sl_err}")
                     else:
                         print(f"  DCA SL watch: ${state.price:,.0f} | "
                               f"SL at ${_sl_level:,.0f} ({_dca_sl_pct}% below "
-                              f"${_sl_entry:,.0f})")
+                              f"${_sl_entry:,.0f}) | bots live: {len(_sl_bots_live)}")
 
             else:  # DOWN target (support_failure or breakout DOWN)
                 print(f"  [Target] all bots off (capital protection)")
