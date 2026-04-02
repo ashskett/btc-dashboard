@@ -187,6 +187,40 @@ def _make_intensive_buy_tiers(price: float, tiers: list) -> list:
     return result
 
 
+def _make_intensive_sell_tiers(price: float, tiers: list) -> list:
+    """
+    Build sell-biased tier parameters for SELL_ONLY mode.
+
+    Shifts each tier's range entirely above current price so the bot's initial
+    orders are sells only (no buy orders sit below price at deployment time).
+    Range is compressed to 60% of normal width to create a denser sell cluster.
+
+        grid_low  = price × 1.0005  (fractional buffer — avoids placing orders
+                                     right on the live price spread)
+        grid_high = grid_low + (original_width × 0.60)
+
+    As price rises into the range, sell orders fill and BTC converts to USDC.
+    If price falls further, orders remain unexecuted — no forced selling at a loss.
+    Levels and step are recalculated proportionally.
+    """
+    import copy as _copy
+    result = []
+    for tier in tiers:
+        t = _copy.deepcopy(tier)
+        orig_width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
+        new_width  = round(orig_width * 0.60, 2)
+        new_low    = round(price * 1.0005, 2)
+        new_high   = round(new_low + new_width, 2)
+        n          = max(int(t.get("levels", 5)), 2)
+        new_step   = round(new_width / (n - 1), 2)
+        t["grid_high"]   = new_high
+        t["grid_low"]    = new_low
+        t["step"]        = new_step
+        t["grid_levels"] = [round(new_low + i * new_step, 2) for i in range(n)]
+        result.append(t)
+    return result
+
+
 _last_run_ts = 0
 _prev_regime: str | None = None
 _prev_trending_down: bool = False
@@ -906,11 +940,11 @@ def run():
               f"  threshold=${_drift_gw * 0.85:,.0f}")
         if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0):
             state.drift_triggered = True
-            if state.inventory_mode == "BUY_ONLY":
-                # Intensive buy mode — grid is intentionally deployed below current
-                # price. A drift redeployment here would replace it with normal
-                # symmetric tiers, undoing the buy bias. Suppress and fall through.
-                print(f"  Drift suppressed — BUY_ONLY intensive mode active, preserving buy-biased grid")
+            if state.inventory_mode in ("BUY_ONLY", "SELL_ONLY"):
+                # Intensive mode — grid is intentionally deployed entirely to one
+                # side of current price. A drift redeployment would replace it with
+                # normal symmetric tiers, undoing the bias. Suppress and fall through.
+                print(f"  Drift suppressed — {state.inventory_mode} intensive mode active, preserving biased grid")
             else:
                 # ── Flood-fill guard ──────────────────────────────────────────
                 # Prevent rapid recentres when price oscillates around the drift
@@ -987,20 +1021,32 @@ def run():
         # INVENTORY PROTECTION
         # ===============================
         if state.inventory_mode == "SELL_ONLY":
-            # BTC ratio too high — stop all bots so the grid cannot buy more.
-            # Existing 3Commas sell orders remain live and will fill naturally.
             if _prev_inventory_mode != "SELL_ONLY":
-                notify_critical(f"SELL ONLY — BTC ratio {state.btc_ratio:.0%} too high, all bots stopped")
-            print(f"Inventory protection: SELL ONLY (ratio {state.btc_ratio:.0%}) — bots stopped")
-
-            for bot in GRID_BOTS:
+                # First cycle at critically high BTC ratio — redeploy in intensive
+                # sell mode: all tier ranges shifted above current price (initial
+                # orders are sells only) and compressed to 60% width for a denser
+                # sell cluster. As price rises into the range, sells fill and BTC
+                # converts to USDC. If price falls, orders sit unexecuted — no
+                # forced selling at a loss. Drift suppressed while active.
+                # Recovery to NORMAL triggers a fresh symmetric redeploy.
+                notify_critical(
+                    f"SELL ONLY — BTC ratio {state.btc_ratio:.0%} too high, "
+                    f"entering intensive sell mode (grid shifted above price)"
+                )
+                _intensive_tiers = _make_intensive_sell_tiers(state.price, state.tiers)
                 if DRY_RUN:
-                    print(f"[SIMULATION] Stopping bot {bot} (SELL_ONLY)")
+                    print(f"  [SIM] Would redeploy intensive sell: "
+                          f"inner {_intensive_tiers[0]['grid_low']:,.0f}–"
+                          f"{_intensive_tiers[0]['grid_high']:,.0f}")
+                elif _can_act():
+                    _record_action()
+                    redeploy_all_bots(GRID_BOTS, _intensive_tiers)
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       deployed_tiers=_intensive_tiers)
                 else:
-                    stop_bot(bot)
-
-            _prev_inventory_mode = "SELL_ONLY"
-            return
+                    print(f"  Rate limit reached — intensive sell redeploy deferred to next cycle")
+            print(f"SELL ONLY: ratio {state.btc_ratio:.0%} — intensive sell mode active, liquidating above price")
+            # Fall through to tiered bot decisions — bots remain ON to sell.
 
         if state.inventory_mode == "BUY_ONLY":
             if _prev_inventory_mode != "BUY_ONLY":
