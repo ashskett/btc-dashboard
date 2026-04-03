@@ -221,13 +221,81 @@ def _make_intensive_sell_tiers(price: float, tiers: list) -> list:
     return result
 
 
+def _is_weekend_grid_hours() -> bool:
+    """
+    Return True during the weekend low-volatility window:
+        Fri ≥ 21:00 UTC  (NYSE/NASDAQ close)
+        Sat & Sun all day
+        Mon < 07:00 UTC  (before EU open)
+    """
+    import datetime as _dt
+    now = _dt.datetime.utcnow()
+    wd  = now.weekday()   # Mon=0 … Fri=4, Sat=5, Sun=6
+    if wd == 4 and now.hour >= 21:  return True   # Friday after US close
+    if wd in (5, 6):                return True   # Saturday / Sunday
+    if wd == 0 and now.hour < 7:    return True   # Monday before EU open
+    return False
+
+
+def _price_near_level(price: float, tiers: list) -> tuple:
+    """
+    Check whether price is within half a step of any deployed grid level.
+    Returns (is_near: bool, nearest_level: float|None, threshold: float).
+
+    This is used as a guard before triggering a weekend tight-grid redeploy —
+    avoid cancelling orders that are about to fill.
+    """
+    if not tiers:
+        return False, None, 0.0
+    min_step = min(float(t.get("step", 9999)) for t in tiers if t.get("step"))
+    threshold = min_step / 2
+    nearest_level, nearest_dist = None, float("inf")
+    for tier in tiers:
+        for lvl in tier.get("grid_levels", []):
+            dist = abs(price - float(lvl))
+            if dist < nearest_dist:
+                nearest_dist = dist
+                nearest_level = float(lvl)
+    return nearest_dist <= threshold, nearest_level, threshold
+
+
+def _make_weekend_tiers(price: float, tiers: list) -> list:
+    """
+    Build tighter tier parameters for the weekend low-volatility window.
+
+    Grid is centred symmetrically at current price with 65% of normal
+    ATR-derived width. Level count is unchanged — tighter step spacing
+    means more fills per oscillation on quiet weekend price action.
+
+        grid_low  = price − (original_width × 0.65 / 2)
+        grid_high = price + (original_width × 0.65 / 2)
+    """
+    import copy as _copy
+    result = []
+    for tier in tiers:
+        t = _copy.deepcopy(tier)
+        orig_width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
+        new_width  = round(orig_width * 0.65, 2)
+        new_low    = round(price - new_width / 2, 2)
+        new_high   = round(price + new_width / 2, 2)
+        n          = max(int(t.get("levels", 5)), 2)
+        new_step   = round(new_width / (n - 1), 2)
+        t["grid_high"]   = new_high
+        t["grid_low"]    = new_low
+        t["step"]        = new_step
+        t["grid_levels"] = [round(new_low + i * new_step, 2) for i in range(n)]
+        result.append(t)
+    return result
+
+
 _last_run_ts = 0
 _prev_regime: str | None = None
 _prev_trending_down: bool = False
 _prev_inventory_mode: str | None = None
+_prev_weekend_mode: bool = False
 
 def run():
-    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode
+    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode
     now = time.time()
     if now - _last_run_ts < 100:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
@@ -940,11 +1008,15 @@ def run():
               f"  threshold=${_drift_gw * 0.85:,.0f}")
         if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0):
             state.drift_triggered = True
-            if state.inventory_mode in ("BUY_ONLY", "SELL_ONLY"):
-                # Intensive mode — grid is intentionally deployed entirely to one
-                # side of current price. A drift redeployment would replace it with
-                # normal symmetric tiers, undoing the bias. Suppress and fall through.
-                print(f"  Drift suppressed — {state.inventory_mode} intensive mode active, preserving biased grid")
+            if state.inventory_mode in ("BUY_ONLY", "SELL_ONLY") or _prev_weekend_mode:
+                # Biased/weekend mode — grid is intentionally deployed at a specific
+                # geometry. A drift redeployment would overwrite it with normal
+                # symmetric tiers. Suppress and fall through.
+                _drift_suppress_reason = (
+                    f"{state.inventory_mode} intensive mode" if state.inventory_mode != "NORMAL"
+                    else "weekend tight grid"
+                )
+                print(f"  Drift suppressed — {_drift_suppress_reason} active, preserving biased grid")
             else:
                 # ── Flood-fill guard ──────────────────────────────────────────
                 # Prevent rapid recentres when price oscillates around the drift
@@ -1004,18 +1076,126 @@ def run():
         if _regime_recovery or _invmode_recovery:
             _reason = (f"Regime {_prev_regime} → {state.regime}" if _regime_recovery
                        else f"Inventory mode {_prev_inventory_mode} → {state.inventory_mode}")
-            print(f"{_reason} — redeploying at ${state.price:,.0f}")
-            notify(f"{_reason} — grid redeployed at ${state.price:,.0f}")
+            # If we're recovering mid-weekend into RANGE/NORMAL, restore the tight
+            # grid rather than the full-width normal tiers.
+            _post_recovery_weekend = (
+                _is_weekend_grid_hours()
+                and state.regime == "RANGE"
+                and state.inventory_mode == "NORMAL"
+                and not _bo_state.get("active")
+            )
+            _recovery_tiers = (_make_weekend_tiers(state.price, state.tiers)
+                               if _post_recovery_weekend else state.tiers)
+            _mode_note = " [weekend tight grid restored]" if _post_recovery_weekend else ""
+            print(f"{_reason} — redeploying at ${state.price:,.0f}{_mode_note}")
+            notify(f"{_reason} — grid redeployed at ${state.price:,.0f}{_mode_note}")
             if DRY_RUN:
-                print(f"[SIMULATION] Would redeploy grid at ${state.price:,.0f}")
+                print(f"[SIMULATION] Would redeploy grid at ${state.price:,.0f}{_mode_note}")
+            elif _can_act():
+                _record_action()
+                redeploy_all_bots(GRID_BOTS, _recovery_tiers)
+                update_grid_center(state.price, grid_width=state.grid_width,
+                                   deployed_tiers=_recovery_tiers)
+                if _post_recovery_weekend:
+                    _prev_weekend_mode = True
+            else:
+                print(f"Rate limit reached — skipping recovery redeploy")
+            return
+
+        # ===============================
+        # WEEKEND TIGHT GRID MODE
+        # ===============================
+        # Default mode when nothing else is happening: Fri close → Mon EU open.
+        # Compresses grid to 65% width centred on current price so tighter step
+        # spacing generates more fills during low-volatility weekend oscillation.
+        #
+        # Only activates when: RANGE regime + NORMAL inventory + no active breakout.
+        # If any of those change mid-weekend, regime/inventory logic takes over and
+        # weekend mode stays pending in the background until they clear.
+        # Exits on time (Monday 07:00 UTC) — never on regime/inventory interruption.
+        #
+        # Redeploy guard: if price is within half a step of any current grid level
+        # the redeploy is deferred cycle by cycle (no timeout) until clearance.
+        # Drift is suppressed while weekend mode is active (see drift block above).
+        _weekend_hours    = _is_weekend_grid_hours()
+        _weekend_eligible = (
+            _weekend_hours
+            and state.regime       == "RANGE"
+            and state.inventory_mode == "NORMAL"
+            and not _bo_state.get("active")
+        )
+        _entering_weekend = _weekend_eligible and not _prev_weekend_mode
+        _exiting_weekend  = _prev_weekend_mode and not _weekend_hours   # time-based exit only
+
+        if _exiting_weekend:
+            # Monday 07:00 UTC — return to full-width normal grid
+            print(f"  Weekend mode ENDING — Monday EU open, redeploying normal grid at ${state.price:,.0f}")
+            notify(f"Weekend mode ended — Monday EU open, normal grid redeployed at ${state.price:,.0f}")
+            if DRY_RUN:
+                print(f"  [SIM] Would redeploy normal tiers at ${state.price:,.0f}")
             elif _can_act():
                 _record_action()
                 redeploy_all_bots(GRID_BOTS, state.tiers)
                 update_grid_center(state.price, grid_width=state.grid_width,
                                    deployed_tiers=state.tiers)
             else:
-                print(f"Rate limit reached — skipping recovery redeploy")
-            return
+                print(f"  Rate limit reached — normal redeploy deferred to next cycle")
+            _prev_weekend_mode = False
+
+        elif _entering_weekend:
+            # First eligible cycle in weekend window — check the near-level guard
+            _near, _near_lvl, _threshold = _price_near_level(state.price, state.tiers)
+            if _near:
+                _dist = abs(state.price - _near_lvl)
+                print(f"  Weekend mode DEFERRED — price ${state.price:,.0f} is "
+                      f"${_dist:,.0f} from level ${_near_lvl:,.0f} "
+                      f"(threshold ${_threshold:,.0f}) — waiting for clearance")
+                notify(f"Weekend tight grid deferred — ${state.price:,.0f} within "
+                       f"${_dist:,.0f} of level ${_near_lvl:,.0f}, will retry next cycle")
+            else:
+                _wt = _make_weekend_tiers(state.price, state.tiers)
+                _inner_step = round(_wt[0]["step"]) if _wt else "?"
+                print(f"  Weekend mode ACTIVATING — tight grid at ${state.price:,.0f} "
+                      f"(inner step ≈ ${_inner_step:,}, was ${round(state.tiers[0]['step']):,})")
+                notify(f"Weekend tight grid deployed at ${state.price:,.0f} — "
+                       f"inner step ${_inner_step:,} (normal ${round(state.tiers[0]['step']):,})")
+                if DRY_RUN:
+                    print(f"  [SIM] Would redeploy weekend tight tiers "
+                          f"{_wt[0]['grid_low']:,.0f}–{_wt[0]['grid_high']:,.0f}")
+                elif _can_act():
+                    _record_action()
+                    redeploy_all_bots(GRID_BOTS, _wt)
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       deployed_tiers=_wt)
+                    _prev_weekend_mode = True
+                else:
+                    print(f"  Rate limit reached — weekend tight redeploy deferred to next cycle")
+
+        elif _prev_weekend_mode and _weekend_hours:
+            # Already in weekend mode — log status each cycle
+            # Sunday 23:00 UTC check: if Asia open and price has drifted > 40%
+            # of tight grid width from centre, silently recentre the tight grid.
+            import datetime as _dt
+            _now = _dt.datetime.utcnow()
+            _sunday_asia = (_now.weekday() == 6 and _now.hour >= 23)
+            if _sunday_asia and state.tiers:
+                _tight_width   = state.tiers[0]["grid_high"] - state.tiers[0]["grid_low"]
+                _tight_centre  = (state.tiers[0]["grid_high"] + state.tiers[0]["grid_low"]) / 2
+                _tight_drift   = abs(state.price - _tight_centre)
+                if _tight_drift > _tight_width * 0.40:
+                    print(f"  Weekend mode: Sunday Asia open recentre — "
+                          f"drift ${_tight_drift:,.0f} > 40% of tight grid (${_tight_width * 0.40:,.0f})")
+                    notify(f"Weekend grid recentred for Asia open at ${state.price:,.0f}")
+                    _wt2 = _make_weekend_tiers(state.price, state.tiers)
+                    if not DRY_RUN and _can_act():
+                        _record_action()
+                        redeploy_all_bots(GRID_BOTS, _wt2)
+                        update_grid_center(state.price, grid_width=state.grid_width,
+                                           deployed_tiers=_wt2)
+                else:
+                    print(f"  Weekend mode ACTIVE (Sunday/Asia) — tight grid, drift ${_tight_drift:,.0f} within threshold")
+            else:
+                print(f"  Weekend mode ACTIVE — tight grid running, drift suppressed")
 
         # ===============================
         # INVENTORY PROTECTION
@@ -1180,6 +1360,8 @@ def run():
                 "price_target_trigger": _pt_state.get("trigger_price") if _pt_state else None,
                 "price_target_tp":      _pt_state.get("price_target")  if _pt_state else None,
                 "price_target_dca_id":  _pt_state.get("dca_bot_id")    if _pt_state else None,
+                # Weekend mode
+                "weekend_mode": _prev_weekend_mode,
             }
             write_status(log_data)
             write_log_entry(log_data)
@@ -1208,6 +1390,7 @@ def run():
                 _prev_regime = state.regime
             _prev_trending_down    = bool(state.trending_down)
             _prev_inventory_mode   = state.inventory_mode
+            # _prev_weekend_mode is updated directly in the weekend mode block above
 
 if __name__ == "__main__":
     schedule.every(2).minutes.do(run)
