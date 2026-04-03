@@ -14,6 +14,10 @@ def _save_regime_state(state):
     except Exception:
         pass
 
+def get_regime_state() -> dict:
+    """Public accessor — returns current persisted regime state dict."""
+    return _load_regime_state()
+
 def detect_regime(df, trendline):
 
     price = df.close.iloc[-1]
@@ -34,22 +38,63 @@ def detect_regime(df, trendline):
     #
     # This mirrors the trending_up Schmitt trigger (entry 5.5, exit 4.5).
     #
-    TREND_DOWN_ENTRY_GAP = 1.0    # ATR multiplier to enter TREND_DOWN
-    TREND_DOWN_EXIT_GAP  = 0.25   # ATR multiplier to exit TREND_DOWN
+    TREND_DOWN_ENTRY_GAP  = 1.0   # ATR multiplier to enter TREND_DOWN
+    TREND_DOWN_EXIT_GAP   = 0.25  # ATR multiplier: trendline-recovery exit
+    TD_STABLE_CYCLES      = 8     # consecutive cycles without new low to auto-clear
+    TD_BOUNCE_ATR         = 0.5   # minimum bounce from low (× ATR) to auto-clear
 
     rs = _load_regime_state()
     td_active = rs.get("trend_down_active", False)
 
     if td_active:
-        # Already in TREND_DOWN — only exit when price recovers close to trendline
-        if price >= trendline - atr * TREND_DOWN_EXIT_GAP:
-            rs["trend_down_active"] = False
-            rs["below_tl_count"] = 0
-            _save_regime_state(rs)
-            print(f"[Regime] TREND_DOWN OFF — price ${price:,.0f} recovered to within "
-                  f"{TREND_DOWN_EXIT_GAP}×ATR of trendline ${trendline:,.0f}")
-            # Fall through to other regime checks
+        # ── Track lowest price during this episode ────────────────────────
+        td_low = rs.get("td_low")
+        if td_low is None or price < td_low:
+            rs["td_low"] = price
+            rs["td_no_new_low_count"] = 0
         else:
+            rs["td_no_new_low_count"] = rs.get("td_no_new_low_count", 0) + 1
+
+        # ── Exit path 1: price recovered close to drawn trendline ─────────
+        if price >= trendline - atr * TREND_DOWN_EXIT_GAP:
+            rs.update({"trend_down_active": False, "below_tl_count": 0,
+                       "td_low": None, "td_no_new_low_count": 0})
+            _save_regime_state(rs)
+            print(f"[Regime] TREND_DOWN OFF (trendline recovery) — "
+                  f"price ${price:,.0f} within {TREND_DOWN_EXIT_GAP}×ATR "
+                  f"of trendline ${trendline:,.0f}")
+            # Fall through to other regime checks
+
+        # ── Exit path 2: price stabilised — no new lows + meaningful bounce
+        #    Clears TREND_DOWN autonomously when the trendline has not been
+        #    updated to reflect new market structure (the common case).
+        #    Requires BOTH conditions to avoid clearing on dead-cat bounces:
+        #      • TD_STABLE_CYCLES consecutive cycles without a new low (~16 min)
+        #      • Price bounced ≥ TD_BOUNCE_ATR × ATR above the episode low
+        elif (rs.get("td_no_new_low_count", 0) >= TD_STABLE_CYCLES
+              and price >= rs["td_low"] + atr * TD_BOUNCE_ATR):
+            _td_low_snap    = rs["td_low"]
+            _td_bounce_snap = round(price - _td_low_snap, 0)
+            _td_stable_snap = rs["td_no_new_low_count"]
+            rs.update({"trend_down_active": False, "below_tl_count": 0,
+                       "td_low": None, "td_no_new_low_count": 0})
+            _save_regime_state(rs)
+            print(f"[Regime] TREND_DOWN AUTO-CLEAR — stabilised for "
+                  f"{_td_stable_snap} cycles, bounced ${_td_bounce_snap:,.0f} "
+                  f"from low ${_td_low_snap:,.0f} "
+                  f"(threshold {TD_BOUNCE_ATR}×ATR = ${atr * TD_BOUNCE_ATR:,.0f})")
+            # Fall through to other regime checks — engine recovery block will
+            # redeploy the grid and notify. td_low stored above for retest tracking.
+
+        else:
+            _stable = rs.get("td_no_new_low_count", 0)
+            _bounce = round(price - rs["td_low"], 0) if rs.get("td_low") else 0
+            _needed_bounce = round(atr * TD_BOUNCE_ATR, 0)
+            _needed_cycles = TD_STABLE_CYCLES - _stable
+            print(f"[Regime] TREND_DOWN active — "
+                  f"stable {_stable}/{TD_STABLE_CYCLES} cycles, "
+                  f"bounce ${_bounce:,.0f}/${_needed_bounce:,.0f} needed "
+                  f"(low ${rs.get('td_low', price):,.0f})")
             _save_regime_state(rs)
             return "TREND_DOWN"
     else:
@@ -62,7 +107,8 @@ def detect_regime(df, trendline):
                 rs["below_tl_count"] = 0
 
         if rs.get("below_tl_count", 0) >= 2:
-            rs["trend_down_active"] = True
+            rs.update({"trend_down_active": True, "td_low": price,
+                       "td_no_new_low_count": 0})
             _save_regime_state(rs)
             print(f"[Regime] TREND_DOWN ON — price ${price:,.0f} has been "
                   f">{TREND_DOWN_ENTRY_GAP}×ATR below trendline ${trendline:,.0f} "

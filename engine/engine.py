@@ -31,7 +31,7 @@ from grid_logic import (
 from dashboard import show_dashboard
 from market_data import get_btc_data, get_btc_data_short
 from indicators import add_indicators
-from regime import detect_regime, trend_strength, compression_exit_fast
+from regime import detect_regime, trend_strength, compression_exit_fast, get_regime_state
 from threecommas import stop_bot, start_bot, redeploy_all_bots
 from price_targets import check_targets, update_target
 from threecommas_dca import (
@@ -1322,6 +1322,7 @@ def run():
         # Always runs — even on early return or exception
         # ===============================
         if state.price is not None:
+            _regime_state = get_regime_state()
             log_data = {
                 "price":          state.price,
                 "atr":            round(state.atr, 2) if state.atr else None,
@@ -1360,6 +1361,10 @@ def run():
                 "price_target_dca_id":  _pt_state.get("dca_bot_id")    if _pt_state else None,
                 # Weekend mode
                 "weekend_mode": _prev_weekend_mode,
+                # TREND_DOWN stabilisation progress (for dashboard + future retest logic)
+                "td_low":             _regime_state.get("td_low"),
+                "td_stable_cycles":   _regime_state.get("td_no_new_low_count", 0),
+                "td_stable_needed":   8,
             }
             write_status(log_data)
             write_log_entry(log_data)
