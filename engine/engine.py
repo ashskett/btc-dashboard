@@ -1150,8 +1150,6 @@ def run():
                 print(f"  Weekend mode DEFERRED — price ${state.price:,.0f} is "
                       f"${_dist:,.0f} from level ${_near_lvl:,.0f} "
                       f"(threshold ${_threshold:,.0f}) — waiting for clearance")
-                notify(f"Weekend tight grid deferred — ${state.price:,.0f} within "
-                       f"${_dist:,.0f} of level ${_near_lvl:,.0f}, will retry next cycle")
             else:
                 _wt = _make_weekend_tiers(state.price, state.tiers)
                 _inner_step = round(_wt[0]["step"]) if _wt else "?"
