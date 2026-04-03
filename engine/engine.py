@@ -248,7 +248,7 @@ def _price_near_level(price: float, tiers: list) -> tuple:
     if not tiers:
         return False, None, 0.0
     min_step = min(float(t.get("step", 9999)) for t in tiers if t.get("step"))
-    threshold = min_step / 2
+    threshold = min_step * 0.20   # 20% of step (~$87 at current params)
     nearest_level, nearest_dist = None, float("inf")
     for tier in tiers:
         for lvl in tier.get("grid_levels", []):
@@ -1155,8 +1155,6 @@ def run():
                 _inner_step = round(_wt[0]["step"]) if _wt else "?"
                 print(f"  Weekend mode ACTIVATING — tight grid at ${state.price:,.0f} "
                       f"(inner step ≈ ${_inner_step:,}, was ${round(state.tiers[0]['step']):,})")
-                notify(f"Weekend tight grid deployed at ${state.price:,.0f} — "
-                       f"inner step ${_inner_step:,} (normal ${round(state.tiers[0]['step']):,})")
                 if DRY_RUN:
                     print(f"  [SIM] Would redeploy weekend tight tiers "
                           f"{_wt[0]['grid_low']:,.0f}–{_wt[0]['grid_high']:,.0f}")
@@ -1166,6 +1164,8 @@ def run():
                     update_grid_center(state.price, grid_width=state.grid_width,
                                        deployed_tiers=_wt)
                     _prev_weekend_mode = True
+                    notify(f"Weekend tight grid deployed at ${state.price:,.0f} — "
+                           f"inner step ${_inner_step:,} (normal ${round(state.tiers[0]['step']):,})")
                 else:
                     print(f"  Rate limit reached — weekend tight redeploy deferred to next cycle")
 
