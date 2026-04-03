@@ -372,3 +372,27 @@ def close_smart_trade(smart_trade_id: str) -> bool:
     if not ok:
         print(f"Warning: close_smart_trade {smart_trade_id} returned {r.status_code}: {r.text[:200]}")
     return ok
+
+
+def get_smart_trade_status(smart_trade_id: str) -> dict:
+    """
+    Poll the current status of a SmartTrade from 3Commas.
+
+    Returns the full API response dict.  Key field:
+        response["status"]["type"] — one of:
+            "waiting"          — order created, not yet filled
+            "bought"           — entry filled, managing TP/SL
+            "finished"         — TP fully hit, trade closed successfully
+            "cancelled"        — manually cancelled via 3Commas UI
+            "failed"           — order failed (e.g. insufficient balance)
+            "panic_sold"       — emergency market-sold via panic_sell
+            "cancelled_error"  — cancelled due to an error
+
+    Raises ValueError if the API call fails.
+    """
+    r = _signed_request("GET", f"/ver1/smart_trades/{smart_trade_id}")
+    if not r.ok:
+        raise ValueError(
+            f"3Commas SmartTrade status {r.status_code}: {r.text[:300]}"
+        )
+    return r.json()

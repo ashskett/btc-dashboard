@@ -686,6 +686,14 @@ def run():
                             print(f"[SIMULATION] Would keep bot {bot} stopped")
                         else:
                             stop_bot(bot)
+
+                # Allow target timeout / reversal / completion to be detected even
+                # while a breakout is active. check_targets() saves state to disk;
+                # next cycle will pick up the cleared target.
+                try:
+                    check_targets(state.price, state.atr)
+                except Exception as _ct_err:
+                    print(f"  Warning: target side-effect check failed: {_ct_err}")
                 return  # breakout still active — do not fall through to normal regime logic
 
         # ===============================
@@ -1026,7 +1034,44 @@ def run():
                     else:
                         print(f"  SmartTrade skipped — no BTC qty in inventory cache")
 
-            return   # skip fresh breakout detection AND drift while target is live
+                # ── SmartTrade status poll ─────────────────────────────────
+                # Once a SmartTrade is live, poll its status every cycle so the
+                # engine knows when 3Commas closes it (TP hit, SL hit, or manual
+                # cancel). On any terminal status: clear the target and fall through
+                # to the recovery/drift logic so the grid restarts immediately.
+                # This is the PRIMARY completion path — the 2h timeout in
+                # price_targets.py is the safety-net fallback.
+                _st_id_live = _pt_state.get("smart_trade_id")
+                if _st_id_live:
+                    try:
+                        from threecommas_dca import get_smart_trade_status
+                        _st_resp    = get_smart_trade_status(_st_id_live)
+                        _st_type    = (_st_resp.get("status") or {}).get("type", "unknown")
+                        _TERMINAL   = {"finished", "cancelled", "failed",
+                                       "panic_sold", "cancelled_error"}
+                        if _st_type in _TERMINAL:
+                            print(f"  SmartTrade {_st_id_live} is {_st_type} — "
+                                  f"clearing target '{_pt_label}', restarting grid")
+                            update_target(_pt_state["id"], {
+                                "fired":          False,
+                                "consec_above":   0,
+                                "smart_trade_id": None,
+                                "cleared_at":     time.time(),
+                            })
+                            notify(f"SmartTrade '{_pt_label}' {_st_type} — "
+                                   f"target cleared, grid restarting at ${state.price:,.0f}")
+                            _pt_state = None   # cleared — skip the return below
+                        else:
+                            print(f"  SmartTrade {_st_id_live} status={_st_type} — "
+                                  f"holding bots stopped")
+                    except Exception as _poll_err:
+                        print(f"  Warning: SmartTrade status poll failed: {_poll_err}")
+
+            # Only skip the rest of the engine cycle if the target is still active.
+            # If the SmartTrade just completed above, _pt_state was set to None and
+            # we fall through so the recovery/drift blocks can restart the grid.
+            if _pt_state is not None:
+                return   # skip fresh breakout detection AND drift while target is live
 
         # Fresh breakout detection
         _direction = breakout_detected(df, regime=state.regime, gap_ratio=state.gap_ratio)

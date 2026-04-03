@@ -213,6 +213,20 @@ def check_targets(price: float, atr: float,
             price_target = t.get("price_target")
             rev_mult     = float(t.get("reversal_atr_mult", 1.2))
 
+            # Timeout: how long a fired target may remain active before auto-clearing.
+            # Default 2h. Override per-target via "auto_clear_h" field.
+            # Applies regardless of SmartTrade state — the SmartTrade may have
+            # closed at 3Commas (TP/SL hit) without the engine polling it.
+            # The engine's SmartTrade status poller in engine.py is the primary
+            # completion path; this is a safety net for edge cases where polling
+            # fails or a SmartTrade was never configured.
+            _fired_ts        = t.get("fired_at") or 0
+            _auto_clear_h    = float(t.get("auto_clear_h", 2.0))
+            _auto_clear_secs = _auto_clear_h * 3600
+            _timed_out       = bool(
+                _fired_ts and (time.time() - _fired_ts) > _auto_clear_secs
+            )
+
             completed = bool(
                 (direction == "UP"   and price_target and price >= price_target) or
                 (direction == "DOWN" and price_target and price <= price_target)
@@ -232,8 +246,22 @@ def check_targets(price: float, atr: float,
 
             elif reversed_:
                 print(f"[Target] '{t['label']}' REVERSED — "
-                      f"${price:,.0f} < fire ${fire_price:,.0f} ± {rev_mult}×ATR "
+                      f"${price:,.0f} > fire ${fire_price:,.0f} + {rev_mult}×ATR "
                       f"— cooling down {cooldown_h:.0f}h before re-arm")
+                t.update({"fired": False, "fired_at": None, "fired_price": None,
+                          "consec_above": 0, "cleared_at": time.time(),
+                          "smart_trade_id": None})
+                changed = True
+
+            elif _timed_out:
+                # Fired too long ago — auto-clear and re-arm with cooldown.
+                # Engine's SmartTrade poller is the primary completion path;
+                # this catches cases where polling failed or no SmartTrade was set.
+                _age_h = (time.time() - _fired_ts) / 3600
+                _st_id = t.get("smart_trade_id") or "none"
+                print(f"[Target] '{t['label']}' TIMEOUT — "
+                      f"fired {_age_h:.1f}h ago (limit {_auto_clear_h:.0f}h), "
+                      f"auto-clearing (SmartTrade={_st_id})")
                 t.update({"fired": False, "fired_at": None, "fired_price": None,
                           "consec_above": 0, "cleared_at": time.time(),
                           "smart_trade_id": None})
