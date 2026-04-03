@@ -58,7 +58,8 @@ def detect_regime(df, trendline):
         # ── Exit path 1: price recovered close to drawn trendline ─────────
         if price >= trendline - atr * TREND_DOWN_EXIT_GAP:
             rs.update({"trend_down_active": False, "below_tl_count": 0,
-                       "td_low": None, "td_no_new_low_count": 0})
+                       "td_low": None, "td_no_new_low_count": 0,
+                       "td_last_low": None})   # trendline recovered — no auto-activate needed
             _save_regime_state(rs)
             print(f"[Regime] TREND_DOWN OFF (trendline recovery) — "
                   f"price ${price:,.0f} within {TREND_DOWN_EXIT_GAP}×ATR "
@@ -77,7 +78,8 @@ def detect_regime(df, trendline):
             _td_bounce_snap = round(price - _td_low_snap, 0)
             _td_stable_snap = rs["td_no_new_low_count"]
             rs.update({"trend_down_active": False, "below_tl_count": 0,
-                       "td_low": None, "td_no_new_low_count": 0})
+                       "td_low": None, "td_no_new_low_count": 0,
+                       "td_last_low": _td_low_snap})  # preserved for trendline auto-activate
             _save_regime_state(rs)
             print(f"[Regime] TREND_DOWN AUTO-CLEAR — stabilised for "
                   f"{_td_stable_snap} cycles, bounced ${_td_bounce_snap:,.0f} "

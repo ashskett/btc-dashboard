@@ -221,6 +221,76 @@ def _make_intensive_sell_tiers(price: float, tiers: list) -> list:
     return result
 
 
+_TL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trendlines.json")
+
+def _try_auto_activate_trendline(td_last_low: float, current_price: float,
+                                  atr: float) -> dict | None:
+    """
+    After a TREND_DOWN auto-clear, check whether the episode low landed on one
+    of the user's inactive drawn trendlines.  If it did, and current price is
+    above that trendline (so activating it won't immediately re-trigger
+    TREND_DOWN), swap it in as the active trendline.
+
+    Match condition: abs(td_last_low − trendline_projected_at_now) ≤ 1.0 × ATR
+    Safety condition: current_price > trendline_projected_at_now
+
+    Returns the activated trendline dict on success, None otherwise.
+    """
+    try:
+        if not os.path.exists(_TL_PATH):
+            return None
+        trendlines = json.load(open(_TL_PATH))
+        now = time.time()
+
+        def _project(tl):
+            t1, p1, t2, p2 = tl["t1"], tl["p1"], tl["t2"], tl["p2"]
+            dt = t2 - t1
+            slope = 0 if dt == 0 else (p2 - p1) / dt
+            return p1 + slope * (now - t1)
+
+        threshold = atr * 1.0   # within 1×ATR of the trendline = "landed on it"
+        best_match, best_dist = None, float("inf")
+
+        for tl in trendlines:
+            if tl.get("active"):
+                continue   # skip the currently active one
+            projected = _project(tl)
+            dist = abs(td_last_low - projected)
+            if dist <= threshold and dist < best_dist:
+                # Safety: current price must be above the trendline at this moment
+                if current_price > projected:
+                    best_match = tl
+                    best_dist  = dist
+
+        if best_match is None:
+            return None
+
+        # Swap active flag: deactivate all, activate the match
+        _projected_match = _project(best_match)
+        for tl in trendlines:
+            tl["active"] = (tl["id"] == best_match["id"])
+        with open(_TL_PATH, "w") as f:
+            json.dump(trendlines, f)
+
+        print(f"  Trendline auto-activated: '{best_match.get('label','?')}' "
+              f"(projected ${_projected_match:,.0f}) matched td_low "
+              f"${td_last_low:,.0f} (dist ${best_dist:,.0f}, threshold ${threshold:,.0f})")
+        # Clear td_last_low so this doesn't fire again on the next recovery
+        try:
+            rs = json.load(open(os.path.join(os.path.dirname(
+                os.path.abspath(__file__)), "regime_state.json")))
+            rs["td_last_low"] = None
+            json.dump(rs, open(os.path.join(os.path.dirname(
+                os.path.abspath(__file__)), "regime_state.json"), "w"))
+        except Exception:
+            pass
+        return best_match
+
+    except Exception as _e:
+        print(f"  Warning: _try_auto_activate_trendline failed: {_e}")
+        return None
+
+
 def _is_weekend_grid_hours() -> bool:
     """
     Return True during the weekend low-volatility window:
@@ -1087,8 +1157,28 @@ def run():
             _recovery_tiers = (_make_weekend_tiers(state.price, state.tiers)
                                if _post_recovery_weekend else state.tiers)
             _mode_note = " [weekend tight grid restored]" if _post_recovery_weekend else ""
-            print(f"{_reason} — redeploying at ${state.price:,.0f}{_mode_note}")
-            notify(f"{_reason} — grid redeployed at ${state.price:,.0f}{_mode_note}")
+
+            # ── Trendline auto-activate ───────────────────────────────────
+            # If TREND_DOWN cleared via stabilisation (not trendline recovery),
+            # check whether the episode low matched an inactive drawn trendline.
+            # If so, swap it in as the active trendline before the redeploy so
+            # the new grid is immediately calibrated to the correct lower support.
+            _tl_note = ""
+            if _regime_recovery and _prev_regime == "TREND_DOWN":
+                _rs_now = get_regime_state()
+                _td_last_low = _rs_now.get("td_last_low")
+                if _td_last_low:
+                    _matched_tl = _try_auto_activate_trendline(
+                        _td_last_low, state.price, state.atr)
+                    if _matched_tl:
+                        _tl_note = (f" — trendline '{_matched_tl.get('label','?')}' "
+                                    f"auto-activated at ${_td_last_low:,.0f}")
+                        notify(f"Trendline auto-activated: '{_matched_tl.get('label','?')}' "
+                               f"matched TREND_DOWN low ${_td_last_low:,.0f} "
+                               f"— engine now tracking lower support")
+
+            print(f"{_reason} — redeploying at ${state.price:,.0f}{_mode_note}{_tl_note}")
+            notify(f"{_reason} — grid redeployed at ${state.price:,.0f}{_mode_note}{_tl_note}")
             if DRY_RUN:
                 print(f"[SIMULATION] Would redeploy grid at ${state.price:,.0f}{_mode_note}")
             elif _can_act():
