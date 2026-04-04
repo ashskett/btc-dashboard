@@ -358,12 +358,23 @@ def _make_weekend_tiers(price: float, tiers: list) -> list:
     """
     Build tighter tier parameters for the weekend low-volatility window.
 
-    Grid is centred symmetrically at current price with 65% of normal
-    ATR-derived width. Level count is unchanged — tighter step spacing
-    means more fills per oscillation on quiet weekend price action.
+    Width is compressed to 65% of the normal ATR-derived width, centred
+    symmetrically on current price.  Level count is also reduced by the
+    same 0.65 factor (minimum 3) so that the step size — and therefore
+    the P&L per fill — stays roughly equal to normal trading days.
+
+    Keeping the same level count with a narrower grid shrinks the step and
+    therefore the fill size proportionally (observed: ~£5 vs ~£8 normal).
+    Reducing levels compensates: the grid is still tighter/more concentrated
+    but fills remain meaningful.
+
+    Example (inner tier, 10 normal levels, W = normal width):
+        Normal:  step = W/9
+        Weekend: step = 0.65W/6  ≈  W/9.2  → virtually identical fill size
 
         grid_low  = price − (original_width × 0.65 / 2)
         grid_high = price + (original_width × 0.65 / 2)
+        levels    = max(round(original_levels × 0.65), 3)
     """
     import copy as _copy
     result = []
@@ -373,10 +384,12 @@ def _make_weekend_tiers(price: float, tiers: list) -> list:
         new_width  = round(orig_width * 0.65, 2)
         new_low    = round(price - new_width / 2, 2)
         new_high   = round(price + new_width / 2, 2)
-        n          = max(int(t.get("levels", 5)), 2)
+        n_orig     = max(int(t.get("levels", 5)), 2)
+        n          = max(round(n_orig * 0.65), 3)   # reduce proportionally, floor 3
         new_step   = round(new_width / (n - 1), 2)
         t["grid_high"]   = new_high
         t["grid_low"]    = new_low
+        t["levels"]      = n
         t["step"]        = new_step
         t["grid_levels"] = [round(new_low + i * new_step, 2) for i in range(n)]
         result.append(t)
