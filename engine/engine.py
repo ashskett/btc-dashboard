@@ -309,16 +309,38 @@ def _is_weekend_grid_hours() -> bool:
 
 def _price_near_level(price: float, tiers: list) -> tuple:
     """
-    Check whether price is within half a step of any deployed grid level.
+    Check whether price is within 20% of a step of any DEPLOYED grid level.
     Returns (is_near: bool, nearest_level: float|None, threshold: float).
 
-    This is used as a guard before triggering a weekend tight-grid redeploy —
-    avoid cancelling orders that are about to fill.
+    IMPORTANT: must be called with deployed_tiers (from grid_state.json), NOT
+    state.tiers (freshly calculated each cycle centred on current price).
+    state.tiers always has a level at exactly current price → guard would
+    always fire → weekend redeploy permanently deferred.
+
+    deployed_tiers strips the 'step' field on save, so derive step from
+    grid_levels spacing or from (grid_high - grid_low) / (levels - 1).
     """
     if not tiers:
+        # No deployed tiers on record — nothing to protect, allow deploy
         return False, None, 0.0
-    min_step = min(float(t.get("step", 9999)) for t in tiers if t.get("step"))
-    threshold = min_step * 0.20   # 20% of step (~$87 at current params)
+
+    steps = []
+    for t in tiers:
+        lvls = t.get("grid_levels", [])
+        if len(lvls) >= 2:
+            # Derive step from actual level spacing
+            steps.append(abs(float(lvls[1]) - float(lvls[0])))
+        elif t.get("step"):
+            steps.append(float(t["step"]))
+        elif t.get("grid_high") and t.get("grid_low") and t.get("levels", 0) > 1:
+            steps.append((float(t["grid_high"]) - float(t["grid_low"])) / (int(t["levels"]) - 1))
+
+    if not steps:
+        return False, None, 0.0
+
+    min_step  = min(steps)
+    threshold = min_step * 0.20   # 20% of tightest step (~$87 at current params)
+
     nearest_level, nearest_dist = None, float("inf")
     for tier in tiers:
         for lvl in tier.get("grid_levels", []):
@@ -326,6 +348,9 @@ def _price_near_level(price: float, tiers: list) -> tuple:
             if dist < nearest_dist:
                 nearest_dist = dist
                 nearest_level = float(lvl)
+
+    if nearest_level is None:
+        return False, None, threshold
     return nearest_dist <= threshold, nearest_level, threshold
 
 
@@ -1278,8 +1303,13 @@ def run():
             _prev_weekend_mode = False
 
         elif _entering_weekend:
-            # First eligible cycle in weekend window — check the near-level guard
-            _near, _near_lvl, _threshold = _price_near_level(state.price, state.tiers)
+            # First eligible cycle in weekend window — check the near-level guard.
+            # Use deployed_tiers (actual live bot levels) not state.tiers.
+            # state.tiers is recalculated each cycle centred on current price,
+            # so it always has a level exactly at current price → guard would
+            # permanently defer. deployed_tiers are fixed to the last redeploy.
+            _deployed_tiers = _saved_grid.get("deployed_tiers") or []
+            _near, _near_lvl, _threshold = _price_near_level(state.price, _deployed_tiers)
             if _near:
                 _dist = abs(state.price - _near_lvl)
                 print(f"  Weekend mode DEFERRED — price ${state.price:,.0f} is "
