@@ -677,20 +677,40 @@ def run():
                     print(f"BREAKOUT EXHAUSTING — momentum stalling at ${state.price:,.0f}  "
                           f"(moved ${_price_change:+,.0f} from fire price)")
                     print("Triggering grid redeploy at new price level")
-                    notify(f"Grid redeployed at ${state.price:,.0f} (breakout {_active_dir} exhaustion, moved ${_price_change:+,.0f})")
+
+                    # If BUY_ONLY or SELL_ONLY was active before the breakout, deploy
+                    # the appropriate intensive tiers at the new price rather than normal
+                    # tiers. Without this, the exhaustion redeploy silently overwrites the
+                    # intensive grid with normal tiers and the BUY_ONLY re-entry never fires
+                    # (because _prev_inventory_mode was "BUY_ONLY" throughout the breakout
+                    # and the entry condition _prev != current is therefore False).
+                    if state.inventory_mode == "BUY_ONLY":
+                        _exhaust_tiers = _make_intensive_buy_tiers(state.price, state.tiers)
+                        _exhaust_note  = " [intensive buy grid — BUY_ONLY still active]"
+                    elif state.inventory_mode == "SELL_ONLY":
+                        _exhaust_tiers = _make_intensive_sell_tiers(state.price, state.tiers)
+                        _exhaust_note  = " [intensive sell grid — SELL_ONLY still active]"
+                    else:
+                        _exhaust_tiers = state.tiers
+                        _exhaust_note  = ""
+
+                    notify(f"Grid redeployed at ${state.price:,.0f} "
+                           f"(breakout {_active_dir} exhaustion, moved ${_price_change:+,.0f})"
+                           f"{_exhaust_note}")
 
                     if DRY_RUN:
                         update_grid_center(state.price, grid_width=state.grid_width)
-                        print(f"[SIMULATION] Would redeploy grid centered at ${state.price:,.0f}")
+                        print(f"[SIMULATION] Would redeploy grid centered at ${state.price:,.0f}"
+                              f"{_exhaust_note}")
                         for i, bot_id in enumerate(GRID_BOTS[:3]):
-                            tier = state.tiers[i] if i < len(state.tiers) else state.tiers[-1]
+                            tier = _exhaust_tiers[i] if i < len(_exhaust_tiers) else _exhaust_tiers[-1]
                             print(f"  [SIM] Bot {bot_id} ({tier['name']}): "
                                   f"${tier['grid_low']:,.0f}–${tier['grid_high']:,.0f}")
                     elif _can_act():
                         _record_action()
-                        redeploy_all_bots(GRID_BOTS, state.tiers)
+                        redeploy_all_bots(GRID_BOTS, _exhaust_tiers)
                         update_grid_center(state.price, grid_width=state.grid_width,
-                                           deployed_tiers=state.tiers)
+                                           deployed_tiers=_exhaust_tiers)
                         clear_breakout_state()
                     else:
                         print(f"Rate limit reached — skipping exhaustion redeploy")
