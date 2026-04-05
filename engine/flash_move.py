@@ -56,8 +56,11 @@ WICK_ATR_MULT     = 2.0    # lower/upper wick threshold for sweep detection (×1
                            # higher than body threshold — wicks are naturally larger than bodies.
                            # Catches liquidity sweeps where body is small but wick is large.
 COOLDOWN_CYCLES   = 5      # minimum cycles with bots off (~10 min at 2-min cycles)
-RECOVERY_ATR_MULT = 0.3    # all recent candle bodies must be < this × ATR to recover
+RECOVERY_ATR_MULT = 0.5    # all recent candle bodies must be < this × ATR to recover
+                           # raised from 0.3 — post-flash chop kept failing 0.3×ATR check
 RECOVERY_CANDLES  = 3      # number of candles that must be calm
+MAX_HOLD_MINS     = 30     # hard maximum hold regardless of stability (~15 cycles)
+EXTEND_CYCLES     = 2      # cycles to add when cooldown expires but still volatile
 
 
 def _load_state() -> dict:
@@ -105,6 +108,19 @@ def detect_flash_move(current_price: float, atr: float, df_5m=None) -> dict:
     if s.get("active"):
         remaining = s.get("cooldown_remaining", 0)
         if remaining > 0:
+            # Hard maximum: force-clear after MAX_HOLD_MINS regardless of stability.
+            # Prevents the infinite-extend loop when post-flash chop keeps the
+            # stability check failing indefinitely.
+            fired_at  = s.get("fired_at") or 0
+            held_secs = time.time() - fired_at
+            if held_secs > MAX_HOLD_MINS * 60:
+                print(f"FLASH_MOVE force-cleared — held {held_secs/60:.0f}min "
+                      f"(max {MAX_HOLD_MINS}min), resuming normal operation")
+                s.update({"active": None, "fire_price": None, "fired_at": None,
+                          "cooldown_remaining": 0, "magnitude": 0, "last_price": current_price})
+                _save_state(s)
+                return result
+
             # Check if we can recover early (price stabilised)
             stable = True
             if df_5m is not None and len(df_5m) >= RECOVERY_CANDLES:
@@ -126,9 +142,12 @@ def detect_flash_move(current_price: float, atr: float, df_5m=None) -> dict:
                 _save_state(s)
                 return result
             elif remaining <= 0 and not stable:
-                # Cooldown expired but still volatile — extend
-                remaining = 1
-                print(f"FLASH_MOVE extending cooldown — price still volatile")
+                # Cooldown expired but still volatile — extend by EXTEND_CYCLES,
+                # not just 1. Previously extended by 1 → re-checked every single
+                # cycle → never cleared during choppy post-flash price action.
+                remaining = EXTEND_CYCLES
+                print(f"FLASH_MOVE extending cooldown (+{EXTEND_CYCLES} cycles) — "
+                      f"price still volatile (held {held_secs/60:.0f}min)")
 
             s["cooldown_remaining"] = remaining
             s["last_price"] = current_price
