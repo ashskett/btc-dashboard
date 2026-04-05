@@ -2986,81 +2986,81 @@ function _ptGetTpSteps(){
 }
 
 async function confirmAddTarget(){
-  const label   = document.getElementById('pt_label').value.trim();
-  const trigger = parseFloat(document.getElementById('pt_trigger').value);
-  const tp      = document.getElementById('pt_tp').value ? parseFloat(document.getElementById('pt_tp').value) : null;
-  const dir     = document.getElementById('pt_dir').value;
-  const confirm_closes    = parseInt(document.getElementById('pt_confirm').value) || 2;
-  const reversal_atr_mult = parseFloat(document.getElementById('pt_rev').value) || 2.0;
-  const rearm_cooldown_h  = parseFloat(document.getElementById('pt_cool').value) || 4;
-  const dca_enabled       = document.getElementById('pt_dca_on').checked;
-  const detect_mode_el    = document.getElementById('pt_detect_mode');
-  const detection_mode    = (dir === 'DOWN' && detect_mode_el) ? detect_mode_el.value : 'breakout';
-
-  if(!label){ toast('Label required','err'); return; }
-  if(!trigger || isNaN(trigger)){ toast('Trigger price required','err'); return; }
-
-  const body = { label, trigger_price: trigger, direction: dir,
-    price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h,
-    dca_enabled, detection_mode };
-
-  // Support failure fields
-  if(detection_mode === 'support_failure'){
-    body.retest_tolerance_pct = parseFloat(document.getElementById('pt_retest_tol').value) || 0.5;
-    body.smart_trade_enabled  = document.getElementById('pt_st_on').checked;
-    if(body.smart_trade_enabled){
-      body.smart_trade_sell_pct = parseFloat(document.getElementById('pt_st_sell_pct').value) || 25;
-      body.smart_trade_sl_pct   = parseFloat(document.getElementById('pt_st_sl_pct').value)   || 1.5;
-
-      // Multi-step TP
-      const stTpSteps = _ptGetStTpSteps();
-      if(!stTpSteps || stTpSteps.length === 0){ toast('Add at least one SmartTrade TP level','err'); return; }
-      const stTotalClose = stTpSteps.reduce((s,r) => s + r.close_pct, 0);
-      if(Math.abs(stTotalClose - 100) > 0.5){ toast(`ST TP Close % must sum to 100 (got ${stTotalClose.toFixed(0)}%)`,'err'); return; }
-      for(let i=1;i<stTpSteps.length;i++){
-        if(stTpSteps[i].profit_pct <= stTpSteps[i-1].profit_pct){ toast('ST TP profit levels must be ascending','err'); return; }
-      }
-      body.smart_trade_tp_steps = stTpSteps;
-      // Keep legacy single TP from first step for backward compat
-      body.smart_trade_tp_pct = stTpSteps[0].profit_pct;
-
-      // Dual entry
-      body.smart_trade_dual_entry = document.getElementById('pt_st_dual')?.checked || false;
-      if(body.smart_trade_dual_entry){
-        body.smart_trade_scout_pct = parseFloat(document.getElementById('pt_st_scout_pct')?.value) || 30;
-        body.smart_trade_retest_tolerance_pct = parseFloat(document.getElementById('pt_st_retest_tol')?.value) || 0.5;
-      }
-    }
-  }
-
-  if(dca_enabled){
-    body.dca_base_order_usd     = parseFloat(document.getElementById('pt_dca_base').value) || 500;
-    body.dca_safety_count       = parseInt  (document.getElementById('pt_dca_count').value) || 5;
-    body.dca_safety_step_pct    = parseFloat(document.getElementById('pt_dca_step').value) || 1.5;
-    body.dca_safety_volume_mult = parseFloat(document.getElementById('pt_dca_mult').value) || 1.2;
-    body.dca_pair               = document.getElementById('pt_dca_pair').value || 'USDC_BTC';
-
-    const tpSteps = _ptGetTpSteps();
-    if(!tpSteps || tpSteps.length === 0){ toast('Add at least one TP level','err'); return; }
-    const totalClose = tpSteps.reduce((s,r) => s + r.close_pct, 0);
-    if(Math.abs(totalClose - 100) > 0.5){ toast(`Close % must sum to 100 (got ${totalClose.toFixed(0)}%)`,'err'); return; }
-    for(let i=1;i<tpSteps.length;i++){
-      if(tpSteps[i].profit_pct <= tpSteps[i-1].profit_pct){ toast('TP profit levels must be ascending','err'); return; }
-    }
-    body.dca_tp_steps = tpSteps;
-    body.dca_trailing_enabled       = document.getElementById('pt_dca_trailing')?.checked || false;
-    body.dca_trailing_deviation_pct = parseFloat(document.getElementById('pt_dca_trail_dev')?.value) || 1.0;
-    body.dca_dual_entry             = document.getElementById('pt_dca_dual')?.checked || false;
-    body.dca_scout_pct              = parseFloat(document.getElementById('pt_dca_scout_pct')?.value) || 30;
-    body.dca_scout_buffer_cycles    = parseInt(document.getElementById('pt_dca_scout_buf')?.value) || 2;
-    body.dca_retest_tolerance_pct   = parseFloat(document.getElementById('pt_dca_retest_tol')?.value) || 0.5;
-    const _slRaw = document.getElementById('pt_dca_sl_pct')?.value;
-    body.dca_stop_loss_pct          = _slRaw ? parseFloat(_slRaw) : null;
-  }
-
-  const editId = document.getElementById('pt_edit_id')?.value;
-
   try{
+    const label   = document.getElementById('pt_label').value.trim();
+    const trigger = parseFloat(document.getElementById('pt_trigger').value);
+    const tp      = document.getElementById('pt_tp').value ? parseFloat(document.getElementById('pt_tp').value) : null;
+    const dir     = document.getElementById('pt_dir').value;
+    const confirm_closes    = parseInt(document.getElementById('pt_confirm').value) || 2;
+    const reversal_atr_mult = parseFloat(document.getElementById('pt_rev').value) || 2.0;
+    const rearm_cooldown_h  = parseFloat(document.getElementById('pt_cool').value) || 4;
+    const dca_enabled       = document.getElementById('pt_dca_on').checked;
+    const detect_mode_el    = document.getElementById('pt_detect_mode');
+    const detection_mode    = (dir === 'DOWN' && detect_mode_el) ? detect_mode_el.value : 'breakout';
+
+    if(!label){ toast('Label required','err'); return; }
+    if(!trigger || isNaN(trigger)){ toast('Trigger price required','err'); return; }
+
+    const body = { label, trigger_price: trigger, direction: dir,
+      price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h,
+      dca_enabled, detection_mode };
+
+    // Support failure fields
+    if(detection_mode === 'support_failure'){
+      body.retest_tolerance_pct = parseFloat(document.getElementById('pt_retest_tol').value) || 0.5;
+      body.smart_trade_enabled  = document.getElementById('pt_st_on').checked;
+      if(body.smart_trade_enabled){
+        body.smart_trade_sell_pct = parseFloat(document.getElementById('pt_st_sell_pct').value) || 25;
+        body.smart_trade_sl_pct   = parseFloat(document.getElementById('pt_st_sl_pct').value)   || 1.5;
+
+        // Multi-step TP
+        const stTpSteps = _ptGetStTpSteps();
+        if(!stTpSteps || stTpSteps.length === 0){ toast('Add at least one SmartTrade TP level','err'); return; }
+        const stTotalClose = stTpSteps.reduce((s,r) => s + r.close_pct, 0);
+        if(Math.abs(stTotalClose - 100) > 0.5){ toast(`ST TP Close % must sum to 100 (got ${stTotalClose.toFixed(0)}%)`,'err'); return; }
+        for(let i=1;i<stTpSteps.length;i++){
+          if(stTpSteps[i].profit_pct <= stTpSteps[i-1].profit_pct){ toast('ST TP profit levels must be ascending','err'); return; }
+        }
+        body.smart_trade_tp_steps = stTpSteps;
+        // Keep legacy single TP from first step for backward compat
+        body.smart_trade_tp_pct = stTpSteps[0].profit_pct;
+
+        // Dual entry
+        body.smart_trade_dual_entry = document.getElementById('pt_st_dual')?.checked || false;
+        if(body.smart_trade_dual_entry){
+          body.smart_trade_scout_pct = parseFloat(document.getElementById('pt_st_scout_pct')?.value) || 30;
+          body.smart_trade_retest_tolerance_pct = parseFloat(document.getElementById('pt_st_retest_tol')?.value) || 0.5;
+        }
+      }
+    }
+
+    if(dca_enabled){
+      body.dca_base_order_usd     = parseFloat(document.getElementById('pt_dca_base').value) || 500;
+      body.dca_safety_count       = parseInt  (document.getElementById('pt_dca_count').value) || 5;
+      body.dca_safety_step_pct    = parseFloat(document.getElementById('pt_dca_step').value) || 1.5;
+      body.dca_safety_volume_mult = parseFloat(document.getElementById('pt_dca_mult').value) || 1.2;
+      body.dca_pair               = document.getElementById('pt_dca_pair').value || 'USDC_BTC';
+
+      const tpSteps = _ptGetTpSteps();
+      if(!tpSteps || tpSteps.length === 0){ toast('Add at least one TP level','err'); return; }
+      const totalClose = tpSteps.reduce((s,r) => s + r.close_pct, 0);
+      if(Math.abs(totalClose - 100) > 0.5){ toast(`Close % must sum to 100 (got ${totalClose.toFixed(0)}%)`,'err'); return; }
+      for(let i=1;i<tpSteps.length;i++){
+        if(tpSteps[i].profit_pct <= tpSteps[i-1].profit_pct){ toast('TP profit levels must be ascending','err'); return; }
+      }
+      body.dca_tp_steps = tpSteps;
+      body.dca_trailing_enabled       = document.getElementById('pt_dca_trailing')?.checked || false;
+      body.dca_trailing_deviation_pct = parseFloat(document.getElementById('pt_dca_trail_dev')?.value) || 1.0;
+      body.dca_dual_entry             = document.getElementById('pt_dca_dual')?.checked || false;
+      body.dca_scout_pct              = parseFloat(document.getElementById('pt_dca_scout_pct')?.value) || 30;
+      body.dca_scout_buffer_cycles    = parseInt(document.getElementById('pt_dca_scout_buf')?.value) || 2;
+      body.dca_retest_tolerance_pct   = parseFloat(document.getElementById('pt_dca_retest_tol')?.value) || 0.5;
+      const _slRaw = document.getElementById('pt_dca_sl_pct')?.value;
+      body.dca_stop_loss_pct          = _slRaw ? parseFloat(_slRaw) : null;
+    }
+
+    const editId = document.getElementById('pt_edit_id')?.value;
+
     let r;
     if(editId){
       // Edit mode — PUT to update existing target
@@ -3074,11 +3074,14 @@ async function confirmAddTarget(){
         body: JSON.stringify(body)});
     }
     const data = await r.json();
-    if(!data.ok) throw new Error(data.msg);
+    if(!data.ok) throw new Error(data.msg || 'Server error');
     document.getElementById('ptModal').remove();
     await loadTargets();
     toast(`Target "${label}" ${editId ? 'updated' : 'added'}`, 'ok');
-  } catch(e){ toast(`Failed: ${e.message}`,'err'); }
+  } catch(e){
+    console.error('confirmAddTarget failed:', e);
+    toast(`Failed: ${e.message}`,'err');
+  }
 }
 
 // ── TRENDLINE ENGINE ─────────────────────────────────────
