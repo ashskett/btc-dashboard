@@ -136,10 +136,12 @@ def create_dca_bot(
         "leverage_type":                   "not_specified",
     }
     if take_profit_steps and len(take_profit_steps) > 0:
-        # Step TP: take_profit_type="step" + take_profit_steps array.
-        # Do NOT include take_profit — 3Commas rejects the request if both
-        # take_profit and take_profit_steps are present simultaneously.
-        body["take_profit_type"]  = "step"
+        # Step TP: take_profit_type must be "total" (3Commas does not accept "step").
+        # take_profit = last step's profit_pct (the maximum target — required by API).
+        # take_profit_steps drives the partial-close ladder.
+        _tp_max = round(max(s["profit_pct"] for s in take_profit_steps), 2)
+        body["take_profit_type"]  = "total"
+        body["take_profit"]       = str(_tp_max)
         body["take_profit_steps"] = [
             {
                 "amount_percentage": round(s["close_pct"], 2),
