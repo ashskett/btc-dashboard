@@ -788,11 +788,33 @@ def run():
                         _act(bot, False, f"{tier_name} (DCA active: {_pt_label})")
                 else:
                     # DCA not yet launched (hold period or DCA not configured).
-                    # Keep outer running as a safety net; inner+mid off.
-                    print(f"  [Target] inner+mid off, outer running (DCA pending or not configured)")
-                    for i, bot in enumerate(GRID_BOTS[:3]):
-                        tier_name = ["inner", "mid", "outer"][i]
-                        _act(bot, i >= 2, f"{tier_name} (target: {_pt_label})")
+                    if state.inventory_mode == "BUY_ONLY":
+                        # BUY_ONLY + UP target (no DCA): the target and inventory goal are
+                        # aligned — both want BTC to appreciate.  No reason to stop buys.
+                        # Deploy intensive buy grid once (post-sweep-guard window) then keep
+                        # all bots running throughout the target hold.
+                        _bt_fired_at = _pt_state.get("fired_at") or 0
+                        _bt_elapsed  = time.time() - _bt_fired_at
+                        # 6–16 min window: sweep guard (360s) has cleared → genuine move,
+                        # but short enough that we only deploy once per target fire.
+                        _bt_deploy_window = 360 < _bt_elapsed < 960
+                        if _bt_deploy_window and _can_act():
+                            _record_action()
+                            _buy_tiers = _make_intensive_buy_tiers(state.price, state.tiers)
+                            print(f"  [Target] BUY_ONLY — deploying intensive buy grid during UP target hold")
+                            redeploy_all_bots(GRID_BOTS, _buy_tiers)
+                        else:
+                            # Outside deploy window or rate limited — just keep bots running.
+                            print(f"  [Target] BUY_ONLY — all bots ON (intensive buy, target monitoring)")
+                            for i, bot in enumerate(GRID_BOTS[:3]):
+                                tier_name = ["inner", "mid", "outer"][i]
+                                _act(bot, True, f"{tier_name} (BUY_ONLY target: {_pt_label})")
+                    else:
+                        # Normal / SELL_ONLY: keep outer running as a safety net; inner+mid off.
+                        print(f"  [Target] inner+mid off, outer running (DCA pending or not configured)")
+                        for i, bot in enumerate(GRID_BOTS[:3]):
+                            tier_name = ["inner", "mid", "outer"][i]
+                            _act(bot, i >= 2, f"{tier_name} (target: {_pt_label})")
 
                 # ── DCA bot launch ─────────────────────────────────────────
                 # Sweep guard: hold DCA launch for DCA_LAUNCH_HOLD_SECS after the

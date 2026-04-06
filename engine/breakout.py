@@ -74,7 +74,9 @@ EXHAUSTION_WINDOW   = 5      # candles to average for exhaustion check
 POST_CLEAR_COOLDOWN_DOWN = 3600  # seconds after DOWN exhaustion before either layer can re-fire (~12 cycles / 60 min).
                                   # The DOWN re-arm loop (4 consecutive dips in a ranging market) is driven by
                                   # the momentum layer, so both layers must be blocked for DOWN after exhaustion.
-POST_CLEAR_COOLDOWN_UP   = 600   # seconds after UP exhaustion before spike layer can re-fire (2 engine cycles).
+POST_CLEAR_COOLDOWN_UP   = 1800  # seconds after UP exhaustion before spike layer can re-fire (30 min / ~9 cycles).
+                                  # Raised from 600 (10 min) — price oscillating near breakout threshold was
+                                  # triggering repeated 2-4 min false positives, each stopping inner+mid.
                                   # Momentum is still exempt for UP — genuine collapses should still fire.
 POST_CLEAR_COOLDOWN = POST_CLEAR_COOLDOWN_UP  # backward-compat alias
 
