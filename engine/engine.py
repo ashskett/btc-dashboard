@@ -1166,16 +1166,40 @@ def run():
                     print(f"Rate limit reached — breakout UP bot stops skipped")
 
             else:
-                # Downside breakout: stop everything — capital protection
-                print("BREAKOUT DOWN — stopping all bots (capital protection)")
-                if DRY_RUN:
-                    print("[SIMULATION] Would stop all grid bots")
-                elif _can_act():
-                    _record_action()
-                    for bot in GRID_BOTS:
-                        stop_bot(bot)
+                # Downside breakout
+                if state.inventory_mode == "BUY_ONLY":
+                    # BUY_ONLY + BREAKOUT_DOWN: a sharp drop is an accumulation
+                    # opportunity when BTC ratio is critically low.  Redeploy the
+                    # intensive buy grid centred on the new lower price so orders
+                    # sit below the breakout level ready to fill on any bounce or
+                    # continued grind down.  TREND_DOWN regime will suppress
+                    # inner+mid independently if the drop becomes a sustained move.
+                    print("BREAKOUT DOWN + BUY_ONLY — redeploying intensive buy grid at new level (dip accumulation)")
+                    notify(f"Breakout DOWN — BUY_ONLY mode: intensive buy grid redeployed at ${state.price:,.0f}")
+                    if DRY_RUN:
+                        print("[SIMULATION] Would redeploy intensive buy grid for BUY_ONLY dip accumulation")
+                    elif _can_act():
+                        _record_action()
+                        _dip_tiers = _make_intensive_buy_tiers(state.price, state.tiers)
+                        redeploy_all_bots(GRID_BOTS, _dip_tiers)
+                        update_grid_center(state.price, grid_width=state.grid_width,
+                                           deployed_tiers=_dip_tiers)
+                    else:
+                        # Rate limited — keep bots running on current grid rather than stopping
+                        print("  Rate limit reached — keeping bots running with current grid (BUY_ONLY)")
+                        for bot in GRID_BOTS:
+                            _act(bot, True, "BUY_ONLY breakout down — rate limited, stay on")
                 else:
-                    print(f"Rate limit reached — breakout DOWN bot stops skipped")
+                    # Normal / SELL_ONLY: stop everything — capital protection
+                    print("BREAKOUT DOWN — stopping all bots (capital protection)")
+                    if DRY_RUN:
+                        print("[SIMULATION] Would stop all grid bots")
+                    elif _can_act():
+                        _record_action()
+                        for bot in GRID_BOTS:
+                            stop_bot(bot)
+                    else:
+                        print(f"Rate limit reached — breakout DOWN bot stops skipped")
 
             return
 
