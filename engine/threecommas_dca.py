@@ -136,12 +136,9 @@ def create_dca_bot(
         "leverage_type":                   "not_specified",
     }
     if take_profit_steps and len(take_profit_steps) > 0:
-        # Step TP: take_profit_type must be "total" (3Commas does not accept "step").
-        # take_profit = last step's profit_pct (the maximum target — required by API).
-        # take_profit_steps drives the partial-close ladder.
-        _tp_max = round(max(s["profit_pct"] for s in take_profit_steps), 2)
-        body["take_profit_type"]  = "total"
-        body["take_profit"]       = str(_tp_max)
+        # Step TP: send take_profit_steps array ONLY.
+        # Do NOT include take_profit — 3Commas rejects requests that have both
+        # take_profit_steps and a plain take_profit value simultaneously.
         body["take_profit_steps"] = [
             {
                 "amount_percentage": round(s["close_pct"], 2),
@@ -252,8 +249,6 @@ def update_dca_bot(
         "base_order_volume_type":        "quote_currency",
         "safety_order_volume":           str(round(safety_order_usd        if safety_order_usd        is not None else float(current.get("safety_order_volume",           100)),  2)),
         "safety_order_volume_type":      "quote_currency",
-        "take_profit_type":              "total",
-        "take_profit":                   str(round(take_profit_pct if take_profit_pct is not None else float(current.get("take_profit", 2.0)), 2)),
         "safety_order_step_percentage":  str(round(safety_order_step_pct   if safety_order_step_pct   is not None else float(current.get("safety_order_step_percentage",  1.5)),  2)),
         "martingale_volume_coefficient": str(round(safety_order_volume_mult if safety_order_volume_mult is not None else float(current.get("martingale_volume_coefficient", 1.2)), 2)),
         "martingale_step_coefficient":   "1.0",
@@ -264,7 +259,11 @@ def update_dca_bot(
         "leverage_type":                 "not_specified",
     }
     if take_profit_steps is not None:
+        # Step TP: take_profit_steps only — do NOT include take_profit alongside it.
         body["take_profit_steps"] = take_profit_steps
+    else:
+        body["take_profit_type"] = "total"
+        body["take_profit"]      = str(round(take_profit_pct if take_profit_pct is not None else float(current.get("take_profit", 2.0)), 2))
     r = _signed_request("PATCH", f"/ver1/bots/{bot_id}/update", body=body)
     if not r.ok:
         raise ValueError(f"3Commas {r.status_code}: {r.text[:500]}")
