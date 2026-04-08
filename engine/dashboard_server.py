@@ -665,15 +665,22 @@ def redeploy_bot_endpoint(bot_id):
 def force_redeploy_all():
     """Force stop, re-range, and restart all grid bots using the latest engine
     status tiers AND the budget system. Applies correct capital allocation.
-    Resets grid_state.json center to the current price."""
+    Resets grid_state.json center to the current price.
+
+    Inventory-mode aware: if the engine is in BUY_ONLY or SELL_ONLY mode,
+    the recentre uses the matching intensive tier set (all-below / all-above price)
+    rather than the standard centred tiers. This prevents a manual recentre from
+    bypassing inventory protection and mass-buying/selling unexpectedly.
+    """
     try:
         status_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), STATUS_FILE)
         with open(status_path) as f:
             status = json.load(f)
 
-        tiers      = status.get("tiers", [])
-        price      = status.get("price")
-        grid_width = status.get("grid_width")
+        tiers          = status.get("tiers", [])
+        price          = status.get("price")
+        grid_width     = status.get("grid_width")
+        inventory_mode = status.get("inventory_mode", "NORMAL")
 
         if not tiers or not price:
             return jsonify({"ok": False, "error": "No tier data in engine status yet"}), 503
@@ -682,16 +689,29 @@ def force_redeploy_all():
         if not ids:
             return jsonify({"ok": False, "error": "GRID_BOT_IDS not configured"}), 503
 
-        # Use the budget-aware redeploy from threecommas.py
+        # Respect the engine's current inventory mode so a manual recentre does not
+        # deploy a normal centred grid when the engine has intentionally shifted
+        # all orders to one side (BUY_ONLY = all below price, SELL_ONLY = all above).
+        deploy_tiers = tiers
+        mode_note    = ""
+        if inventory_mode == "BUY_ONLY":
+            from engine import _make_intensive_buy_tiers
+            deploy_tiers = _make_intensive_buy_tiers(price, tiers)
+            mode_note    = " [BUY_ONLY — intensive buy tiers]"
+        elif inventory_mode == "SELL_ONLY":
+            from engine import _make_intensive_sell_tiers
+            deploy_tiers = _make_intensive_sell_tiers(price, tiers)
+            mode_note    = " [SELL_ONLY — intensive sell tiers]"
+
         from threecommas import redeploy_all_bots
-        all_ok = redeploy_all_bots(ids, tiers)
+        all_ok = redeploy_all_bots(ids, deploy_tiers)
 
         # Reset grid center to current price so drift detection stays accurate
         from grid_logic import update_grid_center
-        update_grid_center(price, grid_width=grid_width, deployed_tiers=tiers)
+        update_grid_center(price, grid_width=grid_width, deployed_tiers=deploy_tiers)
 
         return jsonify({"ok": all_ok, "price": price, "center": price,
-                       "msg": "All bots redeployed with budgets" if all_ok else "Some bots failed"})
+                       "msg": f"All bots redeployed{mode_note}" if all_ok else "Some bots failed"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
