@@ -251,6 +251,9 @@ input[type="range"] { width:100%; accent-color:var(--accent); height:20px; }
 <!-- ═══════════════════ CHART TAB ═══════════════════ -->
 <div id="tabChart" class="tab-panel active">
   <div class="tf-row">
+    <button class="tf-btn" data-tf="1m" onclick="switchTf('1m')">1m</button>
+    <button class="tf-btn" data-tf="15m" onclick="switchTf('15m')">15m</button>
+    <button class="tf-btn" data-tf="45m" onclick="switchTf('45m')">45m</button>
     <button class="tf-btn active" data-tf="1h" onclick="switchTf('1h')">1H</button>
     <button class="tf-btn" data-tf="4h" onclick="switchTf('4h')">4H</button>
     <button class="tf-btn" data-tf="1d" onclick="switchTf('1d')">1D</button>
@@ -634,7 +637,7 @@ async function loadCandles(tf){
   if(_candlesLoading) return;
   _candlesLoading=true;
   try{
-    const lim=tf==='1d'?90:150;
+    const lim=tf==='1m'?300:tf==='15m'?200:tf==='1d'?90:150;
     const r=await fetch(`/candles?tf=${tf}&limit=${lim}`);
     if(!r.ok) throw new Error(r.status);
     const data=await r.json();
