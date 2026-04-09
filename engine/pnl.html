@@ -352,42 +352,67 @@ let dailyPnlChart, dailyPnlSeries;
 let _lastPnlBarMode = 'daily';
 let currentTf = '7d';
 
-// For a deposit/withdrawal event, find the portfolio snapshot where
-// the balance actually moved by ~that amount (within ±2h of the recorded ts).
-// Picks the CLOSEST qualifying jump to the event timestamp, not the first.
-// This handles multiple deposits arriving close together without cross-matching.
-function effectiveEventTs(event, data) {
-  if (!data || data.length < 2) return event.ts;
-  const WINDOW = 2 * 3600;  // only look ±2h around the recorded timestamp
-  const TOLERANCE = 0.65;   // jump must be at least 65% of the event amount
+// ── Capital event adjustment ──
+// Deposits may arrive in multiple batches over minutes.  Instead of subtracting
+// the full amount at a single point (which creates spikes/dips), we compute a
+// per-event baseline and progressively subtract only what has actually arrived.
 
-  // Only consider snapshots within the time window
-  const slice = data.filter(d => Math.abs(d.ts - event.ts) <= WINDOW);
-  let bestTs = null, bestDist = Infinity;
-  for (let i = 1; i < slice.length; i++) {
-    const jump = slice[i].portfolio_usd - slice[i - 1].portfolio_usd;
-    const matches = (event.amount_usd > 0 && jump >= event.amount_usd * TOLERANCE)
-                 || (event.amount_usd < 0 && jump <= event.amount_usd * TOLERANCE);
-    if (matches) {
-      const dist = Math.abs(slice[i].ts - event.ts);
-      if (dist < bestDist) { bestDist = dist; bestTs = slice[i].ts; }
+// Cache: { baseline, startTs, amount } per capital event — rebuilt after data loads
+let _eventProfiles = [];
+
+function buildEventProfiles() {
+  _eventProfiles = capitalEvents.map(ev => {
+    if (!allData || allData.length < 5) return { baseline: 0, startTs: ev.ts, amount: ev.amount_usd };
+    // Baseline: average of last 5 snapshots at least 30min before the event
+    const before = allData.filter(d => d.ts < ev.ts - 1800);
+    const tail = before.slice(-5);
+    const baseline = tail.length ? tail.reduce((s, d) => s + d.portfolio_usd, 0) / tail.length : 0;
+    // Start: first snapshot where portfolio jumps >$300 above baseline (deposit beginning)
+    const candidates = allData.filter(d => d.ts >= ev.ts - 1800 && d.ts <= ev.ts + 7200);
+    let startTs = ev.ts;
+    for (const d of candidates) {
+      const change = ev.amount_usd > 0 ? d.portfolio_usd - baseline : baseline - d.portfolio_usd;
+      if (change > 300) { startTs = d.ts; break; }
+    }
+    return { baseline, startTs, amount: ev.amount_usd };
+  });
+}
+
+// For a single event, compute how much to subtract at a given snapshot.
+// Before deposit starts: 0.  During arrival: min(cumChange, amount).  After: amount.
+function eventCreditAt(eventIdx, snapshot) {
+  const ev = capitalEvents[eventIdx];
+  const prof = _eventProfiles[eventIdx];
+  if (!prof || !prof.baseline) return 0;
+  if (snapshot.ts < prof.startTs) return 0;
+
+  const cumChange = ev.amount_usd > 0
+    ? snapshot.portfolio_usd - prof.baseline
+    : prof.baseline - snapshot.portfolio_usd;
+  // Clamp: don't subtract more than the event amount, don't go negative
+  return Math.max(0, Math.min(Math.abs(ev.amount_usd), Math.max(0, cumChange)));
+}
+
+// Total deposit credit at a snapshot (sum across all events in window)
+function totalDepositCredit(windowStartTs, snapshot) {
+  let total = 0;
+  for (let i = 0; i < capitalEvents.length; i++) {
+    const prof = _eventProfiles[i];
+    if (!prof) continue;
+    // Only count events whose start falls within the chart window
+    if (prof.startTs >= windowStartTs) {
+      total += eventCreditAt(i, snapshot);
     }
   }
-  return bestTs !== null ? bestTs : event.ts;
+  return total;
 }
 
-// Effective deposit timestamps cache (rebuilt after data loads)
-let _effectiveTsCache = [];
-function buildEffectiveTsCache() {
-  _effectiveTsCache = capitalEvents.map(e => effectiveEventTs(e, allData));
-}
-
-// Sum of capital deposits between two unix timestamps (inclusive),
-// using effective (jump-detected) timestamps for each event.
+// Sum of all capital event amounts whose start is within a time range (for summary cards)
 function depositsInWindow(startTs, endTs) {
-  return capitalEvents.reduce((s, e, i) => {
-    const ets = _effectiveTsCache[i] !== undefined ? _effectiveTsCache[i] : e.ts;
-    return (ets >= startTs && ets <= endTs) ? s + e.amount_usd : s;
+  return capitalEvents.reduce((s, _e, i) => {
+    const prof = _eventProfiles[i];
+    if (!prof) return s;
+    return (prof.startTs >= startTs && prof.startTs <= endTs) ? s + Math.abs(_e.amount_usd) : s;
   }, 0);
 }
 
@@ -458,7 +483,7 @@ async function loadData() {
     if (rCe.ok) capitalEvents = await rCe.json();
     if (!Array.isArray(allData) || !allData.length) return;
 
-    buildEffectiveTsCache();
+    buildEventProfiles();
     updateKpis();
     updateCharts();
     updateDaily();
@@ -557,11 +582,11 @@ function updateCharts() {
   sampled.forEach(d => deduped.set(Math.floor(d.ts), d));
   sampled = Array.from(deduped.values()).sort((a, b) => a.ts - b.ts);
 
-  // Portfolio value — subtract cumulative deposits from window start
+  // Portfolio value — progressively subtract deposits as they arrive
   const windowStart = sampled[0].ts;
   const pfData = sampled.map(d => ({
     time: Math.floor(d.ts),
-    value: d.portfolio_usd - depositsInWindow(windowStart, d.ts),
+    value: d.portfolio_usd - totalDepositCredit(windowStart, d),
   }));
   pfSeries.setData(pfData);
   pfChart.timeScale().fitContent();
