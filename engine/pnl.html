@@ -352,10 +352,10 @@ let dailyPnlChart, dailyPnlSeries;
 let _lastPnlBarMode = 'daily';
 let currentTf = '7d';
 
-// For a deposit/withdrawal event, find the first portfolio snapshot where
+// For a deposit/withdrawal event, find the portfolio snapshot where
 // the balance actually moved by ~that amount (within ±2h of the recorded ts).
-// This corrects for the gap between "deposit recorded" and "snapshot captures it",
-// which would otherwise create a dip in the adjusted chart.
+// Picks the CLOSEST qualifying jump to the event timestamp, not the first.
+// This handles multiple deposits arriving close together without cross-matching.
 function effectiveEventTs(event, data) {
   if (!data || data.length < 2) return event.ts;
   const WINDOW = 2 * 3600;  // only look ±2h around the recorded timestamp
@@ -363,13 +363,17 @@ function effectiveEventTs(event, data) {
 
   // Only consider snapshots within the time window
   const slice = data.filter(d => Math.abs(d.ts - event.ts) <= WINDOW);
+  let bestTs = null, bestDist = Infinity;
   for (let i = 1; i < slice.length; i++) {
     const jump = slice[i].portfolio_usd - slice[i - 1].portfolio_usd;
-    // Match deposit (positive jump) or withdrawal (negative jump)
-    if (event.amount_usd > 0 && jump >= event.amount_usd * TOLERANCE) return slice[i].ts;
-    if (event.amount_usd < 0 && jump <= event.amount_usd * TOLERANCE) return slice[i].ts;
+    const matches = (event.amount_usd > 0 && jump >= event.amount_usd * TOLERANCE)
+                 || (event.amount_usd < 0 && jump <= event.amount_usd * TOLERANCE);
+    if (matches) {
+      const dist = Math.abs(slice[i].ts - event.ts);
+      if (dist < bestDist) { bestDist = dist; bestTs = slice[i].ts; }
+    }
   }
-  return event.ts;  // fallback to recorded time if no jump found
+  return bestTs !== null ? bestTs : event.ts;
 }
 
 // Effective deposit timestamps cache (rebuilt after data loads)
