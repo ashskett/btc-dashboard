@@ -352,68 +352,63 @@ let dailyPnlChart, dailyPnlSeries;
 let _lastPnlBarMode = 'daily';
 let currentTf = '7d';
 
-// ── Capital event adjustment ──
-// Deposits may arrive in multiple batches over minutes.  Instead of subtracting
-// the full amount at a single point (which creates spikes/dips), we compute a
-// per-event baseline and progressively subtract only what has actually arrived.
+// ── Auto-detected deposit/withdrawal adjustment ──
+// Trades are zero-sum: USDC down = BTC value up (or vice versa).
+// Deposits/withdrawals create a NET inflow/outflow.  We detect these
+// automatically from consecutive snapshots — no manual capital events needed.
 
-// Cache: { baseline, startTs, amount } per capital event — rebuilt after data loads
-let _eventProfiles = [];
+// _externalFlows[i] = net external flow between snapshot i-1 and i (0 for i=0).
+// Positive = deposit, negative = withdrawal.  Small noise (<$500) is ignored.
+let _externalFlows = [];   // parallel to allData
+const FLOW_THRESHOLD = 500;  // ignore net flows smaller than this
 
-function buildEventProfiles() {
-  _eventProfiles = capitalEvents.map(ev => {
-    if (!allData || allData.length < 5) return { baseline: 0, startTs: ev.ts, amount: ev.amount_usd };
-    // Baseline: average of last 5 snapshots at least 30min before the event
-    const before = allData.filter(d => d.ts < ev.ts - 1800);
-    const tail = before.slice(-5);
-    const baseline = tail.length ? tail.reduce((s, d) => s + d.portfolio_usd, 0) / tail.length : 0;
-    // Start: first snapshot where portfolio jumps >$300 above baseline (deposit beginning)
-    const candidates = allData.filter(d => d.ts >= ev.ts - 1800 && d.ts <= ev.ts + 7200);
-    let startTs = ev.ts;
-    for (const d of candidates) {
-      const change = ev.amount_usd > 0 ? d.portfolio_usd - baseline : baseline - d.portfolio_usd;
-      if (change > 300) { startTs = d.ts; break; }
-    }
-    return { baseline, startTs, amount: ev.amount_usd };
-  });
+function buildExternalFlows() {
+  _externalFlows = new Array(allData.length).fill(0);
+  for (let i = 1; i < allData.length; i++) {
+    const prev = allData[i - 1], curr = allData[i];
+    const price = curr.btc_price;
+    const usdcDelta = curr.usdc_qty - prev.usdc_qty;
+    const btcDeltaUsd = (curr.btc_qty - prev.btc_qty) * price;
+    const netInflow = usdcDelta + btcDeltaUsd;
+    if (Math.abs(netInflow) < FLOW_THRESHOLD) continue;
+    // Distinguish deposits from trades: trades have large offsetting changes
+    // (USDC up + BTC down or vice versa).  Deposits move one side only.
+    const isOffsetting = Math.abs(usdcDelta) > 200 && Math.abs(btcDeltaUsd) > 200
+                      && Math.sign(usdcDelta) !== Math.sign(btcDeltaUsd);
+    if (!isOffsetting) _externalFlows[i] = netInflow;
+  }
 }
 
-// For a single event, compute how much to subtract at a given snapshot.
-// Before deposit starts: 0.  During arrival: min(cumChange, amount).  After: amount.
-function eventCreditAt(eventIdx, snapshot) {
-  const ev = capitalEvents[eventIdx];
-  const prof = _eventProfiles[eventIdx];
-  if (!prof || !prof.baseline) return 0;
-  if (snapshot.ts < prof.startTs) return 0;
-
-  const cumChange = ev.amount_usd > 0
-    ? snapshot.portfolio_usd - prof.baseline
-    : prof.baseline - snapshot.portfolio_usd;
-  // Clamp: don't subtract more than the event amount, don't go negative
-  return Math.max(0, Math.min(Math.abs(ev.amount_usd), Math.max(0, cumChange)));
-}
-
-// Total deposit credit at a snapshot (sum across all events in window)
-function totalDepositCredit(windowStartTs, snapshot) {
+// Cumulative external flows from a start index to a target index.
+// Only counts flows that happen at or after startIdx.
+function cumFlowBetween(startIdx, endIdx) {
   let total = 0;
-  for (let i = 0; i < capitalEvents.length; i++) {
-    const prof = _eventProfiles[i];
-    if (!prof) continue;
-    // Only count events whose start falls within the chart window
-    if (prof.startTs >= windowStartTs) {
-      total += eventCreditAt(i, snapshot);
-    }
+  for (let i = startIdx + 1; i <= endIdx; i++) {
+    total += _externalFlows[i];
   }
   return total;
 }
 
-// Sum of all capital event amounts whose start is within a time range (for summary cards)
+// For chart rendering: given an array of data indices (into allData),
+// return adjusted portfolio values with external flows removed.
+function adjustedPortfolioValues(indices) {
+  if (!indices.length) return [];
+  const baseIdx = indices[0];
+  return indices.map(idx => {
+    const flow = cumFlowBetween(baseIdx, idx);
+    return allData[idx].portfolio_usd - flow;
+  });
+}
+
+// For summary cards: sum of external flows between two timestamps
 function depositsInWindow(startTs, endTs) {
-  return capitalEvents.reduce((s, _e, i) => {
-    const prof = _eventProfiles[i];
-    if (!prof) return s;
-    return (prof.startTs >= startTs && prof.startTs <= endTs) ? s + Math.abs(_e.amount_usd) : s;
-  }, 0);
+  let total = 0;
+  for (let i = 1; i < allData.length; i++) {
+    if (allData[i].ts >= startTs && allData[i].ts <= endTs) {
+      total += _externalFlows[i];
+    }
+  }
+  return total;
 }
 
 // ── Init Charts ──
@@ -483,7 +478,7 @@ async function loadData() {
     if (rCe.ok) capitalEvents = await rCe.json();
     if (!Array.isArray(allData) || !allData.length) return;
 
-    buildEventProfiles();
+    buildExternalFlows();
     updateKpis();
     updateCharts();
     updateDaily();
@@ -582,11 +577,11 @@ function updateCharts() {
   sampled.forEach(d => deduped.set(Math.floor(d.ts), d));
   sampled = Array.from(deduped.values()).sort((a, b) => a.ts - b.ts);
 
-  // Portfolio value — progressively subtract deposits as they arrive
+  // Portfolio value — subtract auto-detected external flows (deposits/withdrawals)
   const windowStart = sampled[0].ts;
   const pfData = sampled.map(d => ({
     time: Math.floor(d.ts),
-    value: d.portfolio_usd - totalDepositCredit(windowStart, d),
+    value: d.portfolio_usd - depositsInWindow(windowStart, d.ts),
   }));
   pfSeries.setData(pfData);
   pfChart.timeScale().fitContent();
