@@ -874,11 +874,20 @@ function renderTargetUI(){
     qe.innerHTML=priceTargets.map(pt=>{
       const state=!pt.active?'OFF':pt.fired?'ACTIVE':'ARMED';
       const col=!pt.active?'var(--muted)':pt.fired?(pt.direction==='UP'?'var(--green)':'var(--red)'):'var(--amber)';
-      return `<div class="tgt-row">
-        <div class="tgt-dot" style="background:${col}"></div>
-        <div class="tgt-label">${pt.label||'-'}</div>
-        <div class="tgt-price">${f(pt.trigger_price)}</div>
-        <div class="tgt-state" style="background:${col}22;color:${col}">${pt.direction} ${state}</div>
+      const armed=pt.active;
+      const fired=pt.fired;
+      return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+        <div class="tgt-row">
+          <div class="tgt-dot" style="background:${col}"></div>
+          <div class="tgt-label">${pt.label||'-'}</div>
+          <div class="tgt-price">${f(pt.trigger_price)}</div>
+          <div class="tgt-state" style="background:${col}22;color:${col}">${pt.direction} ${state}</div>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px;padding-left:14px">
+          <button class="qe-btn" onclick="toggleTargetActive('${pt.id}',${!armed})" style="font-size:7px;padding:2px 5px;color:${armed?'var(--amber)':'var(--green)'}">${armed?'Disarm':'Arm'}</button>
+          <button class="qe-btn" onclick="clearTargetState('${pt.id}')" style="font-size:7px;padding:2px 5px;${!fired?'opacity:.35;pointer-events:none;':'color:var(--accent)'}">Clear</button>
+          <button class="qe-btn primary" onclick="editTarget('${pt.id}')" style="font-size:7px;padding:2px 5px">Edit</button>
+        </div>
       </div>`;
     }).join('');
   }
@@ -888,11 +897,19 @@ function renderTargetUI(){
     sl.innerHTML=priceTargets.map(pt=>{
       const state=!pt.active?'OFF':pt.fired?'ACTIVE':'ARMED';
       const col=!pt.active?'var(--muted)':pt.fired?(pt.direction==='UP'?'var(--green)':'var(--red)'):'var(--amber)';
-      return `<div style="display:flex;align-items:center;gap:6px;padding:8px;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;">
-        <div style="flex:1"><div style="font-weight:700;font-size:11px">${pt.label||'-'}</div><div style="font-size:9px;color:var(--muted)">${pt.direction} ${f(pt.trigger_price)} ${pt.dca_enabled?'DCA':''} ${pt.smart_trade_enabled?'ST':''}</div></div>
-        <span style="font-size:8px;padding:2px 5px;border-radius:3px;background:${col}22;color:${col};font-weight:700">${state}</span>
-        <button class="qe-btn primary" onclick="editTarget('${pt.id}')" style="font-size:8px;padding:3px 6px">Edit</button>
-        <button class="qe-btn danger" onclick="deleteTarget('${pt.id}')" style="font-size:8px;padding:3px 6px">Del</button>
+      const armed=pt.active;
+      const fired=pt.fired;
+      return `<div style="padding:8px;background:rgba(255,255,255,.03);border:1px solid var(--border);border-left:3px solid ${col};border-radius:6px;margin-bottom:6px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+          <div style="flex:1"><div style="font-weight:700;font-size:11px">${pt.label||'-'}</div><div style="font-size:9px;color:var(--muted)">${pt.direction} ${f(pt.trigger_price)} ${pt.dca_enabled?'DCA':''} ${pt.smart_trade_enabled?'ST':''}</div></div>
+          <span style="font-size:8px;padding:2px 5px;border-radius:3px;background:${col}22;color:${col};font-weight:700">${state}</span>
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          <button class="qe-btn" onclick="toggleTargetActive('${pt.id}',${!armed})" style="font-size:8px;padding:3px 6px;color:${armed?'var(--amber)':'var(--green)'}">${armed?'Disarm':'Re-arm'}</button>
+          <button class="qe-btn" onclick="clearTargetState('${pt.id}')" style="font-size:8px;padding:3px 6px;${!fired?'opacity:.35;pointer-events:none;':'color:var(--accent)'}">Clear</button>
+          <button class="qe-btn primary" onclick="editTarget('${pt.id}')" style="font-size:8px;padding:3px 6px">Edit</button>
+          <button class="qe-btn danger" onclick="deleteTarget('${pt.id}')" style="font-size:8px;padding:3px 6px">Del</button>
+        </div>
       </div>`;
     }).join('');
   }
@@ -945,6 +962,22 @@ function editTarget(id){
     }
     document.getElementById('addTargetSection').scrollIntoView({behavior:'smooth'});
   },100);
+}
+
+async function toggleTargetActive(id, newActive){
+  try{
+    const r=await fetch(`/targets/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:newActive})});
+    const d=await r.json(); if(d.ok) toast(newActive?'Armed':'Disarmed','ok'); else toast(d.msg||'Failed','err');
+    await loadTargets();
+  }catch(e){toast(e.message,'err');}
+}
+
+async function clearTargetState(id){
+  try{
+    const r=await fetch(`/targets/${id}/clear`,{method:'POST'});
+    const d=await r.json(); if(d.ok) toast('Cleared & re-armed','ok'); else toast(d.msg||'Failed','err');
+    await loadTargets();
+  }catch(e){toast(e.message,'err');}
 }
 
 async function deleteTarget(id){
