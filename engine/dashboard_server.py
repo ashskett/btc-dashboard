@@ -1866,6 +1866,16 @@ def notifications():
             events.append({"ts": ts, "type": "SMART_TRADE", "severity": "warning",
                            "msg": f"SmartTrade opened for \"{label}\"  (${price:,.0f})"})
 
+        # DCA launch error — surfaces silent 3Commas / payload failures that
+        # were previously only visible in the engine stdout buffer.
+        # Emit a new event whenever the error message changes from the
+        # previous cycle (suppresses the repeat noise of the retry cooldown).
+        _dca_err = e.get("dca_launch_error")
+        if _dca_err and _dca_err != prev.get("dca_launch_error"):
+            label = e.get("price_target_label") or "target"
+            events.append({"ts": ts, "type": "DCA_ERROR", "severity": "critical",
+                           "msg": f"DCA launch failed for \"{label}\" — {_dca_err}  (${price:,.0f})"})
+
         # Inner drift (narrow-only recentre)
         if e.get("inner_drift_fired") and not prev.get("inner_drift_fired"):
             events.append({"ts": ts, "type": "INNER_DRIFT", "severity": "info",

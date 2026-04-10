@@ -417,6 +417,8 @@ def run():
     _prox      = None    # proximity alert direction; needed in finally block
     TRENDLINE  = None    # declared early so finally block can always reference it
     _trendline_active = False
+    _dca_launch_error = None   # set when a DCA launch attempt fails this cycle
+                                # — picked up by log_data and /notifications
 
     try:
         # ===============================
@@ -903,9 +905,16 @@ def run():
                                 except Exception as _dca_err:
                                     new_fails = _fail_count + 1
                                     update_target(_pt_state["id"], {"dca_fail_count": new_fails})
+                                    _err_str = str(_dca_err)[:300]
+                                    _dca_launch_error = f"single[{new_fails}]: {_err_str}"
                                     print(f"  ERROR: DCA bot launch failed (attempt {new_fails}): {_dca_err}")
-                                    if new_fails == 1:
-                                        notify_critical(f"DCA launch FAILED '{_pt_label}': {_dca_err}")
+                                    # Notify on first failure and then every 10 attempts
+                                    # so silent breakage surfaces on Telegram instead of
+                                    # only stdout (seen: 44 failed attempts with no alert).
+                                    if new_fails == 1 or new_fails % 10 == 0:
+                                        notify_critical(
+                                            f"DCA launch FAILED x{new_fails} '{_pt_label}': {_dca_err}"
+                                        )
                             else:
                                 print(f"  Rate limit — DCA launch deferred to next cycle")
 
@@ -952,10 +961,16 @@ def run():
                                     except Exception as _e:
                                         new_fails = _fail_count + 1
                                         update_target(_pt_state["id"], {"dca_fail_count": new_fails})
+                                        _err_str = str(_e)[:300]
+                                        _dca_launch_error = f"scout[{new_fails}]: {_err_str}"
                                         print(f"  ERROR: DCA scout launch failed (attempt {new_fails}): {_e}")
-                                        # Only notify on first failure — subsequent retries are silent
-                                        if new_fails == 1:
-                                            notify_critical(f"DCA scout launch FAILED '{_pt_label}': {_e}")
+                                        # Notify on first failure and then every 10 attempts
+                                        # so silent breakage surfaces on Telegram (previously
+                                        # only the very first failure alerted).
+                                        if new_fails == 1 or new_fails % 10 == 0:
+                                            notify_critical(
+                                                f"DCA scout launch FAILED x{new_fails} '{_pt_label}': {_e}"
+                                            )
                                 else:
                                     print(f"  Rate limit — DCA scout launch deferred")
 
@@ -994,6 +1009,8 @@ def run():
                                                f"main bot launched id={bid} capital=${retest_capital:.0f}")
                                         print(f"  DCA retest bot launched: id={bid} capital=${retest_capital}")
                                     except Exception as _e:
+                                        _err_str = str(_e)[:300]
+                                        _dca_launch_error = f"retest: {_err_str}"
                                         notify_critical(f"DCA retest launch FAILED '{_pt_label}': {_e}")
                                         print(f"  ERROR: DCA retest launch failed: {_e}")
                                 else:
@@ -1591,6 +1608,7 @@ def run():
                 "price_target_trigger": _pt_state.get("trigger_price") if _pt_state else None,
                 "price_target_tp":      _pt_state.get("price_target")  if _pt_state else None,
                 "price_target_dca_id":  _pt_state.get("dca_bot_id")    if _pt_state else None,
+                "dca_launch_error":     _dca_launch_error,
                 # Weekend mode
                 "weekend_mode": _prev_weekend_mode,
                 # TREND_DOWN stabilisation progress (for dashboard + future retest logic)

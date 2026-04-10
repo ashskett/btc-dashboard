@@ -135,10 +135,18 @@ def create_dca_bot(
         "strategy_list":                   [{"strategy": "manual", "options": {}}],
         "leverage_type":                   "not_specified",
     }
+    # 3Commas API (as of Apr 2026) REQUIRES both take_profit_type and a scalar
+    # take_profit field in the payload even when take_profit_steps is present.
+    # Earlier API versions rejected payloads with both — the behaviour was
+    # inverted silently and broke every DCA launch attempt (seen via 44
+    # consecutive failures: record_invalid / "take_profit is missing").
+    # Always send the scalar fields; when steps are present they take precedence.
+    body["take_profit_type"] = "total"
     if take_profit_steps and len(take_profit_steps) > 0:
-        # Step TP: send take_profit_steps array ONLY.
-        # Do NOT include take_profit — 3Commas rejects requests that have both
-        # take_profit_steps and a plain take_profit value simultaneously.
+        # Use the final step's profit % as the scalar fallback so the two
+        # representations agree on the outer close target.
+        _scalar_tp = max(float(s.get("profit_pct", 0)) for s in take_profit_steps)
+        body["take_profit"]       = str(round(_scalar_tp, 2))
         body["take_profit_steps"] = [
             {
                 "amount_percentage": round(s["close_pct"], 2),
@@ -147,8 +155,7 @@ def create_dca_bot(
             for s in take_profit_steps
         ]
     else:
-        body["take_profit_type"] = "total"
-        body["take_profit"]      = str(round(take_profit_pct, 2))
+        body["take_profit"] = str(round(take_profit_pct, 2))
     # Trailing TP — price must first reach TP level, then trails by deviation %.
     # 3Commas fields: trailing_enabled (bool), trailing_deviation (string %).
     if trailing_enabled:
