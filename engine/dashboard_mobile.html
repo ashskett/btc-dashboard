@@ -795,9 +795,14 @@ async function fetchBalance(){
 }
 
 // ── BOTS ──
+let botOverrides={};   // {bot_id: "stopped"} — engine won't restart these
+
 async function loadBots(){
   try{
-    const r=await fetch('/bots'); if(!r.ok) throw 0; const data=await r.json(); if(!Array.isArray(data)) throw 0;
+    const [rb, ro] = await Promise.all([fetch('/bots'), fetch('/bots/overrides')]);
+    if(!rb.ok) throw 0;
+    const data=await rb.json(); if(!Array.isArray(data)) throw 0;
+    botOverrides = ro.ok ? (await ro.json() || {}) : {};
     bots=data; document.getElementById('botCountLbl').textContent=`(${bots.length})`;
     const cont=document.getElementById('botCards');
     cont.innerHTML=bots.map((b,i)=>{
@@ -805,12 +810,31 @@ async function loadBots(){
       const tier=(status.tiers&&status.tiers[i])||null;
       const inside=tier&&status.price&&status.price>=tier.grid_low&&status.price<=tier.grid_high;
       const range=tier?`${f(tier.grid_low)}-${f(tier.grid_high)}`:(b.lower_price?`${f(b.lower_price)}-${f(b.upper_price)}`:'-');
-      return `<div class="bot-card" data-i="${i}"><div class="bot-hdr"><span class="bot-name" style="color:${col}">${name}</span><span style="flex:1"></span><span class="bot-status ${on?'on':'off'}">${on?'ON':'OFF'}</span></div><div class="bot-range">${range} ${inside?'<span style="color:var(--green)">●</span>':'<span style="color:var(--muted)">○</span>'}</div><div class="bot-btns"><button class="bot-btn start" onclick="botAct(${b.id},'start')">Start</button><button class="bot-btn stop" onclick="botAct(${b.id},'stop')">Stop</button></div></div>`;
+      const locked = botOverrides[String(b.id)] === 'stopped';
+      const lockBadge = locked ? `<span style="font-size:8px;padding:2px 5px;border-radius:3px;background:rgba(255,171,0,.15);color:var(--amber);font-weight:700;margin-right:4px">LOCKED</span>` : '';
+      const lockBtn = locked
+        ? `<button class="bot-btn" style="background:rgba(255,171,0,.12);border:1px solid var(--amber);color:var(--amber)" onclick="botUnlock(${b.id})">Unlock</button>`
+        : `<button class="bot-btn" style="background:rgba(179,136,255,.1);border:1px solid var(--purple);color:var(--purple)" onclick="botLock(${b.id})">Lock</button>`;
+      return `<div class="bot-card" data-i="${i}">
+        <div class="bot-hdr"><span class="bot-name" style="color:${col}">${name}</span><span style="flex:1"></span>${lockBadge}<span class="bot-status ${on?'on':'off'}">${on?'ON':'OFF'}</span></div>
+        <div class="bot-range">${range} ${inside?'<span style="color:var(--green)">●</span>':'<span style="color:var(--muted)">○</span>'}</div>
+        <div class="bot-btns"><button class="bot-btn start" onclick="botAct(${b.id},'start')">Start</button><button class="bot-btn stop" onclick="botAct(${b.id},'stop')">Stop</button>${lockBtn}</div>
+      </div>`;
     }).join('');
   }catch(e){ document.getElementById('botCards').innerHTML='<div style="color:var(--red);font-size:10px">Unavailable</div>'; }
 }
 
 async function botAct(id,action){ if(dryRun){toast(`[DRY] ${action} ${id}`);return;} try{ await fetch(`/bots/${id}/${action}`,{method:'POST'}); toast(`Bot ${action}ed`,'ok'); setTimeout(loadBots,1400); }catch(e){toast(e.message,'err');} }
+
+async function botLock(id){
+  if(dryRun){ toast(`[DRY] lock ${id}`); return; }
+  if(!confirm('Lock this bot off? Engine will not restart it automatically.')) return;
+  try{ await fetch(`/bots/${id}/override`,{method:'POST'}); toast('Bot locked off','ok'); setTimeout(loadBots,1200); }catch(e){toast(e.message,'err');}
+}
+
+async function botUnlock(id){
+  try{ await fetch(`/bots/${id}/override`,{method:'DELETE'}); toast('Bot unlocked — engine will resume','ok'); setTimeout(loadBots,800); }catch(e){toast(e.message,'err');}
+}
 
 // ── TRENDLINES ──
 async function loadTrendlines(){
