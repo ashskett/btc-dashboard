@@ -135,25 +135,21 @@ def create_dca_bot(
         "strategy_list":                   [{"strategy": "manual", "options": {}}],
         "leverage_type":                   "not_specified",
     }
-    # 3Commas API (as of Apr 2026) REQUIRES both take_profit_type and a scalar
-    # take_profit field in the payload even when take_profit_steps is present.
-    # Earlier API versions rejected payloads with both — the behaviour was
-    # inverted silently and broke every DCA launch attempt (seen via 44
-    # consecutive failures: record_invalid / "take_profit is missing").
-    # Always send the scalar fields; when steps are present they take precedence.
+    # take_profit_steps is DISABLED — 3Commas API contradicts itself:
+    #   - Without scalar take_profit: 400 "take_profit is missing"
+    #   - With both scalar + steps:    400 "Not available to create bot with
+    #                                  take profit steps and ordinary take profit"
+    # There is no working combination via this API path. Collapse step-TP
+    # configs into a single scalar TP at the highest step %, and rely on
+    # trailing TP (trailing_enabled + trailing_deviation) to ride extended
+    # moves — same effective behaviour as a multi-step trail.
     body["take_profit_type"] = "total"
     if take_profit_steps and len(take_profit_steps) > 0:
-        # Use the final step's profit % as the scalar fallback so the two
-        # representations agree on the outer close target.
         _scalar_tp = max(float(s.get("profit_pct", 0)) for s in take_profit_steps)
-        body["take_profit"]       = str(round(_scalar_tp, 2))
-        body["take_profit_steps"] = [
-            {
-                "amount_percentage": round(s["close_pct"], 2),
-                "profit_percentage": round(s["profit_pct"], 2),
-            }
-            for s in take_profit_steps
-        ]
+        body["take_profit"] = str(round(_scalar_tp, 2))
+        print(f"  [DCA] take_profit_steps collapsed to scalar TP={_scalar_tp:.2f}% "
+              f"(3Commas API rejects step-TP). Trailing={trailing_enabled} "
+              f"deviation={trailing_deviation_pct:.2f}%")
     else:
         body["take_profit"] = str(round(take_profit_pct, 2))
     # Trailing TP — price must first reach TP level, then trails by deviation %.
