@@ -164,13 +164,21 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df, trend_tilt=
 
     # Drift-zone cap: load deploy state so each tier can be clamped to the
     # zone the engine will actually let price reach before recentring.
+    # The base drift_limit is derived from the inner tier's deploy width.
+    # Each wider tier scales proportionally by its range_mult so outer/mid
+    # aren't collapsed onto the same band as inner (was a bug — mid and outer
+    # deployed to identical ranges because a single flat cap nullified outer's
+    # wider range_mult).
     gs = get_grid_state()
     _deploy_gw     = gs.get("grid_width_at_deploy")
     _deploy_center = gs.get("grid_center")
-    _drift_limit   = (_deploy_gw * 0.85) if _deploy_gw else None
+    _base_drift    = (_deploy_gw * 0.85) if _deploy_gw else None
+    _inner_mult    = TIERS[0]["range_mult"]   # 0.75
 
     tiers = []
     for i, t in enumerate(TIERS):
+        # Scale drift cap proportionally to this tier's range_mult
+        _drift_limit = (_base_drift * t["range_mult"] / _inner_mult) if _base_drift else None
         # trend_tilt only applies to the inner tier (index 0)
         tier_trend_tilt = trend_tilt if i == 0 else 0.0
         tier_grid = _build_tier(
