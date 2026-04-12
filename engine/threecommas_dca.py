@@ -122,8 +122,17 @@ def create_dca_bot(
     body = {
         "account_id":                      int(ACCOUNT_ID),
         "pairs":                           [pair],
+        # Top-level strategy classifies the bot as long. Without this,
+        # created bots do not appear in the standard `strategy=long` bot
+        # list and their base orders never fire. Discovered Apr 10 2026
+        # after scout+retest launched with IDs returned but zero deals.
+        "strategy":                        "long",
         "base_order_volume":               str(round(base_order_usd, 2)),
         "base_order_volume_type":          "quote_currency",
+        # start_order_type "market" makes the base order fill immediately
+        # at market price. Default is "limit" which placed the base order
+        # at bid and left it unfilled as price moved away from it.
+        "start_order_type":                "market",
         "safety_order_volume":             str(round(safety_order_usd, 2)),
         "safety_order_volume_type":        "quote_currency",
         "safety_order_step_percentage":    str(round(safety_order_step_pct, 2)),
@@ -132,7 +141,11 @@ def create_dca_bot(
         "max_safety_orders":               safety_order_count,
         "active_safety_orders_count":      min(safety_order_count, 3),
         "name":                            label,
-        "strategy_list":                   [{"strategy": "manual", "options": {}}],
+        # "nonstop" starts a new deal as soon as the bot is enabled (and
+        # again whenever the previous deal closes). Previously "manual"
+        # which required an explicit start_new_deal API call that the
+        # engine never made — bots were enabled but idle.
+        "strategy_list":                   [{"strategy": "nonstop", "options": {}}],
         "leverage_type":                   "not_specified",
     }
     # take_profit_steps is DISABLED — 3Commas API contradicts itself:
