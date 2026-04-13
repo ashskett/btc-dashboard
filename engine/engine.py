@@ -401,6 +401,19 @@ _prev_regime: str | None = None
 _prev_trending_down: bool = False
 _prev_inventory_mode: str | None = None
 _prev_weekend_mode: bool = False
+# Track the last start/stop action sent to each bot so we don't spam
+# redundant enable/disable API calls every cycle.  3Commas re-places
+# all grid orders on every enable call, so calling start_bot() on an
+# already-running bot cancels existing orders and restarts them — fills
+# can only happen within a single 2-min cycle window.
+_bot_last_action: dict[int, str] = {}   # bot_id → "started" | "stopped"
+
+
+def _mark_all_bots_started():
+    """After a redeploy_all_bots call, mark all bots as started so _act()
+    doesn't redundantly call enable on the next cycle."""
+    for bot_id in GRID_BOTS:
+        _bot_last_action[bot_id] = "started"
 
 def run():
     global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode
@@ -634,6 +647,12 @@ def run():
             if should_run and _bot_overrides.get(str(bot_id)) == "stopped":
                 print(f"  Manual override ACTIVE — skipping start for bot {bot_id} ({label})")
                 return
+            desired = "started" if should_run else "stopped"
+            if _bot_last_action.get(bot_id) == desired:
+                # Bot is already in the desired state — skip the API call.
+                # Calling enable on a running grid bot cancels and re-places
+                # all orders, killing any in-progress grid cycles.
+                return
             if DRY_RUN:
                 action = "start" if should_run else "stop"
                 print(f"[SIMULATION] Would {action} bot {bot_id} ({label})")
@@ -642,6 +661,7 @@ def run():
                     start_bot(bot_id)
                 else:
                     stop_bot(bot_id)
+            _bot_last_action[bot_id] = desired
 
         # ===============================
         # BREAKOUT DETECTION
@@ -735,6 +755,7 @@ def run():
                     elif _can_act():
                         _record_action()
                         redeploy_all_bots(GRID_BOTS, _exhaust_tiers)
+                        _mark_all_bots_started()
                         update_grid_center(state.price, grid_width=state.grid_width,
                                            deployed_tiers=_exhaust_tiers)
                         clear_breakout_state()
@@ -1223,6 +1244,7 @@ def run():
                         _record_action()
                         _dip_tiers = _make_intensive_buy_tiers(state.price, state.tiers)
                         redeploy_all_bots(GRID_BOTS, _dip_tiers)
+                        _mark_all_bots_started()
                         update_grid_center(state.price, grid_width=state.grid_width,
                                            deployed_tiers=_dip_tiers)
                     else:
@@ -1299,6 +1321,7 @@ def run():
                     elif _can_act():
                         _record_action()
                         redeploy_all_bots(GRID_BOTS, state.tiers)
+                        _mark_all_bots_started()
                         update_grid_center(state.price, grid_width=state.grid_width,
                                            deployed_tiers=state.tiers)
                     else:
@@ -1362,6 +1385,7 @@ def run():
             elif _can_act():
                 _record_action()
                 redeploy_all_bots(GRID_BOTS, _recovery_tiers)
+                _mark_all_bots_started()
                 update_grid_center(state.price, grid_width=state.grid_width,
                                    deployed_tiers=_recovery_tiers)
                 if _post_recovery_weekend:
@@ -1404,6 +1428,7 @@ def run():
             elif _can_act():
                 _record_action()
                 redeploy_all_bots(GRID_BOTS, state.tiers)
+                _mark_all_bots_started()
                 update_grid_center(state.price, grid_width=state.grid_width,
                                    deployed_tiers=state.tiers)
             else:
@@ -1434,6 +1459,7 @@ def run():
                 elif _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, _wt)
+                    _mark_all_bots_started()
                     update_grid_center(state.price, grid_width=state.grid_width,
                                        deployed_tiers=_wt)
                     _prev_weekend_mode = True
@@ -1461,6 +1487,7 @@ def run():
                     if not DRY_RUN and _can_act():
                         _record_action()
                         redeploy_all_bots(GRID_BOTS, _wt2)
+                        _mark_all_bots_started()
                         update_grid_center(state.price, grid_width=state.grid_width,
                                            deployed_tiers=_wt2)
                 else:
@@ -1492,6 +1519,7 @@ def run():
                 elif _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, _intensive_tiers)
+                    _mark_all_bots_started()
                     update_grid_center(state.price, grid_width=state.grid_width,
                                        deployed_tiers=_intensive_tiers)
                 else:
@@ -1518,6 +1546,7 @@ def run():
                 elif _can_act():
                     _record_action()
                     redeploy_all_bots(GRID_BOTS, _intensive_tiers)
+                    _mark_all_bots_started()
                     update_grid_center(state.price, grid_width=state.grid_width,
                                        deployed_tiers=_intensive_tiers)
                 else:
