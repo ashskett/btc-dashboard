@@ -538,14 +538,38 @@ def run():
             _inv_s  = get_inventory_settings()
             _min_btc = _inv_s["min_btc"]
             _max_btc = _inv_s["max_btc"]
-            if state.btc_ratio > _max_btc:
+            # Hysteresis: once in SELL_ONLY/BUY_ONLY, ratio must recover past
+            # a wider exit threshold before returning to NORMAL. Prevents
+            # oscillation when ratio hovers near the entry threshold — each
+            # flip triggers a full redeploy (stop→intensive grid→start), so
+            # rapid toggling produces tiny fills and wasted API calls.
+            _sell_exit = _max_btc - 0.05   # e.g. 0.70 → exit at 0.65
+            _buy_exit  = _min_btc + 0.05   # e.g. 0.35 → exit at 0.40
+            if _prev_inventory_mode == "SELL_ONLY":
+                # Stay in SELL_ONLY until ratio drops below exit threshold
+                if state.btc_ratio > _sell_exit:
+                    state.inventory_mode = "SELL_ONLY"
+                else:
+                    state.inventory_mode = "NORMAL"
+            elif _prev_inventory_mode == "BUY_ONLY":
+                # Stay in BUY_ONLY until ratio rises above exit threshold
+                if state.btc_ratio < _buy_exit:
+                    state.inventory_mode = "BUY_ONLY"
+                else:
+                    state.inventory_mode = "NORMAL"
+            elif state.btc_ratio > _max_btc:
                 state.inventory_mode = "SELL_ONLY"
             elif state.btc_ratio < _min_btc:
                 state.inventory_mode = "BUY_ONLY"
             else:
                 state.inventory_mode = "NORMAL"
+            _exit_note = ""
+            if _prev_inventory_mode == "SELL_ONLY" and state.inventory_mode == "SELL_ONLY":
+                _exit_note = f", exit < {_sell_exit:.0%}"
+            elif _prev_inventory_mode == "BUY_ONLY" and state.inventory_mode == "BUY_ONLY":
+                _exit_note = f", exit > {_buy_exit:.0%}"
             print(f"Inventory hard stops: min_btc={_min_btc:.0%}, max_btc={_max_btc:.0%} "
-                  f"(current ratio {state.btc_ratio:.0%} → {state.inventory_mode})")
+                  f"(current ratio {state.btc_ratio:.0%} → {state.inventory_mode}{_exit_note})")
 
         # ===============================
         # GRID PARAMETERS
