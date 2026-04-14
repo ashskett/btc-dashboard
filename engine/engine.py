@@ -407,6 +407,7 @@ _prev_weekend_mode: bool = False
 # already-running bot cancels existing orders and restarts them — fills
 # can only happen within a single 2-min cycle window.
 _bot_last_action: dict[int, str] = {}   # bot_id → "started" | "stopped"
+_bot_action_cycle: int = 0              # counter for periodic forced re-check
 
 
 def _mark_all_bots_started():
@@ -416,12 +417,21 @@ def _mark_all_bots_started():
         _bot_last_action[bot_id] = "started"
 
 def run():
-    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode
+    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle
     now = time.time()
     if now - _last_run_ts < 100:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
         return
     _last_run_ts = now
+
+    # Every 10 cycles (~20 min) clear _bot_last_action so the engine
+    # re-sends start/stop commands. Catches external state changes (bot
+    # auto-disabled by 3Commas, manual stop, API failure on prior cycle).
+    _bot_action_cycle += 1
+    if _bot_action_cycle >= 10:
+        _bot_last_action.clear()
+        _bot_action_cycle = 0
+
     print("Checking market...")
 
     state = EngineState()
@@ -656,12 +666,17 @@ def run():
             if DRY_RUN:
                 action = "start" if should_run else "stop"
                 print(f"[SIMULATION] Would {action} bot {bot_id} ({label})")
+                _bot_last_action[bot_id] = desired
             else:
                 if should_run:
-                    start_bot(bot_id)
+                    r = start_bot(bot_id)
+                    if r and r.status_code in (200, 201, 204):
+                        _bot_last_action[bot_id] = desired
+                    # On failure: do NOT cache — next cycle will retry
                 else:
-                    stop_bot(bot_id)
-            _bot_last_action[bot_id] = desired
+                    r = stop_bot(bot_id)
+                    if r and r.status_code in (200, 201, 204):
+                        _bot_last_action[bot_id] = desired
 
         # ===============================
         # BREAKOUT DETECTION
