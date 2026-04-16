@@ -905,6 +905,13 @@ def _persist_new_fills(new_fills):
 
 @app.route("/bots/fills")
 def bot_fills():
+    """Return all known fills, merging market_orders + profits endpoints.
+
+    market_orders gives individual BUY/SELL fills but 3Commas resets the
+    history every time a bot is redeployed.  profits gives completed grid
+    cycles (buy+sell pair) that persist across restarts.  We merge both
+    sources and dedup by a synthetic key so every real trade shows up.
+    """
     global _fills_cache
     now = time.time()
     if (request.args.get("nocache") != "1"
@@ -914,6 +921,8 @@ def bot_fills():
     try:
         ids = [b.strip() for b in os.getenv("GRID_BOT_IDS","").split(",") if b.strip()]
         api_fills = []
+
+        # ── Source 1: market_orders (individual BUY/SELL fills) ──────────
         for i, bid in enumerate(ids[:3]):
             r = signed_request("GET", f"/ver1/grid_bots/{bid}/market_orders", params={"limit": 200})
             if r.status_code != 200:
@@ -935,6 +944,42 @@ def bot_fills():
                     "side":      (item.get("order_type") or "").upper(),
                     "qty":       float(item.get("quantity") or 0),
                 })
+
+        # ── Source 2: profits (completed grid cycles) ────────────────────
+        # Each profit entry = a completed buy+sell round-trip at a grid
+        # level.  The created_at is when the cycle completed (sell filled).
+        # These persist across bot restarts, unlike market_orders.
+        for i, bid in enumerate(ids[:3]):
+            offset = 0
+            while offset < 2000:
+                r = signed_request("GET", f"/ver1/grid_bots/{bid}/profits",
+                                   params={"limit": 100, "offset": offset})
+                if r.status_code != 200:
+                    break
+                entries = r.json()
+                if not isinstance(entries, list) or not entries:
+                    break
+                for entry in entries:
+                    ts = entry.get("created_at")
+                    gl = entry.get("grid_line") or {}
+                    price = float(gl.get("price") or 0)
+                    if not ts or not price:
+                        continue
+                    gl_id = entry.get("grid_line_id") or gl.get("id")
+                    api_fills.append({
+                        "order_id":  f"profit_{bid}_{gl_id}_{ts}",
+                        "bot_id":    bid,
+                        "bot_index": i,
+                        "time":      ts,
+                        "price":     price,
+                        "side":      "SELL",   # cycle completion = sell leg
+                        "qty":       0,
+                        "source":    "profits",
+                    })
+                if len(entries) < 100:
+                    break
+                offset += 100
+
         # Persist any new fills we haven't seen before
         added = _persist_new_fills(api_fills)
         if added:
