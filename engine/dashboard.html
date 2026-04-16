@@ -1852,43 +1852,66 @@ async function loadFills(){
 }
 
 function applyFillMarkers(){
-  if(!candles || !fillsData.length) return;
-  const gran = {'1m':60,'5m':300,'15m':900,'45m':2700,'1h':3600,'4h':14400,'6h':21600,'1d':86400,'1w':604800,'1M':2592000}[currentTf] || 3600;
-  // Deduplicate: one marker per candle per side (multiple fills in same candle collapse to one)
-  const seen = new Map();
+  if(!candles || !fillsData.length || !_candleData.length) return;
+
+  // Build sorted array of candle open-times for binary-search snapping
+  const candleTimes = _candleData.map(c => c.time).sort((a,b) => a - b);
+  const firstCandle = candleTimes[0];
+  const lastCandle  = candleTimes[candleTimes.length - 1];
+
+  // Snap a unix-seconds timestamp to the nearest loaded candle time.
+  // Uses binary search — O(log n) per fill.
+  function snapToCandle(ts) {
+    if (ts <= firstCandle) return firstCandle;
+    if (ts >= lastCandle)  return lastCandle;
+    let lo = 0, hi = candleTimes.length - 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      if (candleTimes[mid] <= ts) lo = mid; else hi = mid;
+    }
+    // Return whichever boundary is closer
+    return (ts - candleTimes[lo] <= candleTimes[hi] - ts) ? candleTimes[lo] : candleTimes[hi];
+  }
+
+  // Group fills by candle time + side, counting how many per group.
+  // Each group becomes one marker; text shows count if > 1.
+  const groups = new Map();   // key: "candleTime_B|S" → {count, time, isSell}
+  let skipped = 0;
+
   fillsData
     .filter(f => f.price > 0 && f.time)
     .forEach(f => {
-      // Normalise timestamp: handle Unix seconds, ISO strings, and "2026-03-25 08:43:00 UTC" format
       const normMs = typeof f.time === 'number'
         ? f.time * 1000
         : new Date(String(f.time).replace(' UTC','Z').replace(' ','T')).getTime();
-      if (!normMs || isNaN(normMs)) return;
-      const snapped = Math.floor(normMs / 1000 / gran) * gran;
+      if (!normMs || isNaN(normMs)) { skipped++; return; }
+      const tsSec = Math.floor(normMs / 1000);
+      // Skip fills outside loaded candle range (with 1-candle grace)
+      if (tsSec < firstCandle - 86400 || tsSec > lastCandle + 86400) { skipped++; return; }
+
+      const snapped = snapToCandle(tsSec);
       const isSell  = f.side === 'SELL';
       const key     = `${snapped}_${isSell ? 'S' : 'B'}`;
-      if (!seen.has(key)) {
-        seen.set(key, {
-          time:     snapped,
-          position: isSell ? 'aboveBar' : 'belowBar',
-          color:    isSell ? '#f85149' : '#3fb950',
-          shape:    isSell ? 'arrowDown' : 'arrowUp',
-          text:     '',
-        });
+
+      if (groups.has(key)) {
+        groups.get(key).count++;
+      } else {
+        groups.set(key, { time: snapped, isSell, count: 1 });
       }
     });
-  const markers = Array.from(seen.values()).sort((a,b) => a.time - b.time);
-  // Check which markers fall within actual candle data range
-  if (_candleData.length && markers.length) {
-    const candleTimes = new Set(_candleData.map(c => c.time));
-    const matched = markers.filter(m => candleTimes.has(m.time));
-    const unmatched = markers.filter(m => !candleTimes.has(m.time));
-    if (unmatched.length) {
-      console.warn(`[Fills] ${unmatched.length}/${markers.length} markers have no matching candle:`,
-        unmatched.map(m => ({time: m.time, date: new Date(m.time*1000).toISOString()})));
-    }
-    console.log(`[Fills] ${matched.length}/${markers.length} markers matched to candles (tf=${currentTf})`);
-  }
+
+  // Build marker array — one per group
+  const markers = Array.from(groups.values())
+    .map(g => ({
+      time:     g.time,
+      position: g.isSell ? 'aboveBar' : 'belowBar',
+      color:    g.isSell ? '#f85149' : '#3fb950',
+      shape:    g.isSell ? 'arrowDown' : 'arrowUp',
+      text:     g.count > 1 ? String(g.count) : '',
+    }))
+    .sort((a,b) => a.time - b.time);
+
+  console.log(`[Fills] ${markers.length} markers from ${fillsData.length} fills (${skipped} skipped, tf=${currentTf})`);
   try { candles.setMarkers(markers); } catch(e){ console.error('[Fills] setMarkers error:', e); }
 }
 
