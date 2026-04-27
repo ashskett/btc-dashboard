@@ -5,10 +5,10 @@
 ## Current State
 - **Project:** grid-engine
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** cdd4a1d
+- **Last known commit:** bd57b6b
 - **Active task:** Security hardening: tokens rotated and sensitive endpoints locked down
 - **Task owner:** codex
-- **Status:** needs-review
+- **Status:** idle
 
 ## Completed This Session
 - Removed exposed GitHub PAT from local `origin` remote and switched repo to SSH.
@@ -19,6 +19,9 @@
 - Restarted `grid-engine.service`; `/ping` is healthy.
 - Confirmed old deploy token now returns 403 and old dashboard token now returns 401.
 - Removed `/account/balance/raw` and `/notifications` from the public dashboard allowlist so they require dashboard auth.
+- Committed and pushed `bd57b6b` to `claude/grid-engine-chat-review-hEEGu`.
+- Deployed via `/deploy`; deploy backup created as `2026-04-27-205116`.
+- Verified live endpoint auth after deploy.
 
 ## Files Changed
 - `CLAUDE.md` — replaced concrete live tokens with `$GRID_DEPLOY_TOKEN` and `$GRID_DASHBOARD_TOKEN`.
@@ -39,15 +42,15 @@
 - Live droplet `grid-engine.service` restarted and is active.
 - `curl http://127.0.0.1:5050/ping` returned `{"ok": true}` on the droplet.
 - AST syntax parse passed for the endpoint hardening change.
+- Post-deploy: `/account/balance/raw` returns 401 without token and 200 with dashboard token.
+- Post-deploy: `/notifications` returns 401 without token and 200 with dashboard token.
 
 ## Blockers
-- `ASH_BRAIN_API_KEY` is not set locally, so Codex could not log this session to Ash Brain API.
 - New live `DEPLOY_TOKEN` / `DASHBOARD_SECRET` are only on the droplet. Local shells need secure env vars if agents will deploy/check protected endpoints from the Mac.
 
 ## Recommended Next Action
-- Commit, push, and deploy the security hardening changes after review.
 - Securely copy the new live token values into Ash's local password manager or shell profile if needed.
-- After deploy, verify `/account/balance/raw` and `/notifications` return 401 without token and 200 with `$GRID_DASHBOARD_TOKEN`.
+- Continue hardening issue 4: make grid calculation/test state handling hermetic so tests do not write runtime state files.
 
 ---
-*Last updated: codex, 2026-04-27T20:49:14Z*
+*Last updated: codex, 2026-04-27T20:51:47Z*
