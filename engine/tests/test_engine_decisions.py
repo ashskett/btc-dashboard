@@ -168,8 +168,35 @@ class TestBotDecisionTable:
         p = _engine_patches(regime="COMPRESSION")
         _run_cycle(p, prev_regime="COMPRESSION")
         stop_ids = [c.args[0] for c in p["stop_bot"].call_args_list]
+        start_ids = [c.args[0] for c in p["start_bot"].call_args_list]
         assert "bot_inner" in stop_ids
         assert "bot_mid"   in stop_ids
+        assert "bot_outer" in start_ids
+
+    def test_compression_status_explains_outer_running(self):
+        p = _engine_patches(regime="COMPRESSION")
+        _run_cycle(p, prev_regime="COMPRESSION")
+        status = p["write_status"].call_args.args[0]
+        assert status["decision_summary"] == (
+            "COMPRESSION: inner+mid off; outer on to catch low-volatility oscillations"
+        )
+        assert status["bot_actions"] == [
+            {
+                "bot": "bot_inner",
+                "action": "stop",
+                "reason": "inner (COMPRESSION: inner+mid off; outer on to catch low-volatility oscillations)",
+            },
+            {
+                "bot": "bot_mid",
+                "action": "stop",
+                "reason": "mid (COMPRESSION: inner+mid off; outer on to catch low-volatility oscillations)",
+            },
+            {
+                "bot": "bot_outer",
+                "action": "start",
+                "reason": "outer (COMPRESSION: inner+mid off; outer on to catch low-volatility oscillations)",
+            },
+        ]
 
     def test_trend_up_starts_all_bots(self):
         p = _engine_patches(regime="TREND_UP")

@@ -5,10 +5,10 @@
 ## Current State
 - **Project:** grid-engine
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** e3f71fc
-- **Active task:** Intensive tier fee guard hardening
+- **Last known commit:** d4784de
+- **Active task:** COMPRESSION docs alignment and decision observability
 - **Task owner:** codex
-- **Status:** idle
+- **Status:** needs-review
 
 ## Completed This Session
 - Removed exposed GitHub PAT from local `origin` remote and switched repo to SSH.
@@ -29,6 +29,9 @@
 - Committed and pushed `e3f71fc`.
 - Deployed pending runtime-state and intensive fee guard fixes; deploy backup created as `2026-04-27-205736`.
 - Verified `grid-engine.service` is active and `/ping` returns ok after deploy.
+- Corrected `CLAUDE.md` COMPRESSION decision table: outer bot remains ON.
+- Added `decision_summary` and `bot_actions` to engine status/log output so each cycle explains desired bot states and why.
+- Added tests proving COMPRESSION status explains "inner+mid off; outer on".
 
 ## Files Changed
 - `CLAUDE.md` — replaced concrete live tokens with `$GRID_DEPLOY_TOKEN` and `$GRID_DASHBOARD_TOKEN`.
@@ -38,6 +41,9 @@
 - `.gitignore` — ignores additional runtime state files.
 - `engine/engine.py` — added `_apply_intensive_fee_guard()` and applied it to `_make_intensive_buy_tiers()` / `_make_intensive_sell_tiers()`.
 - `engine/tests/test_engine_decisions.py` — added intensive tier fee guard tests.
+- `CLAUDE.md` — corrected COMPRESSION table and rationale.
+- `engine/engine.py` — exports decision summary and per-bot desired actions.
+- `engine/tests/test_engine_decisions.py` — added COMPRESSION observability assertions.
 
 ## Decisions Made
 - Do not print newly generated live tokens into chat.
@@ -46,6 +52,8 @@
 - Keep `/deploy` public at the global allowlist level because it has its own deploy-token check; require dashboard auth for account/debug/status context routes.
 - Runtime state should only be written by explicit state mutation paths such as `update_grid_center()`, not by read helpers used during calculation/tests.
 - Intensive protective modes should preserve profitability by reducing level count rather than keeping dense but sub-fee-floor grids.
+- COMPRESSION behaviour should stay as code/tests already define it: inner and mid off, outer on.
+- Observability should explain decisions in machine-readable status/log fields without changing trading behaviour.
 
 ## Tests / Checks
 - `ssh -T git@github.com` authenticated as `ashskett`.
@@ -64,13 +72,15 @@
 - Post-deploy: `systemctl is-active grid-engine.service` -> active.
 - Post-deploy: `/ping` -> `{"ok": true}`.
 - Post-deploy: no recent traceback/error/exception/failed lines in `grid-engine.service` journal tail.
+- After observability patch: `python3 -m pytest tests/test_engine_decisions.py -q` -> 16 passed, 22 warnings.
+- After observability patch: `python3 -m pytest tests/ -q` -> 192 passed, 22 warnings.
 
 ## Blockers
 - New live `DEPLOY_TOKEN` / `DASHBOARD_SECRET` are only on the droplet. Local shells need secure env vars if agents will deploy/check protected endpoints from the Mac.
 
 ## Recommended Next Action
 - Securely copy the new live token values into Ash's local password manager or shell profile if needed.
-- Continue next hardening item after deploy verification.
+- Commit, push, deploy, and verify the COMPRESSION docs/observability update.
 
 ---
-*Last updated: codex, 2026-04-27T20:57:59Z*
+*Last updated: codex, 2026-04-27T21:03:21Z*

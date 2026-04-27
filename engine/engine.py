@@ -459,6 +459,8 @@ def run():
     _trendline_active = False
     _dca_launch_error = None   # set when a DCA launch attempt fails this cycle
                                 # — picked up by log_data and /notifications
+    _decision_summary = "Cycle started"
+    _bot_actions = []
 
     try:
         # ===============================
@@ -673,15 +675,25 @@ def run():
         def _act(bot_id, should_run, label):
             if should_run and _bot_overrides.get(str(bot_id)) == "stopped":
                 print(f"  Manual override ACTIVE — skipping start for bot {bot_id} ({label})")
+                _bot_actions.append({
+                    "bot": str(bot_id),
+                    "action": "stop",
+                    "reason": f"{label} (manual override locked stopped)",
+                })
                 return
             desired = "started" if should_run else "stopped"
+            action = "start" if should_run else "stop"
+            _bot_actions.append({
+                "bot": str(bot_id),
+                "action": action,
+                "reason": f"{label} ({_decision_summary})",
+            })
             if _bot_last_action.get(bot_id) == desired:
                 # Bot is already in the desired state — skip the API call.
                 # Calling enable on a running grid bot cancels and re-places
                 # all orders, killing any in-progress grid cycles.
                 return
             if DRY_RUN:
-                action = "start" if should_run else "stop"
                 print(f"[SIMULATION] Would {action} bot {bot_id} ({label})")
                 _bot_last_action[bot_id] = desired
             else:
@@ -1591,7 +1603,8 @@ def run():
         # ===============================
         # Philosophy: bots stay running unless there is strong confirmed evidence
         # they are fighting the market. The outer bot (Bot 3) acts as a permanent
-        # safety net and only shuts down in full compression (no volatility = no profit).
+        # safety net through compression because its wide range can still catch
+        # low-volatility oscillations.
         #
         # Tier mapping: GRID_BOTS[0]=inner  GRID_BOTS[1]=mid  GRID_BOTS[2]=outer
         #
@@ -1606,6 +1619,7 @@ def run():
         # Note: trending_up in RANGE regime = price above support, NOT a trend — all bots ON
 
         if state.regime == "COMPRESSION":
+            _decision_summary = "COMPRESSION: inner+mid off; outer on to catch low-volatility oscillations"
             if _prev_regime != "COMPRESSION":
                 notify(f"COMPRESSION — inner+mid off, outer running at ${state.price:,.0f}")
             print("COMPRESSION — inner+mid off, outer running (wide range catches low-vol oscillations)")
@@ -1615,6 +1629,7 @@ def run():
 
         elif state.trending_down:
             # Strong downside move — inner and mid OFF, outer ON as safety net
+            _decision_summary = f"Trending DOWN: gap={state.gap_ratio:.2f}x ATR; inner+mid off; outer on"
             if not _prev_trending_down:
                 notify(f"Trending DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off at ${state.price:,.0f}")
             print(f"TRENDING DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off, outer holding")
@@ -1624,6 +1639,7 @@ def run():
 
         elif state.regime == "TREND_DOWN":
             # Confirmed TREND_DOWN (hysteresis-filtered) — same as trending_down
+            _decision_summary = "TREND_DOWN: confirmed downside regime; inner+mid off; outer on"
             if _prev_regime != "TREND_DOWN":
                 notify_critical(f"TREND_DOWN confirmed — inner+mid off, outer holding at ${state.price:,.0f}")
             print(f"TREND_DOWN — inner+mid off, outer holding")
@@ -1635,6 +1651,7 @@ def run():
             # Price running hard above trendline AND regime confirms directional move.
             # Excludes RANGE (price above support, not a real trend) and TREND_UP
             # (already confirmed uptrend — all bots run for pullback fills).
+            _decision_summary = f"Trending UP: gap={state.gap_ratio:.2f}x ATR in {state.regime}; inner off; mid+outer on"
             print(f"TRENDING UP (gap={state.gap_ratio:.2f}×ATR, regime={state.regime}) — inner off, mid+outer running")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
@@ -1643,9 +1660,13 @@ def run():
         else:
             # RANGE or TREND_UP — all bots run
             if state.regime == "TREND_UP":
+                _decision_summary = "TREND_UP: all bots on for pullback fills"
                 print("TREND_UP — all bots running")
             elif state.compression:
+                _decision_summary = "Mild compression: compression not confirmed; all bots on"
                 print("Mild compression — all bots running (compression not confirmed)")
+            else:
+                _decision_summary = "RANGE: all bots on for normal grid trading"
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
                 _act(bot, True, tier_name)
@@ -1679,6 +1700,8 @@ def run():
                 "gap_ratio":      round(getattr(state, "gap_ratio", 0.0), 3),
                 "dry_run":        DRY_RUN,
                 "tiers":          state.tiers,
+                "decision_summary": _decision_summary,
+                "bot_actions":     _bot_actions,
                 # Breakout state
                 "breakout_active":        _bo_state.get("active"),
                 "breakout_fire_price":    _bo_state.get("fire_price"),

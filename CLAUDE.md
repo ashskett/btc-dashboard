@@ -116,10 +116,12 @@ RANGE            | ON    | ON    | ON
 TREND_UP         | ON    | ON    | ON
 trending_up      | OFF   | ON    | ON
 TREND_DOWN       | OFF   | OFF   | ON
-COMPRESSION      | OFF   | OFF   | OFF
+COMPRESSION      | OFF   | OFF   | ON
 BREAKOUT_UP      | OFF   | OFF   | ON
 BREAKOUT_DOWN    | OFF   | OFF   | OFF
 ```
+
+COMPRESSION keeps the outer bot running because its wider range can still catch low-volatility oscillations while inner and mid are too tight to be useful.
 
 ---
 
