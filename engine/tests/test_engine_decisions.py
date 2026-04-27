@@ -246,3 +246,55 @@ class TestRegimeTransitionRedeploy:
         p = _engine_patches(regime="RANGE")
         _run_cycle(p, prev_regime=None)
         assert not p["redeploy_all_bots"].called
+
+
+class TestIntensiveTierFeeGuard:
+    """BUY_ONLY/SELL_ONLY tier transforms must preserve the fee floor."""
+
+    def _narrow_tiers(self):
+        return [
+            {
+                "name": "inner",
+                "grid_low": 69000,
+                "grid_high": 70400,
+                "levels": 8,
+                "step": 200,
+                "min_step": 420,
+                "fee_ok": False,
+                "grid_levels": [],
+            },
+            {
+                "name": "mid",
+                "grid_low": 68000,
+                "grid_high": 71000,
+                "levels": 6,
+                "step": 600,
+                "min_step": 420,
+                "fee_ok": True,
+                "grid_levels": [],
+            },
+        ]
+
+    def test_intensive_sell_reduces_levels_until_fee_ok(self):
+        import engine
+
+        tiers = engine._make_intensive_sell_tiers(70000, self._narrow_tiers())
+
+        inner = tiers[0]
+        assert inner["levels"] < 8
+        assert inner["step"] >= inner["min_step"]
+        assert inner["fee_ok"] is True
+        assert len(inner["grid_levels"]) == inner["levels"]
+        assert inner["grid_low"] > 70000
+
+    def test_intensive_buy_reduces_levels_until_fee_ok(self):
+        import engine
+
+        tiers = engine._make_intensive_buy_tiers(70000, self._narrow_tiers())
+
+        inner = tiers[0]
+        assert inner["levels"] < 8
+        assert inner["step"] >= inner["min_step"]
+        assert inner["fee_ok"] is True
+        assert len(inner["grid_levels"]) == inner["levels"]
+        assert inner["grid_high"] < 70000

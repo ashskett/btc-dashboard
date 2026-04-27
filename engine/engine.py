@@ -155,6 +155,17 @@ def _load_bot_overrides() -> dict:
     return {}
 
 
+def _apply_intensive_fee_guard(tier: dict, width: float) -> int:
+    """Return a level count whose step clears this tier's fee floor."""
+    levels = max(int(tier.get("levels", 5)), 2)
+    min_step = float(tier.get("min_step") or 0)
+    if min_step <= 0:
+        return levels
+
+    max_levels = int(width / min_step) + 1
+    return max(min(levels, max_levels), 2)
+
+
 def _make_intensive_buy_tiers(price: float, tiers: list) -> list:
     """
     Build buy-biased tier parameters for BUY_ONLY mode.
@@ -177,11 +188,14 @@ def _make_intensive_buy_tiers(price: float, tiers: list) -> list:
         new_width  = round(orig_width * 0.60, 2)
         new_high   = round(price * 0.9995, 2)
         new_low    = round(new_high - new_width, 2)
-        n          = max(int(t.get("levels", 5)), 2)
+        n          = _apply_intensive_fee_guard(t, new_width)
         new_step   = round(new_width / (n - 1), 2)
         t["grid_high"]   = new_high
         t["grid_low"]    = new_low
+        t["levels"]      = n
         t["step"]        = new_step
+        if t.get("min_step"):
+            t["fee_ok"] = bool(new_step >= float(t["min_step"]))
         t["grid_levels"] = [round(new_low + i * new_step, 2) for i in range(n)]
         result.append(t)
     return result
@@ -211,11 +225,14 @@ def _make_intensive_sell_tiers(price: float, tiers: list) -> list:
         new_width  = round(orig_width * 0.60, 2)
         new_low    = round(price * 1.0005, 2)
         new_high   = round(new_low + new_width, 2)
-        n          = max(int(t.get("levels", 5)), 2)
+        n          = _apply_intensive_fee_guard(t, new_width)
         new_step   = round(new_width / (n - 1), 2)
         t["grid_high"]   = new_high
         t["grid_low"]    = new_low
+        t["levels"]      = n
         t["step"]        = new_step
+        if t.get("min_step"):
+            t["fee_ok"] = bool(new_step >= float(t["min_step"]))
         t["grid_levels"] = [round(new_low + i * new_step, 2) for i in range(n)]
         result.append(t)
     return result

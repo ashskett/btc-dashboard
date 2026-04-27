@@ -5,8 +5,8 @@
 ## Current State
 - **Project:** grid-engine
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** 3119c37
-- **Active task:** Runtime-state/test hardening after security deploy
+- **Last known commit:** 7a0987c
+- **Active task:** Intensive tier fee guard hardening
 - **Task owner:** codex
 - **Status:** needs-review
 
@@ -24,6 +24,8 @@
 - Verified live endpoint auth after deploy.
 - Fixed `grid_logic.get_grid_state()` so missing `grid_state.json` returns an in-memory default instead of writing a runtime state file during grid calculations/tests.
 - Added `flash_move_state.json` and `redeploy_state.json` to `.gitignore`.
+- Added fee-guard enforcement to intensive BUY_ONLY/SELL_ONLY tier transforms so compressed grids reduce levels until `step >= min_step`.
+- Added direct tests for intensive buy/sell transforms on narrow tiers that previously would have been sub-fee-floor.
 
 ## Files Changed
 - `CLAUDE.md` — replaced concrete live tokens with `$GRID_DEPLOY_TOKEN` and `$GRID_DASHBOARD_TOKEN`.
@@ -31,6 +33,8 @@
 - `HANDOFF.md` — updated current session handoff.
 - `engine/grid_logic.py` — removed read-side creation of `grid_state.json`.
 - `.gitignore` — ignores additional runtime state files.
+- `engine/engine.py` — added `_apply_intensive_fee_guard()` and applied it to `_make_intensive_buy_tiers()` / `_make_intensive_sell_tiers()`.
+- `engine/tests/test_engine_decisions.py` — added intensive tier fee guard tests.
 
 ## Decisions Made
 - Do not print newly generated live tokens into chat.
@@ -38,6 +42,7 @@
 - Use SSH for GitHub instead of embedding PATs in Git remotes.
 - Keep `/deploy` public at the global allowlist level because it has its own deploy-token check; require dashboard auth for account/debug/status context routes.
 - Runtime state should only be written by explicit state mutation paths such as `update_grid_center()`, not by read helpers used during calculation/tests.
+- Intensive protective modes should preserve profitability by reducing level count rather than keeping dense but sub-fee-floor grids.
 
 ## Tests / Checks
 - `ssh -T git@github.com` authenticated as `ashskett`.
@@ -51,14 +56,16 @@
 - Post-deploy: `/notifications` returns 401 without token and 200 with dashboard token.
 - Full local test suite: `python3 -m pytest tests/ -q` -> 189 passed, 21 warnings.
 - Focused grid tests: `python3 -m pytest tests/test_grid.py tests/test_grid_extended.py -q` -> 43 passed.
+- After intensive fee guard tests: `python3 -m pytest tests/ -q` -> 191 passed, 21 warnings.
+- `python3 -m pytest tests/test_engine_decisions.py -q` -> 15 passed, 21 warnings.
 
 ## Blockers
 - New live `DEPLOY_TOKEN` / `DASHBOARD_SECRET` are only on the droplet. Local shells need secure env vars if agents will deploy/check protected endpoints from the Mac.
 
 ## Recommended Next Action
 - Securely copy the new live token values into Ash's local password manager or shell profile if needed.
-- Commit/push the runtime-state test hardening, then decide whether to deploy immediately or batch with the next hardening item.
-- Continue issue 5: apply fee guard to intensive BUY_ONLY/SELL_ONLY tiers.
+- Commit, push, and deploy pending runtime-state + intensive fee guard fixes.
+- Continue next hardening item after deploy verification.
 
 ---
-*Last updated: codex, 2026-04-27T20:53:50Z*
+*Last updated: codex, 2026-04-27T20:56:57Z*
