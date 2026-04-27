@@ -226,8 +226,6 @@ def get_grid_state():
     """Return saved grid state dict with grid_center and grid_width_at_deploy."""
     if not os.path.exists(STATE_FILE):
         center = 68000
-        with open(STATE_FILE, "w") as f:
-            json.dump({"grid_center": center}, f)
         return {"grid_center": center, "grid_width_at_deploy": None, "last_redeploy_ts": 0}
 
     with open(STATE_FILE) as f:

@@ -11,6 +11,8 @@ regime_state.json
 breakout_state.json
 inventory_override.json
 trendlines.json
+flash_move_state.json
+redeploy_state.json
 
 # Logs
 *.log
