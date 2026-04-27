@@ -39,10 +39,10 @@ An adaptive BTC/USDC grid trading bot running on a DigitalOcean VPS. It manages 
 | Public IP | `165.232.101.253` |
 | Tailscale IP | `100.94.227.121` |
 | Dashboard URL | `http://100.94.227.121:5050` (Tailscale required) |
-| Dashboard Token | `dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369` |
+| Dashboard Token | Read from `$GRID_DASHBOARD_TOKEN` — never commit the value |
 | Process manager | tmux session `grid` |
 | Deploy branch | `claude/grid-engine-chat-review-hEEGu` |
-| Deploy command | `curl -s -X POST "http://100.94.227.121:5050/deploy?token=grid-deploy-2026"` |
+| Deploy command | `curl -s -X POST "http://100.94.227.121:5050/deploy?token=$GRID_DEPLOY_TOKEN"` |
 
 ### Security
 - UFW active. Ports 5050/9001/8080 restricted to Tailscale subnet (100.64.0.0/10)
@@ -77,7 +77,7 @@ All bots trade `USDC_BTC` on Coinbase Spot via 3Commas.
 2. POST to `/deploy`:
 
 ```bash
-curl -s -X POST "http://100.94.227.121:5050/deploy?token=grid-deploy-2026"
+curl -s -X POST "http://100.94.227.121:5050/deploy?token=$GRID_DEPLOY_TOKEN"
 ```
 
 The `/deploy` endpoint downloads all engine files from the feature branch on GitHub and restarts itself. Verify with `curl -s http://100.94.227.121:5050/ping`.
@@ -321,20 +321,20 @@ Uses Lightweight Charts `setMarkers()` — known limitation: only one marker per
 # Deploy from Claude Code
 cd "/Users/ashleyskett-seakit/Ashs Brain/btc-dashboard"
 git add <files> && git commit -m "message" && git push origin claude/grid-engine-chat-review-hEEGu
-curl -s -X POST "http://100.94.227.121:5050/deploy?token=grid-deploy-2026"
+curl -s -X POST "http://100.94.227.121:5050/deploy?token=$GRID_DEPLOY_TOKEN"
 
 # Verify deploy
 curl -s "http://100.94.227.121:5050/ping"
 
 # Check engine output
-curl -s "http://100.94.227.121:5050/engine/output?token=dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369"
+curl -s "http://100.94.227.121:5050/engine/output?token=$GRID_DASHBOARD_TOKEN"
 
 # Check bot state
-curl -s "http://100.94.227.121:5050/bots?token=dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369"
+curl -s "http://100.94.227.121:5050/bots?token=$GRID_DASHBOARD_TOKEN"
 
 # Check inventory settings
-curl -s "http://100.94.227.121:5050/inventory/settings?token=dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369"
+curl -s "http://100.94.227.121:5050/inventory/settings?token=$GRID_DASHBOARD_TOKEN"
 
 # Check notifications
-curl -s "http://100.94.227.121:5050/notifications?token=dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369"
+curl -s "http://100.94.227.121:5050/notifications?token=$GRID_DASHBOARD_TOKEN"
 ```

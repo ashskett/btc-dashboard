@@ -53,7 +53,11 @@ def _ensure_secret():
 
 _ensure_secret()
 
-_PUBLIC_PATHS = {"/", "/ping", "/deploy", "/account/balance/raw", "/macro", "/macro/mobile", "/mobile", "/notifications", "/pnl-page", "/pnl-page/"}
+_PUBLIC_PATHS = {
+    "/", "/ping", "/deploy",
+    "/macro", "/macro/mobile", "/mobile",
+    "/pnl-page", "/pnl-page/",
+}
 
 @app.before_request
 def check_token():
@@ -2193,7 +2197,9 @@ _DEPLOY_BASE_ROOT = f"https://raw.githubusercontent.com/ashskett/btc-dashboard/{
 def deploy_endpoint():
     import urllib.request, threading
     token    = (request.args.get("token") or (request.get_json(silent=True) or {}).get("token", ""))
-    expected = os.environ.get("DEPLOY_TOKEN", "grid-deploy-2026")
+    expected = os.environ.get("DEPLOY_TOKEN", "")
+    if not expected:
+        return jsonify({"error": "deploy token not configured"}), 503
     if token != expected:
         return jsonify({"error": "unauthorized"}), 403
 
@@ -2438,7 +2444,7 @@ if __name__ == "__main__":
     # download the old version, overwrite the freshly-deployed file, and
     # restart — silently reverting every deploy.
     #
-    # The /deploy endpoint (POST /deploy?token=grid-deploy-2026) is the
+    # The /deploy endpoint (POST /deploy?token=$GRID_DEPLOY_TOKEN) is the
     # authoritative update mechanism and is unaffected by this change.
 
     # Auto-start engine on server startup
