@@ -5,10 +5,10 @@
 ## Current State
 - **Project:** grid-engine
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** 7a0987c
+- **Last known commit:** e3f71fc
 - **Active task:** Intensive tier fee guard hardening
 - **Task owner:** codex
-- **Status:** needs-review
+- **Status:** idle
 
 ## Completed This Session
 - Removed exposed GitHub PAT from local `origin` remote and switched repo to SSH.
@@ -26,6 +26,9 @@
 - Added `flash_move_state.json` and `redeploy_state.json` to `.gitignore`.
 - Added fee-guard enforcement to intensive BUY_ONLY/SELL_ONLY tier transforms so compressed grids reduce levels until `step >= min_step`.
 - Added direct tests for intensive buy/sell transforms on narrow tiers that previously would have been sub-fee-floor.
+- Committed and pushed `e3f71fc`.
+- Deployed pending runtime-state and intensive fee guard fixes; deploy backup created as `2026-04-27-205736`.
+- Verified `grid-engine.service` is active and `/ping` returns ok after deploy.
 
 ## Files Changed
 - `CLAUDE.md` — replaced concrete live tokens with `$GRID_DEPLOY_TOKEN` and `$GRID_DASHBOARD_TOKEN`.
@@ -58,14 +61,16 @@
 - Focused grid tests: `python3 -m pytest tests/test_grid.py tests/test_grid_extended.py -q` -> 43 passed.
 - After intensive fee guard tests: `python3 -m pytest tests/ -q` -> 191 passed, 21 warnings.
 - `python3 -m pytest tests/test_engine_decisions.py -q` -> 15 passed, 21 warnings.
+- Post-deploy: `systemctl is-active grid-engine.service` -> active.
+- Post-deploy: `/ping` -> `{"ok": true}`.
+- Post-deploy: no recent traceback/error/exception/failed lines in `grid-engine.service` journal tail.
 
 ## Blockers
 - New live `DEPLOY_TOKEN` / `DASHBOARD_SECRET` are only on the droplet. Local shells need secure env vars if agents will deploy/check protected endpoints from the Mac.
 
 ## Recommended Next Action
 - Securely copy the new live token values into Ash's local password manager or shell profile if needed.
-- Commit, push, and deploy pending runtime-state + intensive fee guard fixes.
 - Continue next hardening item after deploy verification.
 
 ---
-*Last updated: codex, 2026-04-27T20:56:57Z*
+*Last updated: codex, 2026-04-27T20:57:59Z*
