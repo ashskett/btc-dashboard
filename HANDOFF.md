@@ -5,10 +5,10 @@
 ## Current State
 - **Project:** grid-engine
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** d4784de
+- **Last known commit:** 3ad5c64
 - **Active task:** COMPRESSION docs alignment and decision observability
 - **Task owner:** codex
-- **Status:** needs-review
+- **Status:** idle
 
 ## Completed This Session
 - Removed exposed GitHub PAT from local `origin` remote and switched repo to SSH.
@@ -32,6 +32,9 @@
 - Corrected `CLAUDE.md` COMPRESSION decision table: outer bot remains ON.
 - Added `decision_summary` and `bot_actions` to engine status/log output so each cycle explains desired bot states and why.
 - Added tests proving COMPRESSION status explains "inner+mid off; outer on".
+- Committed and pushed `3ad5c64`.
+- Deployed observability update; deploy backup created as `2026-04-27-210407`.
+- Verified live `/status` now includes `decision_summary` and list-valued `bot_actions` after the next engine cycle.
 
 ## Files Changed
 - `CLAUDE.md` — replaced concrete live tokens with `$GRID_DEPLOY_TOKEN` and `$GRID_DASHBOARD_TOKEN`.
@@ -74,13 +77,16 @@
 - Post-deploy: no recent traceback/error/exception/failed lines in `grid-engine.service` journal tail.
 - After observability patch: `python3 -m pytest tests/test_engine_decisions.py -q` -> 16 passed, 22 warnings.
 - After observability patch: `python3 -m pytest tests/ -q` -> 192 passed, 22 warnings.
+- Post-deploy: `grid-engine.service` active and `/ping` ok.
+- Post-deploy: `/status` reported `decision_summary="RANGE: all bots on for normal grid trading"` and `bot_actions` as a list.
+- Post-deploy: no recent traceback/error/exception/failed lines in `grid-engine.service` journal tail.
 
 ## Blockers
 - New live `DEPLOY_TOKEN` / `DASHBOARD_SECRET` are only on the droplet. Local shells need secure env vars if agents will deploy/check protected endpoints from the Mac.
 
 ## Recommended Next Action
 - Securely copy the new live token values into Ash's local password manager or shell profile if needed.
-- Commit, push, deploy, and verify the COMPRESSION docs/observability update.
+- Continue next hardening item; likely review/remove old debug routes such as `/bots/fills/debug`.
 
 ---
-*Last updated: codex, 2026-04-27T21:03:21Z*
+*Last updated: codex, 2026-04-27T21:04:44Z*
