@@ -5,6 +5,28 @@
 
 ---
 
+## Shared Ash Brain Sync
+
+Project key: `grid-engine`
+
+This project syncs with Codex, ChatGPT Projects, and OpenClaw through Ash Brain.
+
+Before starting work:
+- Fetch live digest from `GET https://api.uncrewedmaritime.com/agent/digest?project=grid-engine&limit=20`
+- Fetch full context from `GET https://api.uncrewedmaritime.com/agent/context?project=grid-engine&limit=20` if more detail is needed
+- Read `HANDOFF.md`
+- Check active claims before editing, deploying, or touching live trading behavior
+- Claim the task via `/agent/claim` if making changes
+
+Before stopping:
+- Update `HANDOFF.md`
+- Log a concise session summary to `/memory/log` with `source: claude-code`, `category: Agent Event`, `project: grid-engine`
+- Release the claim via `/agent/release`
+
+Do not mirror raw chat. Log decisions, deploys, tests, bugs, blockers, performance findings, and next actions only.
+
+---
+
 ## CRITICAL RULES — READ BEFORE MAKING ANY CHANGES
 
 1. **NEVER send `take_profit_steps` in 3Commas `create_bot` DCA payload.** The API rejects payloads with both steps and scalar TP. Always collapse to scalar `take_profit` at the max step profit %. This cost days to debug.

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --max-time 8 'https://api.uncrewedmaritime.com/agent/context?project=grid-engine&limit=20&api_key=$ASH_BRAIN_API_KEY' 2>/dev/null || true"
+            "command": "curl -sS --max-time 8 'https://api.uncrewedmaritime.com/agent/digest?project=grid-engine&limit=20' -H \"X-API-Key: $ASH_BRAIN_API_KEY\" 2>/dev/null || true"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --max-time 8 -X POST 'https://api.uncrewedmaritime.com/memory/log' -H 'Content-Type: application/json' -d '{\"topic\":\"session-stop\",\"insight\":\"Claude Code session ended on grid-engine project\",\"source\":\"claude-code\",\"category\":\"Work\",\"project\":\"grid-engine\"}' -H \"X-API-Key: $ASH_BRAIN_API_KEY\" 2>/dev/null || true"
+            "command": "curl -sS --max-time 8 -X POST 'https://api.uncrewedmaritime.com/memory/log' -H \"X-API-Key: $ASH_BRAIN_API_KEY\" -H 'Content-Type: application/json' -d '{\"topic\":\"session-stop\",\"insight\":\"Claude Code session ended on grid-engine project. Read HANDOFF.md for details.\",\"source\":\"claude-code\",\"category\":\"Agent Event\",\"project\":\"grid-engine\"}' 2>/dev/null || true; curl -sS --max-time 8 -X POST 'https://api.uncrewedmaritime.com/agent/release' -H \"X-API-Key: $ASH_BRAIN_API_KEY\" -H 'Content-Type: application/json' -d '{\"project\":\"grid-engine\",\"agent\":\"claude-code\"}' 2>/dev/null || true"
           }
         ]
       }
