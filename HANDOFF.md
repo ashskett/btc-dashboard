@@ -5,10 +5,10 @@
 ## Current State
 - **Project:** grid-engine
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** 3ad5c64
+- **Last known commit:** 4543f4d
 - **Active task:** Diagnose TREND_DOWN stop-start churn
 - **Task owner:** codex
-- **Status:** local fix prepared, not deployed
+- **Status:** fix deployed, monitor live RANGE/TREND_DOWN behaviour
 
 ## Completed This Session
 - Removed exposed GitHub PAT from local `origin` remote and switched repo to SSH.
@@ -39,6 +39,9 @@
 - Root cause: TREND_DOWN auto-clear after stabilisation returned RANGE even though price remained below the TREND_DOWN entry threshold; two cycles later the same stale trendline re-triggered TREND_DOWN and stopped inner+mid again.
 - Added a `td_reentry_block` after auto-clear so re-entry is blocked until price recovers near the trendline or makes a fresh lower low.
 - Added regression tests for the stop-start loop and the fresh-low re-arm case.
+- Committed and pushed `4543f4d` to `claude/grid-engine-chat-review-hEEGu`.
+- Deployed TREND_DOWN re-entry fix via `/deploy`; deploy backup created as `2026-04-28-085834`.
+- Verified `/ping` returns ok and `/engine/status` reports running after deploy.
 
 ## Files Changed
 - `CLAUDE.md` — replaced concrete live tokens with `$GRID_DEPLOY_TOKEN` and `$GRID_DASHBOARD_TOKEN`.
@@ -92,14 +95,17 @@
 - `python3 -m py_compile regime.py` passed.
 - `python3 -m pytest tests/test_regime.py -q` -> 19 passed.
 - `python3 -m pytest tests/ -q` -> 194 passed, 22 warnings.
+- Post-deploy: `/ping` -> `{"ok": true}`.
+- Post-deploy: `/engine/status` -> `{"running": true}`.
+- Post-deploy: `/status` showed existing `TREND_DOWN` episode still active, with `td_stable_cycles=2`, `drift_triggered=false`, `inventory_mode="NORMAL"`.
 
 ## Blockers
 - Agent context API call returned 403 with the local `ASH_BRAIN_API_KEY`; dashboard/deploy tokens are available in `.codex-secrets/grid-engine.json`.
-- TREND_DOWN churn fix is local only; not committed, pushed, or deployed yet.
+- None for the deployed fix. Agent context API call still returns 403 with the local `ASH_BRAIN_API_KEY`.
 
 ## Recommended Next Action
-- Review and, if accepted, commit/push/deploy the TREND_DOWN re-entry block.
 - After deploy, watch `/notifications` and `/status` for at least 20-30 minutes to confirm RANGE/TREND_DOWN churn stops unless BTC makes a fresh lower low or recovers near the active trendline.
+- If the live trendline is now stale, consider updating/activating the correct lower support trendline rather than relying on repeated stabilisation auto-clears.
 
 ---
-*Last updated: codex, 2026-04-28T09:18:00Z*
+*Last updated: codex, 2026-04-28T08:59:31Z*
