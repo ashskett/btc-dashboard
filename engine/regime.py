@@ -59,7 +59,8 @@ def detect_regime(df, trendline):
         if price >= trendline - atr * TREND_DOWN_EXIT_GAP:
             rs.update({"trend_down_active": False, "below_tl_count": 0,
                        "td_low": None, "td_no_new_low_count": 0,
-                       "td_last_low": None})   # trendline recovered — no auto-activate needed
+                       "td_last_low": None,
+                       "td_reentry_block": False})   # trendline recovered — no auto-activate needed
             _save_regime_state(rs)
             print(f"[Regime] TREND_DOWN OFF (trendline recovery) — "
                   f"price ${price:,.0f} within {TREND_DOWN_EXIT_GAP}×ATR "
@@ -79,7 +80,8 @@ def detect_regime(df, trendline):
             _td_stable_snap = rs["td_no_new_low_count"]
             rs.update({"trend_down_active": False, "below_tl_count": 0,
                        "td_low": None, "td_no_new_low_count": 0,
-                       "td_last_low": _td_low_snap})  # preserved for trendline auto-activate
+                       "td_last_low": _td_low_snap,
+                       "td_reentry_block": True})  # preserved for trendline auto-activate
             _save_regime_state(rs)
             print(f"[Regime] TREND_DOWN AUTO-CLEAR — stabilised for "
                   f"{_td_stable_snap} cycles, bounced ${_td_bounce_snap:,.0f} "
@@ -102,6 +104,39 @@ def detect_regime(df, trendline):
     else:
         # Not in TREND_DOWN — count consecutive cycles below entry threshold
         entry_threshold = trendline - atr * TREND_DOWN_ENTRY_GAP
+        exit_threshold = trendline - atr * TREND_DOWN_EXIT_GAP
+
+        # If TREND_DOWN auto-cleared because price stabilised below an old
+        # trendline, avoid immediately re-entering on the same stale trendline.
+        # Re-arm only after either real recovery near the trendline, or a fresh
+        # continuation low that invalidates the stabilisation thesis.
+        if rs.get("td_reentry_block"):
+            last_low = rs.get("td_last_low")
+            fresh_breakdown = (
+                last_low is not None
+                and atr > 0
+                and price < last_low - atr * 0.25
+            )
+            recovered = price >= exit_threshold
+
+            if recovered:
+                rs.update({"td_reentry_block": False, "td_last_low": None,
+                           "below_tl_count": 0})
+                print(f"[Regime] TREND_DOWN re-entry armed — price ${price:,.0f} "
+                      f"recovered near trendline ${trendline:,.0f}")
+            elif fresh_breakdown:
+                rs.update({"td_reentry_block": False, "below_tl_count": 1})
+                print(f"[Regime] TREND_DOWN re-entry armed — fresh low "
+                      f"${price:,.0f} below auto-clear low ${last_low:,.0f}")
+                _save_regime_state(rs)
+                return "RANGE"
+            else:
+                rs["below_tl_count"] = 0
+                _save_regime_state(rs)
+                print(f"[Regime] TREND_DOWN re-entry blocked — auto-cleared below "
+                      f"stale trendline; waiting for recovery or fresh low")
+                return "RANGE"
+
         if price < entry_threshold:
             rs["below_tl_count"] = rs.get("below_tl_count", 0) + 1
         else:

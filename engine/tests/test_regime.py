@@ -223,6 +223,64 @@ class TestTrendDownHysteresis:
             "Counter must reset — one dip after recovery should not re-trigger"
         )
 
+    def test_auto_clear_blocks_reentry_until_recovery_or_fresh_low(
+        self, make_df, tmp_path, monkeypatch
+    ):
+        """
+        If TREND_DOWN auto-clears while price is still below the entry threshold,
+        do not immediately re-enter on the same stale trendline two cycles later.
+        """
+        state_file = _reset_regime_state(tmp_path, monkeypatch)
+        trendline = 70000.0
+        atr = 600.0
+        auto_clear_low = trendline - atr * 1.5
+        stable_price = auto_clear_low + atr * 0.6
+
+        json.dump(
+            {
+                "below_tl_count": 2,
+                "trending_up_active": False,
+                "trend_down_active": True,
+                "td_low": auto_clear_low,
+                "td_no_new_low_count": 8,
+            },
+            open(state_file, "w"),
+        )
+
+        # Auto-clear: stabilised and bounced, but still below entry threshold.
+        df_stable = make_df(price=stable_price, atr=atr)
+        assert r.detect_regime(df_stable, trendline) == "RANGE"
+
+        # Two more cycles below entry would previously re-trigger TREND_DOWN.
+        assert r.detect_regime(df_stable, trendline) == "RANGE"
+        assert r.detect_regime(df_stable, trendline) == "RANGE"
+
+    def test_auto_clear_reentry_rearms_on_fresh_low(
+        self, make_df, tmp_path, monkeypatch
+    ):
+        """A meaningful fresh low after auto-clear should still allow TREND_DOWN to return."""
+        state_file = _reset_regime_state(tmp_path, monkeypatch)
+        trendline = 70000.0
+        atr = 600.0
+        auto_clear_low = trendline - atr * 1.5
+        stable_price = auto_clear_low + atr * 0.6
+        fresh_low = auto_clear_low - atr * 0.3
+
+        json.dump(
+            {
+                "below_tl_count": 2,
+                "trending_up_active": False,
+                "trend_down_active": True,
+                "td_low": auto_clear_low,
+                "td_no_new_low_count": 8,
+            },
+            open(state_file, "w"),
+        )
+
+        assert r.detect_regime(make_df(price=stable_price, atr=atr), trendline) == "RANGE"
+        assert r.detect_regime(make_df(price=fresh_low, atr=atr), trendline) == "RANGE"
+        assert r.detect_regime(make_df(price=fresh_low, atr=atr), trendline) == "TREND_DOWN"
+
 
 # ── COMPRESSION guard ──────────────────────────────────────────────────────
 

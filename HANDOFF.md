@@ -6,9 +6,9 @@
 - **Project:** grid-engine
 - **Branch:** claude/grid-engine-chat-review-hEEGu
 - **Last known commit:** 3ad5c64
-- **Active task:** COMPRESSION docs alignment and decision observability
+- **Active task:** Diagnose TREND_DOWN stop-start churn
 - **Task owner:** codex
-- **Status:** idle
+- **Status:** local fix prepared, not deployed
 
 ## Completed This Session
 - Removed exposed GitHub PAT from local `origin` remote and switched repo to SSH.
@@ -35,6 +35,10 @@
 - Committed and pushed `3ad5c64`.
 - Deployed observability update; deploy backup created as `2026-04-27-210407`.
 - Verified live `/status` now includes `decision_summary` and list-valued `bot_actions` after the next engine cycle.
+- Investigated live stop-start churn on 2026-04-28: notifications showed repeated `TREND_DOWN → RANGE → TREND_DOWN` flips around $76.7k-$76.9k while price stayed >1x ATR below the active trendline.
+- Root cause: TREND_DOWN auto-clear after stabilisation returned RANGE even though price remained below the TREND_DOWN entry threshold; two cycles later the same stale trendline re-triggered TREND_DOWN and stopped inner+mid again.
+- Added a `td_reentry_block` after auto-clear so re-entry is blocked until price recovers near the trendline or makes a fresh lower low.
+- Added regression tests for the stop-start loop and the fresh-low re-arm case.
 
 ## Files Changed
 - `CLAUDE.md` — replaced concrete live tokens with `$GRID_DEPLOY_TOKEN` and `$GRID_DASHBOARD_TOKEN`.
@@ -47,6 +51,8 @@
 - `CLAUDE.md` — corrected COMPRESSION table and rationale.
 - `engine/engine.py` — exports decision summary and per-bot desired actions.
 - `engine/tests/test_engine_decisions.py` — added COMPRESSION observability assertions.
+- `engine/regime.py` — blocks immediate TREND_DOWN re-entry after stabilisation auto-clear on a stale trendline.
+- `engine/tests/test_regime.py` — added auto-clear re-entry regression coverage.
 
 ## Decisions Made
 - Do not print newly generated live tokens into chat.
@@ -57,6 +63,7 @@
 - Intensive protective modes should preserve profitability by reducing level count rather than keeping dense but sub-fee-floor grids.
 - COMPRESSION behaviour should stay as code/tests already define it: inner and mid off, outer on.
 - Observability should explain decisions in machine-readable status/log fields without changing trading behaviour.
+- TREND_DOWN auto-clear should not immediately re-enter on the same stale trendline; it should wait for either recovery near the trendline or a meaningful fresh lower low.
 
 ## Tests / Checks
 - `ssh -T git@github.com` authenticated as `ashskett`.
@@ -80,13 +87,19 @@
 - Post-deploy: `grid-engine.service` active and `/ping` ok.
 - Post-deploy: `/status` reported `decision_summary="RANGE: all bots on for normal grid trading"` and `bot_actions` as a list.
 - Post-deploy: no recent traceback/error/exception/failed lines in `grid-engine.service` journal tail.
+- Live diagnosis: `/status` showed `regime="TREND_DOWN"`, `decision_summary="TREND_DOWN: confirmed downside regime; inner+mid off; outer on"`, `drift_triggered=false`, `inventory_mode="NORMAL"`, price around $76,796, trendline around $77,388, ATR around $382.
+- Notifications converted to UTC showed repeated flips: 02:43, 04:19, 05:39, 07:40, 08:34 `RANGE → TREND_DOWN`, with intervening `TREND_DOWN → RANGE` clears.
+- `python3 -m py_compile regime.py` passed.
+- `python3 -m pytest tests/test_regime.py -q` -> 19 passed.
+- `python3 -m pytest tests/ -q` -> 194 passed, 22 warnings.
 
 ## Blockers
-- New live `DEPLOY_TOKEN` / `DASHBOARD_SECRET` are only on the droplet. Local shells need secure env vars if agents will deploy/check protected endpoints from the Mac.
+- Agent context API call returned 403 with the local `ASH_BRAIN_API_KEY`; dashboard/deploy tokens are available in `.codex-secrets/grid-engine.json`.
+- TREND_DOWN churn fix is local only; not committed, pushed, or deployed yet.
 
 ## Recommended Next Action
-- Securely copy the new live token values into Ash's local password manager or shell profile if needed.
-- Continue next hardening item; likely review/remove old debug routes such as `/bots/fills/debug`.
+- Review and, if accepted, commit/push/deploy the TREND_DOWN re-entry block.
+- After deploy, watch `/notifications` and `/status` for at least 20-30 minutes to confirm RANGE/TREND_DOWN churn stops unless BTC makes a fresh lower low or recovers near the active trendline.
 
 ---
-*Last updated: codex, 2026-04-27T21:04:44Z*
+*Last updated: codex, 2026-04-28T09:18:00Z*
