@@ -14,6 +14,8 @@ CORS(app)
 
 # ── Auth token ────────────────────────────────────────────
 _DASHBOARD_SECRET = None
+# Fixed fallback — never changes if .env is missing.
+_FIXED_DASHBOARD_SECRET = "dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369"
 
 def _ensure_secret():
     global _DASHBOARD_SECRET
@@ -34,8 +36,8 @@ def _ensure_secret():
     if token:
         _DASHBOARD_SECRET = token
         return
-    # Generate a new token and write it to .env (replace any existing line)
-    token = secrets.token_hex(24)
+    # Fall back to fixed token — write it into .env so it persists.
+    token = _FIXED_DASHBOARD_SECRET
     try:
         lines = open(env_path).readlines() if os.path.exists(env_path) else []
         lines = [l for l in lines if not l.startswith("DASHBOARD_SECRET=")]
@@ -46,7 +48,7 @@ def _ensure_secret():
         print(f"[auth] Warning: could not write token to .env: {e}")
     _DASHBOARD_SECRET = token
     print(f"\n{'='*64}")
-    print(f"  DASHBOARD_SECRET generated and saved to .env")
+    print(f"  DASHBOARD_SECRET loaded from fixed fallback (no .env found)")
     print(f"  Token: {token}")
     print(f"  Browser URL: http://165.232.101.253:5050/?token={token}")
     print(f"{'='*64}\n")
