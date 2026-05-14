@@ -2135,6 +2135,7 @@ _DEPLOY_FILES = [
     "market_data.py",
     "breakout.py",
     "inventory.py",
+    "inventory_settings.json",
     "indicators.py",
     "price_targets.py",
     "flash_move.py",

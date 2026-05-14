@@ -1,0 +1,8 @@
+{
+  "target_btc": 0.40,
+  "lower_band": 0.30,
+  "upper_band": 0.50,
+  "taper_zone": 0.05,
+  "min_btc": 0.20,
+  "max_btc": 0.80
+}

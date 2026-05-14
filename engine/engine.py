@@ -1611,8 +1611,9 @@ def run():
         # State                   │ inner │  mid  │ outer │ Rationale
         # ────────────────────────┼───────┼───────┼───────┼──────────────────────────────────────
         # RANGE                   │  ON   │  ON   │  ON   │ Normal — all bots trade
-        # TREND_UP                │  ON   │  ON   │  ON   │ Ride the move — grid profits on pullbacks
-        # trending_up + TREND_UP  │  OFF  │  ON   │  ON   │ Price running hard — inner gets burned
+        # TREND_UP                │  ON   │  ON   │  ON   │ Confirmed uptrend — all bots run for pullback fills
+        # trending_up + TREND_UP  │  ON   │  ON   │  ON   │ Same — inner kept on, chop fills outweigh stop risk
+        # trending_up (RANGE/etc) │  OFF  │  ON   │  ON   │ Hard run above TL in non-confirmed regime — inner off
         # TREND_DOWN              │  OFF  │  OFF  │  ON   │ Outer catches the bounce
         # trending_down           │  OFF  │  OFF  │  ON   │ Same — strong dump, wait with outer
         # COMPRESSION             │  OFF  │  OFF  │  ON   │ Outer wide enough for low-vol oscillations

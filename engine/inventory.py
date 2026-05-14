@@ -36,12 +36,13 @@ def _load_private_key():
 #   BAND         │ UPPER_BAND sits below engine.py MAX_BTC so the grid starts
 #                │ tilting toward selling BEFORE the hard stop fires.
 #                │
-#   MIN/MAX_BTC  │ Hard stops in engine.py (0.20 / 0.80) — all bots off.
+#   MIN/MAX_BTC  │ Hard stops in engine.py (0.20 / 0.80) — SELL_ONLY / BUY_ONLY.
 #   (engine.py)  │ Staggered from band edges so there is a warning zone.
 #
-# Stagger layout:
-#   0.20 MIN_BTC ←── hard stop ──→ 0.45 LOWER_BAND  (25% warning gap)
-#   0.62 UPPER_BAND ←── taper ──→ 0.80 MAX_BTC      (18% warning gap)
+# Stagger layout (target 0.40):
+#   0.20 MIN_BTC ←── 10% gap ──→ 0.30 LOWER_BAND ←── 10% ──→ 0.40 TARGET ←── 10% ──→ 0.50 UPPER_BAND ←── 30% gap ──→ 0.80 MAX_BTC
+#   Wide gap at top (0.50→0.80) because 3Commas counts bot-locked BTC in the ratio,
+#   inflating it during intensive SELL_ONLY mode. Need room before hard stop fires.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CACHE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_cache.json")
@@ -118,11 +119,11 @@ _SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inven
 
 _DEFAULT_SETTINGS = {
     "target_btc":  0.40,   # ideal BTC allocation
-    "lower_band":  0.30,   # below here: grid tilts to buy
-    "upper_band":  0.47,   # above here: grid tilts to sell
-    "taper_zone":  0.03,   # ramp width on each side of the band edge
-    "min_btc":     0.20,   # hard stop — all bots SELL_ONLY below this
-    "max_btc":     0.80,   # hard stop — all bots BUY_ONLY above this
+    "lower_band":  0.30,   # below here: grid tilts to buy more BTC
+    "upper_band":  0.50,   # above here: grid tilts to sell BTC
+    "taper_zone":  0.05,   # ramp width on each side of the band edge
+    "min_btc":     0.20,   # hard stop — SELL_ONLY below this (engine.py)
+    "max_btc":     0.80,   # hard stop — BUY_ONLY above this (engine.py); wide gap vs upper_band
 }
 
 # Module-level fallbacks — kept for backwards compatibility with any code that
