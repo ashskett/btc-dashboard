@@ -418,6 +418,10 @@ _prev_regime: str | None = None
 _prev_trending_down: bool = False
 _prev_inventory_mode: str | None = None
 _prev_weekend_mode: bool = False
+# Drift stabilisation: counts consecutive cycles where drift threshold is exceeded.
+# Recentre only fires after DRIFT_CONFIRM_CYCLES cycles — filters single-candle spikes.
+_drift_confirm_cycles: int = 0
+DRIFT_CONFIRM_CYCLES: int = 3
 # Track the last start/stop action sent to each bot so we don't spam
 # redundant enable/disable API calls every cycle.  3Commas re-places
 # all grid orders on every enable call, so calling start_bot() on an
@@ -434,7 +438,7 @@ def _mark_all_bots_started():
         _bot_last_action[bot_id] = "started"
 
 def run():
-    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle
+    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle, _drift_confirm_cycles
     now = time.time()
     if now - _last_run_ts < 100:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
@@ -1316,30 +1320,56 @@ def run():
         # Use the grid_width that was current when the bots were last deployed,
         # not the current ATR-derived width. This prevents a temporary ATR dip
         # from narrowing the threshold and triggering a premature recentre.
-        _drift_gw = state.deploy_grid_width or state.grid_width
+        #
+        # Threshold multiplier: 85% in normal conditions; widened to 125% when
+        # trending_down is active (outer-only mode) so the outer bot isn't
+        # chased downward on every leg of a sustained drop.
+        #
+        # Stabilisation: drift must be confirmed for DRIFT_CONFIRM_CYCLES
+        # consecutive cycles (≈6 min) before a recentre fires — filters
+        # single-candle spikes that reverse before the next cycle.
+        _trending_down_now = bool(getattr(state, "trending_down", False))
+        _drift_mult        = 1.25 if _trending_down_now else 0.85
+        _drift_gw          = state.deploy_grid_width or state.grid_width
+        _drift_threshold   = _drift_gw * _drift_mult
+        _drift_tag         = "  [125% trending_down]" if _trending_down_now else ""
         print(f"  Drift check: deploy_gw=${_drift_gw:,.0f}  current_gw=${state.grid_width:,.0f}"
               f"  dist=${abs(state.price - (state.center + (state.tilt or 0))):,.0f}"
-              f"  threshold=${_drift_gw * 0.85:,.0f}")
-        if drift_detected(state.price, state.center, _drift_gw, tilt=state.tilt or 0):
+              f"  threshold=${_drift_threshold:,.0f}{_drift_tag}")
+        if drift_detected(state.price, state.center, _drift_gw,
+                          tilt=state.tilt or 0, threshold_mult=_drift_mult):
+            _drift_confirm_cycles += 1
             state.drift_triggered = True
-            if state.inventory_mode in ("BUY_ONLY", "SELL_ONLY") or _prev_weekend_mode:
+            if _drift_confirm_cycles < DRIFT_CONFIRM_CYCLES:
+                # ── Stabilisation wait ────────────────────────────────────────
+                # Don't recentre on the first cycle beyond the threshold —
+                # require DRIFT_CONFIRM_CYCLES consecutive hits to confirm the
+                # move is sustained, not a spike reverting next candle.
+                print(f"  Drift stabilising: {_drift_confirm_cycles}/{DRIFT_CONFIRM_CYCLES} cycles "
+                      f"beyond threshold — waiting for confirmation")
+                # Fall through to normal tiered bot decisions on current ranges
+            elif state.inventory_mode in ("BUY_ONLY", "SELL_ONLY") or _prev_weekend_mode:
                 # Biased/weekend mode — grid is intentionally deployed at a specific
                 # geometry. A drift redeployment would overwrite it with normal
-                # symmetric tiers. Suppress and fall through.
+                # symmetric tiers. Suppress and reset counter.
                 _drift_suppress_reason = (
                     f"{state.inventory_mode} intensive mode" if state.inventory_mode != "NORMAL"
                     else "weekend tight grid"
                 )
                 print(f"  Drift suppressed — {_drift_suppress_reason} active, preserving biased grid")
+                _drift_confirm_cycles = 0
             else:
                 # ── Flood-fill guard ──────────────────────────────────────────
-                # Prevent rapid recentres when price oscillates around the drift
-                # threshold on 2-min cycles. Min 20 min between recentres.
-                _can_redeploy, _redeploy_wait = redeploy_allowed()
+                # Minimum gap between recentres: 45 min during trending_down
+                # (outer-only, sustained move), 20 min otherwise.
+                _min_redeploy_secs = 2700 if _trending_down_now else 1200
+                _can_redeploy, _redeploy_wait = redeploy_allowed(
+                    min_interval_secs=_min_redeploy_secs
+                )
                 if not _can_redeploy:
                     print(f"  Flood guard: drift detected but suppressing redeploy — "
                           f"{_redeploy_wait/60:.1f}min remaining "
-                          f"(min {1200//60}min between recentres)")
+                          f"(min {_min_redeploy_secs//60}min between recentres)")
                     # Fall through to normal tiered bot decisions on current ranges
                 else:
                     notify(f"Grid drift — recentring to ${state.price:,.0f} (was ${state.center:,.0f})")
@@ -1372,7 +1402,13 @@ def run():
                         print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
                         print(f"  Bots remain on current ranges — center NOT advanced")
 
+                    _drift_confirm_cycles = 0
                     return
+        else:
+            # Price back inside threshold — reset stabilisation counter.
+            if _drift_confirm_cycles > 0:
+                print(f"  Drift cleared (was {_drift_confirm_cycles} cycle(s)) — counter reset")
+            _drift_confirm_cycles = 0
 
         # ===============================
         # REGIME TRANSITION REDEPLOY

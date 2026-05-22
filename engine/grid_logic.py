@@ -239,12 +239,16 @@ def get_grid_state():
     }
 
 
-def redeploy_allowed() -> tuple[bool, float]:
+def redeploy_allowed(min_interval_secs: int = MIN_REDEPLOY_INTERVAL_SECS) -> tuple[bool, float]:
     """
     Flood-fill guard: returns (allowed, secs_remaining).
     Blocks grid recentres that happen too close together — if price oscillates
     around the drift threshold on 2-min cycles we'd otherwise redeploy every
     few minutes, eating fees and dragging the grid through a ranging market.
+
+    min_interval_secs: override the minimum gap between recentres.  Pass
+    2700 (45 min) during trending_down so the outer-only grid isn't recentred
+    repeatedly during a sustained downtrend leg.
     """
     data = {}
     if os.path.exists(STATE_FILE):
@@ -254,7 +258,7 @@ def redeploy_allowed() -> tuple[bool, float]:
             pass
     last_ts = data.get("last_redeploy_ts", 0)
     elapsed = time.time() - last_ts
-    remaining = max(0.0, MIN_REDEPLOY_INTERVAL_SECS - elapsed)
+    remaining = max(0.0, min_interval_secs - elapsed)
     return remaining == 0, remaining
 
 
@@ -296,16 +300,16 @@ def update_grid_center(price, grid_width=None, deployed_tiers=None):
         json.dump(existing, f)
 
 
-def drift_detected(price, center, grid_width, tilt=0):
+def drift_detected(price, center, grid_width, tilt=0, threshold_mult=0.85):
     """
     Check if price has drifted beyond the threshold from the tilt-adjusted
     grid center.
 
-    Threshold is 85% of grid_width (the mid-tier half-range locked at deploy
-    time). Using 85% instead of the old 75% gives the bots more room to
-    oscillate and complete grid cycles before recentring.
+    threshold_mult=0.85 in normal conditions (85% of grid_width gives bots
+    room to oscillate before recentring).  Pass threshold_mult=1.25 during
+    trending_down so the outer-only grid isn't chased downward on every leg.
     """
     adjusted_center = center + tilt
     drift = abs(price - adjusted_center)
-    threshold = grid_width * 0.85
+    threshold = grid_width * threshold_mult
     return drift > threshold
