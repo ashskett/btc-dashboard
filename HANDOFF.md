@@ -5,95 +5,80 @@
 ## Current State
 - **Project:** grid-engine
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** 913ee9c
-- **Active task:** None — code ready, awaiting manual deploy by Ash
-- **Task owner:** Ash
-- **Status:** code fixes committed and pushed; NOT yet deployed to droplet
+- **Last known commit:** 80c8d29
+- **Active task:** None — deployed and running
+- **Status:** All 3 bots live, recentred at ~$76,510
 
-## What Was Found (May 14 2026 audit)
+## What's Running Right Now (May 22 2026)
 
-### Critical issues on live server
-1. **Capital deployment was 0.7% of portfolio** — $665 deployed vs $89,914 portfolio.
-   Root cause: last `redeploy_all_bots()` call estimated portfolio at ~$2,100 (bad
-   portfolio_snapshot cache value). Fix: after deploy, do a manual redeploy via
-   dashboard to recalculate qty_per_grid at correct portfolio value ($89k+).
-   Budget percentages (38%/31%/26%) are fine — set via dashboard sliders, stay in
-   `tier_budgets.json` on droplet.
+- BTC price: ~$76,316
+- Trendline auto-activated at: $76,393 (matched after TREND_DOWN auto-clear)
+- trending_down: False — all bots running
+- Regime: RANGE / mild compression
+- Grid centre: $76,510
+- Inner (2743885): enabled, 3 active orders, $75,284–$77,254
+- Mid (2743889): enabled, 5 active orders, $75,126–$77,976
+- Outer (2743888): enabled, 3 active orders, $74,555–$78,465
+- ATR: $362, step sizes: inner $544, mid $466, outer $1,088
 
-2. **Inner bot being stopped in TREND_UP** — server was running older code where the
-   `elif trending_up and regime not in (...)` condition fired on TREND_UP.
-   Local code has always been correct (`not in ("RANGE","TREND_UP")`). Comment added
-   by previous session said inner=OFF in TREND_UP — that was wrong; fixed in 913ee9c.
+## Session Summary (May 22 2026)
 
-3. **Server was running pre-3ad5c64 code** — `decision_summary` was null in status,
-   confirming server had older engine.py. Full redeploy from 913ee9c will fix this.
+### Investigation — no TPs this week
+- BTC dropped from ~$82k to ~$76.7k since May 14 deploy
+- trending_down flag (5.5×ATR gap threshold) had been ON all week, stopping inner+mid
+- Only outer bot was running on a stale grid centred at $77,992
+- Outer bot's sell orders were at $78,741 — BTC peak this week was $78,092 (missed by $649)
+- Capital protected: portfolio held ~$87k through the 7% BTC drop
 
-### Inventory settings changed
-- Old live settings: target_btc=0.30, lower=0.23, upper=0.40, max=0.80, min=0.20
-- New committed settings (913ee9c): target_btc=0.40, lower=0.30, upper=0.50, max=0.80, min=0.20
-- `inventory_settings.json` is now in `_DEPLOY_FILES` — it will be deployed to
-  the droplet on the next deploy, overwriting the stale live values.
-- max_btc=0.80 intentionally wide — 3Commas counts bot-locked BTC in balance,
-  inflating ratio during SELL_ONLY. 0.80 gives room before hard stop fires.
+### Logic changes committed (80c8d29)
+Three improvements to drift/recentre timing (engine.py + grid_logic.py):
 
-## Completed This Session (May 14 2026)
-- Full codebase audit against live server state.
-- Found and documented: capital near-zero, inner bot stopping wrong, stale code.
-- Corrected decision table comment in engine.py (TREND_UP+trending_up → all ON).
-- Updated inventory.py defaults (target 0.40, upper 0.50, taper 0.05).
-- Created engine/inventory_settings.json as committed config, added to _DEPLOY_FILES.
-- Committed 913ee9c and pushed to deploy branch.
+1. **Stabilisation requirement**: Drift must be confirmed for 3 consecutive cycles (~6 min)
+   before a recentre fires. Filters single-candle spikes that would previously trigger
+   an immediate full redeploy.
 
-## Files Changed
-- `engine/engine.py` — fixed wrong decision table comment (trending_up+TREND_UP → inner ON)
-- `engine/inventory.py` — updated _DEFAULT_SETTINGS and stagger layout comment
-- `engine/inventory_settings.json` — new committed config file (deployed on each deploy)
-- `engine/dashboard_server.py` — added inventory_settings.json to _DEPLOY_FILES
+2. **Wider threshold during trending_down (125% vs 85%)**: When trending_down is active
+   and only the outer bot is running, the drift threshold scales from 85% to 125% of
+   deploy_grid_width. Prevents the outer bot from chasing price on each leg of a
+   sustained drop.
+
+3. **Longer flood guard during trending_down (45 min vs 20 min)**: Minimum time between
+   recentres extended from 1200s to 2700s when in trending_down mode.
+
+### Deploy
+- Deployed 80c8d29 to droplet
+- Engine restart triggered a full recentre at current price ($76,510)
+- Trendline auto-activation matched a lower trendline at $76,393
+- trending_down cleared → all three bots restarted on fresh grid
+
+## Files Changed (80c8d29)
+- `engine/engine.py` — drift block: stabilisation counter, trending_down threshold mult, regime-aware flood guard
+- `engine/grid_logic.py` — drift_detected() threshold_mult param, redeploy_allowed() min_interval_secs param
 - `HANDOFF.md` — this update
 
 ## Decisions Made
-- Inner bot stays ON in TREND_UP+trending_up — chop fills during uptrend outweigh risk;
-  outer bot already acts as safety net; this matches the code, the test, and Ash's intent.
-- Capital allocation 38%/31%/26% kept as-is (Ash confirmed).
-- Inventory target set to 0.40 BTC (Ash instructed).
-- inventory_settings.json is now config-as-code; future dashboard setting changes will
-  be overwritten on next deploy unless the committed file is also updated first.
+- 85% → 125% threshold multiplier during trending_down: lets outer bot hold its range
+  longer during sustained drops rather than chasing price down every $1,433
+- 3-cycle stabilisation: prevents single-candle triggers; 6 min is short enough to
+  not materially delay legitimate recentres
+- 45 min flood guard during trending_down: space out outer-only recentres
+- All thresholds revert to normal (85%, 20 min) when trending_down is False
 
-## Tests / Checks
-- `python3 -m py_compile engine.py, inventory.py, dashboard_server.py` → all OK
-- `python3 -c "json.load(open('inventory_settings.json'))"` → OK
-- No trading logic changed — only a comment fix and inventory config values.
-
-## Blockers
-- Server is NOT yet deployed. Old (broken) code still running live.
-- Capital deployment is still ~$665 until manual redeploy fires after deploy.
+## Pending / Known Issues
+- P&L page fix deferred — nav link issues and token threading still need fixing
+- Port 5050 plain HTTP — token in URL
+- `bots_on` field in portfolio_log.jsonl is always [] — bug, log_data doesn't populate bot_X_on keys
+- The trendline at $76,393 is auto-activated. If BTC drops significantly from here,
+  trending_down may re-trigger and inner+mid will stop again — correct behaviour
 
 ## What Ash Needs To Do
-1. Trigger deploy:
-   ```bash
-   curl -s -X POST "http://100.94.227.121:5050/deploy?token=$GRID_DEPLOY_TOKEN"
-   ```
-   Deploy token is in `.codex-secrets/grid-engine.json` locally, or check droplet .env.
-   The old fixed token `dbf92fff8e0baf1c856ea590d74cd640a556a037ddd12369` currently
-   works (dashboard fallback in code — see commit 2aa9366).
-
-2. After deploy, restart the engine (the deploy does this automatically via tmux).
-
-3. **Then trigger a manual redeploy of all bots** via the dashboard Grid tab to
-   recalculate qty_per_grid with the correct portfolio value (~$89k).
-   Without this, the bots will start with the old tiny qty_per_grid values.
-
-4. Verify in the dashboard:
-   - `decision_summary` appears in status (confirms new engine.py is live)
-   - Inner bot running in TREND_UP
-   - Inventory settings show target 0.40
+Nothing urgent. All bots running, grid recentred, logic improvements deployed.
+Monitor for fills over the next few hours.
 
 ## Recommended Next Action (for next Claude session)
-- Confirm deploy completed and inner bot is running in TREND_UP
-- Confirm capital is correctly allocated after manual redeploy
-- Consider whether `tier_budgets.json` should also become config-as-code
-  (currently 38/31/26 is only on the droplet — another bad portfolio estimate
-  during redeploy would miscalculate qty even with correct percentages)
+- Confirm fills are flowing on the new grid
+- Revisit P&L page fix (auth token threading from main dashboard nav link)
+- Consider whether `bots_on` logging bug should be fixed (cosmetic — doesn't affect trading)
 
 ---
-*Last updated: claude-code, 2026-05-14*
+*Last updated: claude-code, 2026-05-22*
