@@ -210,27 +210,35 @@ def trend_strength(price, trendline, atr):
                    tight range where the trendline was far below price. State
                    persisted in regime_state.json.
 
-    trending_down: price < trendline - 2.0×ATR — meaningful downside pressure.
+    trending_down: ENTRY when gap_ratio < -2.0 (price below trendline − 2×ATR).
+                   EXIT  when gap_ratio > -1.0 (1.0× ATR hysteresis band).
                    Raised from 1.5× (Mar 18): -1.5× fired too aggressively on
                    normal pullbacks when the trendline was slightly optimistic.
-                   The TREND_DOWN hysteresis (2-cycle, ATR×0.15) already guards
-                   real downtrends; -2.0× avoids shutting inner off unnecessarily.
+                   Hysteresis added (May 22): prevents inner+mid oscillating ON/OFF
+                   every 2-min cycle when gap_ratio sits on the -2.0 threshold.
+                   Was: bool(gap_ratio < -2.0) — no state memory, flipped every
+                   cycle. Fix: Schmitt trigger with -1.0 exit, mirroring trending_up.
+                   State persisted in regime_state.json as "trending_down_flag".
 
     Design principle: bots stay ON unless there is strong, confirmed evidence
     they are fighting the market. A false positive (unnecessary shutdown) costs
     more than a false negative (staying on through mild adverse move) because
     the outer bot always provides a safety net even when inner/mid are paused.
     """
-    TRENDING_UP_ENTRY = 5.5   # gap_ratio threshold to enter trending_up
-    TRENDING_UP_EXIT  = 4.5   # gap_ratio threshold to exit (hysteresis band)
+    TRENDING_UP_ENTRY   = 5.5    # gap_ratio threshold to enter trending_up
+    TRENDING_UP_EXIT    = 4.5    # gap_ratio threshold to exit (hysteresis band)
+    TRENDING_DOWN_ENTRY = -2.0   # gap_ratio threshold to enter trending_down
+    TRENDING_DOWN_EXIT  = -1.0   # gap_ratio threshold to exit (1.0× ATR hysteresis)
 
     if atr and atr > 0:
         gap_ratio = (price - trendline) / atr
     else:
         gap_ratio = 0.0
 
-    # Hysteresis: load current trending_up state, apply Schmitt-trigger logic
+    # Hysteresis: load current regime state once; update both flags below.
     rs = _load_regime_state()
+
+    # ── trending_up Schmitt trigger ────────────────────────────────────────────
     currently_up = rs.get("trending_up_active", False)
 
     if currently_up:
@@ -248,10 +256,31 @@ def trend_strength(price, trendline, atr):
         else:
             print(f"[TrendStrength] trending_up OFF — gap_ratio={gap_ratio:.2f}×ATR (exit<{TRENDING_UP_EXIT})")
 
+    # ── trending_down Schmitt trigger ──────────────────────────────────────────
+    # Mirrors trending_up logic. Prevents inner+mid toggling every cycle when
+    # gap_ratio oscillates around -2.0. Once entered, stays down until price
+    # recovers 1× ATR above the entry threshold (gap_ratio > -1.0).
+    currently_down = rs.get("trending_down_flag", False)
+
+    if currently_down:
+        # Only clear if gap_ratio has genuinely recovered above exit threshold
+        new_trending_down = gap_ratio < TRENDING_DOWN_EXIT
+    else:
+        # Only enter on a proper break below entry threshold
+        new_trending_down = gap_ratio < TRENDING_DOWN_ENTRY
+
+    if new_trending_down != currently_down:
+        rs["trending_down_flag"] = new_trending_down
+        _save_regime_state(rs)
+        if new_trending_down:
+            print(f"[TrendStrength] trending_down ON  — gap_ratio={gap_ratio:.2f}×ATR (entry<{TRENDING_DOWN_ENTRY})")
+        else:
+            print(f"[TrendStrength] trending_down OFF — gap_ratio={gap_ratio:.2f}×ATR (exit>{TRENDING_DOWN_EXIT})")
+
     return {
         "gap_ratio":     round(gap_ratio, 3),
         "trending_up":   new_trending_up,
-        "trending_down": bool(gap_ratio < -2.0),
+        "trending_down": new_trending_down,
     }
 
 
