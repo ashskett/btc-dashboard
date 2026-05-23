@@ -66,8 +66,19 @@ Three improvements to drift/recentre timing:
 Nothing urgent. All bots running, oscillation fix deployed.
 Weekend mode active until Mon 07:00 UTC.
 
+## Changes Since Last HANDOFF (2ed7aa8)
+
+- `engine/engine.py` — trending_down stop notification now includes resume price (trendline − 1×ATR). New clear notification fires when inner+mid come back online.
+- `engine/regime.py` — Schmitt trigger for trending_down (see previous entry)
+- `CLAUDE.md` — SSH via Bash tool works (Mac keys), engine restart uses venv/bin/python
+
+**Note on deploy mechanism:** The `/deploy` HTTP endpoint sometimes serves a stale GitHub raw cache. When that happens, SCP files directly then `pkill -f engine.py` + restart tmux. Correct restart command:
+```
+ssh root@165.232.101.253 'cd /root/grid-engine && tmux new-session -d -s grid "venv/bin/python engine.py 2>&1 | tee -a engine_stdout.log"'
+```
+
 ## Recommended Next Action (for next Claude session)
-- Check fills are flowing now oscillation is fixed
+- Check fills are flowing now oscillation is fixed — BTC was $77,171 at session end, trending_up ON, all bots should be cycling
 - Revisit P&L page fix (auth token threading from main dashboard nav link)
 - Consider whether `bots_on` logging bug should be fixed (cosmetic)
 
