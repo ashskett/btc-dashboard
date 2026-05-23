@@ -39,11 +39,20 @@ Do not mirror raw chat. Log decisions, deploys, tests, bugs, blockers, performan
 
 5. **The deploy branch is `claude/grid-engine-chat-review-hEEGu`** — NOT `main`. Always push to this branch and deploy via the `/deploy` endpoint.
 
-6. **SSH from Claude Code is blocked** (sandboxed environment, port 22 unreachable). All deploys go through git push + `POST /deploy`.
+6. **SSH works via the Bash tool** — runs on Ash's Mac which has the SSH keys. Always use this before asking Ash to SSH manually:
+   ```bash
+   ssh -o StrictHostKeyChecking=no root@165.232.101.253 'command'
+   ```
 
-7. **`inventory_settings.json` on the droplet holds the LIVE inventory thresholds** — the defaults in `inventory.py` are fallbacks. Always check the live settings via `GET /inventory/settings`.
+7. **Engine uses the venv Python — NEVER `python3`**. The system Python lacks all packages. Correct restart:
+   ```bash
+   ssh -o StrictHostKeyChecking=no root@165.232.101.253 'tmux new-session -d -s grid -c /root/grid-engine "venv/bin/python engine.py 2>&1 | tee -a engine_stdout.log"'
+   ```
+   Venv location: `/root/grid-engine/venv/bin/python`
 
-8. **Xero OAuth scopes** — NEVER tell Ash to enable scopes in the Xero Developer Portal; that UI was removed post-March 2026.
+8. **`inventory_settings.json` on the droplet holds the LIVE inventory thresholds** — the defaults in `inventory.py` are fallbacks. Always check the live settings via `GET /inventory/settings`.
+
+9. **Xero OAuth scopes** — NEVER tell Ash to enable scopes in the Xero Developer Portal; that UI was removed post-March 2026.
 
 ---
 

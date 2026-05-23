@@ -1666,10 +1666,13 @@ def run():
 
         elif state.trending_down:
             # Strong downside move — inner and mid OFF, outer ON as safety net
-            _decision_summary = f"Trending DOWN: gap={state.gap_ratio:.2f}x ATR; inner+mid off; outer on"
+            # Resume condition: gap_ratio > -1.0 (TRENDING_DOWN_EXIT in regime.py)
+            # i.e. price must recover to trendline − 1×ATR before inner+mid restart.
+            _resume_price = round(TRENDLINE - state.atr, 0)
+            _decision_summary = f"Trending DOWN: gap={state.gap_ratio:.2f}x ATR; inner+mid off; outer on; resumes >${_resume_price:,.0f}"
             if not _prev_trending_down:
-                notify(f"Trending DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off at ${state.price:,.0f}")
-            print(f"TRENDING DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off, outer holding")
+                notify(f"Trending DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off at ${state.price:,.0f}. Resumes above ${_resume_price:,.0f}")
+            print(f"TRENDING DOWN (gap={state.gap_ratio:.2f}×ATR) — inner+mid off, outer holding | resume > ${_resume_price:,.0f}")
             for i, bot in enumerate(GRID_BOTS):
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
                 _act(bot, i >= 2, tier_name)  # only outer (index 2) runs
@@ -1696,6 +1699,8 @@ def run():
 
         else:
             # RANGE or TREND_UP — all bots run
+            if _prev_trending_down:
+                notify(f"Trending DOWN cleared — inner+mid back online at ${state.price:,.0f}")
             if state.regime == "TREND_UP":
                 _decision_summary = "TREND_UP: all bots on for pullback fills"
                 print("TREND_UP — all bots running")
