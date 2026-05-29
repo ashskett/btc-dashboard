@@ -31,7 +31,8 @@ from grid_logic import (
 from dashboard import show_dashboard
 from market_data import get_btc_data, get_btc_data_short
 from indicators import add_indicators
-from regime import detect_regime, trend_strength, compression_exit_fast, get_regime_state
+from regime import (detect_regime, trend_strength, compression_exit_fast, get_regime_state,
+                    TRENDING_UP_EXIT, TRENDING_DOWN_EXIT)
 from threecommas import stop_bot, start_bot, redeploy_all_bots
 from price_targets import check_targets, update_target
 from threecommas_dca import (
@@ -436,6 +437,61 @@ def _mark_all_bots_started():
     doesn't redundantly call enable on the next cycle."""
     for bot_id in GRID_BOTS:
         _bot_last_action[bot_id] = "started"
+
+
+def _compute_tier_states(state, trendline, trendline_active):
+    """Per-tier enabled flag plus the EXACT condition that re-enables each
+    disabled tier. Mirrors the TIERED BOT DECISIONS table in run().
+
+    Added (2026-05-29) to answer the daily-review request: "define the exact
+    market condition that should re-enable Narrow/Mid, so disabled lanes do not
+    rely on manual memory." Narrow=inner, Mid=mid, Wider=outer. The outer tier
+    is a permanent safety net in this decision path, so it has no re-enable
+    condition. Pure observability — does not influence any bot action.
+    """
+    atr = state.atr or 0.0
+    gap = getattr(state, "gap_ratio", 0.0)
+    tl  = trendline if trendline_active else None
+
+    # Default posture: all tiers ON (RANGE / TREND_UP / mild compression).
+    inner_on = mid_on = True
+    inner_reason = mid_reason = "Active — normal grid trading"
+    inner_reenable = mid_reenable = None
+    inner_price = mid_price = None
+
+    if state.regime == "COMPRESSION":
+        inner_on = mid_on = False
+        inner_reason = mid_reason = "Off — COMPRESSION (range too tight to profit after fees)"
+        inner_reenable = mid_reenable = "regime exits COMPRESSION (volatility expands)"
+    elif state.trending_down or state.regime == "TREND_DOWN":
+        inner_on = mid_on = False
+        resume = round(tl - atr, 0) if tl else None
+        cond = f"gap_ratio recovers above {TRENDING_DOWN_EXIT:.1f}×ATR" + (
+            f" (price > ${resume:,.0f})" if resume else "")
+        inner_reason = mid_reason = f"Off — downside move (gap={gap:.2f}×ATR)"
+        inner_reenable = mid_reenable = cond
+        inner_price = mid_price = resume
+    elif state.trending_up and state.regime not in ("RANGE", "TREND_UP"):
+        # Inner off (hard run above trendline in an unconfirmed regime); mid stays on.
+        inner_on = False
+        resume = round(tl + (TRENDING_UP_EXIT * atr), 0) if tl else None
+        inner_reason = f"Off — hard run above trendline (gap={gap:.2f}×ATR)"
+        inner_reenable = f"gap_ratio falls below {TRENDING_UP_EXIT:.1f}×ATR" + (
+            f" (price < ${resume:,.0f})" if resume else "")
+        inner_price = resume
+
+    return [
+        {"tier": "inner", "bot": "Narrow", "enabled": inner_on,
+         "reason": inner_reason, "reenable_when": inner_reenable,
+         "reenable_price": inner_price},
+        {"tier": "mid", "bot": "Mid", "enabled": mid_on,
+         "reason": mid_reason, "reenable_when": mid_reenable,
+         "reenable_price": mid_price},
+        {"tier": "outer", "bot": "Wider", "enabled": True,
+         "reason": "Active — permanent safety net", "reenable_when": None,
+         "reenable_price": None},
+    ]
+
 
 def run():
     global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle, _drift_confirm_cycles
@@ -1744,6 +1800,7 @@ def run():
                 "tiers":          state.tiers,
                 "decision_summary": _decision_summary,
                 "bot_actions":     _bot_actions,
+                "tier_states":     _compute_tier_states(state, TRENDLINE, _trendline_active),
                 # Breakout state
                 "breakout_active":        _bo_state.get("active"),
                 "breakout_fire_price":    _bo_state.get("fire_price"),

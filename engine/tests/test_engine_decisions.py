@@ -325,3 +325,77 @@ class TestIntensiveTierFeeGuard:
         assert inner["fee_ok"] is True
         assert len(inner["grid_levels"]) == inner["levels"]
         assert inner["grid_high"] < 70000
+
+
+class _FakeState:
+    """Minimal stand-in for the engine state object used by _compute_tier_states."""
+
+    def __init__(self, regime="RANGE", atr=400.0, gap_ratio=0.0,
+                 trending_up=False, trending_down=False, compression=False):
+        self.regime = regime
+        self.atr = atr
+        self.gap_ratio = gap_ratio
+        self.trending_up = trending_up
+        self.trending_down = trending_down
+        self.compression = compression
+
+
+class TestTierStates:
+    """Re-enable-condition observability (added 2026-05-29).
+
+    Asserts _compute_tier_states reports the correct enabled flag per tier and
+    an explicit re-enable condition for every disabled tier. Outer is always a
+    safety net so never carries a re-enable condition.
+    """
+
+    def _by_tier(self, states):
+        return {s["tier"]: s for s in states}
+
+    def test_range_all_tiers_on_no_reenable(self):
+        import engine
+        st = _FakeState(regime="RANGE")
+        t = self._by_tier(engine._compute_tier_states(st, 70000.0, True))
+        assert t["inner"]["enabled"] and t["mid"]["enabled"] and t["outer"]["enabled"]
+        assert t["inner"]["reenable_when"] is None
+        assert t["mid"]["reenable_when"] is None
+
+    def test_trending_down_disables_inner_mid_with_price(self):
+        import engine
+        from regime import TRENDING_DOWN_EXIT
+        st = _FakeState(regime="RANGE", atr=400.0, gap_ratio=-2.5, trending_down=True)
+        t = self._by_tier(engine._compute_tier_states(st, 70000.0, True))
+        assert t["inner"]["enabled"] is False
+        assert t["mid"]["enabled"] is False
+        assert t["outer"]["enabled"] is True
+        # Resume price = trendline - 1*ATR = 70000 - 400 = 69600
+        expected = round(70000.0 - 400.0, 0)
+        assert t["inner"]["reenable_price"] == expected
+        assert t["mid"]["reenable_price"] == expected
+        assert t["inner"]["reenable_when"] is not None
+        assert TRENDING_DOWN_EXIT == -1.0
+
+    def test_compression_disables_inner_mid(self):
+        import engine
+        st = _FakeState(regime="COMPRESSION")
+        t = self._by_tier(engine._compute_tier_states(st, 70000.0, True))
+        assert t["inner"]["enabled"] is False
+        assert t["mid"]["enabled"] is False
+        assert t["outer"]["enabled"] is True
+        assert "COMPRESSION" in t["inner"]["reenable_when"]
+
+    def test_trending_up_unconfirmed_disables_inner_only(self):
+        import engine
+        st = _FakeState(regime="BREAKOUT_UP", atr=400.0, gap_ratio=6.0, trending_up=True)
+        t = self._by_tier(engine._compute_tier_states(st, 70000.0, True))
+        assert t["inner"]["enabled"] is False
+        assert t["mid"]["enabled"] is True
+        assert t["outer"]["enabled"] is True
+        assert t["inner"]["reenable_price"] is not None
+
+    def test_inactive_trendline_yields_no_price(self):
+        import engine
+        st = _FakeState(regime="RANGE", atr=400.0, gap_ratio=-2.5, trending_down=True)
+        t = self._by_tier(engine._compute_tier_states(st, 70000.0, False))
+        assert t["inner"]["reenable_price"] is None
+        # Condition string still present even without a numeric price
+        assert t["inner"]["reenable_when"] is not None

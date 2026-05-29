@@ -2,6 +2,13 @@ import json, os, time
 
 _REGIME_STATE_FILE = os.path.join(os.path.dirname(__file__), "regime_state.json")
 
+# ── Trend-strength Schmitt-trigger thresholds (module-level so engine.py can
+#    derive the exact re-enable condition for each disabled tier) ─────────────
+TRENDING_UP_ENTRY   = 5.5    # gap_ratio threshold to enter trending_up
+TRENDING_UP_EXIT    = 4.5    # gap_ratio threshold to exit (hysteresis band)
+TRENDING_DOWN_ENTRY = -2.0   # gap_ratio threshold to enter trending_down
+TRENDING_DOWN_EXIT  = -1.0   # gap_ratio threshold to exit (1.0× ATR hysteresis)
+
 def _load_regime_state():
     try:
         return json.load(open(_REGIME_STATE_FILE))
@@ -225,11 +232,8 @@ def trend_strength(price, trendline, atr):
     more than a false negative (staying on through mild adverse move) because
     the outer bot always provides a safety net even when inner/mid are paused.
     """
-    TRENDING_UP_ENTRY   = 5.5    # gap_ratio threshold to enter trending_up
-    TRENDING_UP_EXIT    = 4.5    # gap_ratio threshold to exit (hysteresis band)
-    TRENDING_DOWN_ENTRY = -2.0   # gap_ratio threshold to enter trending_down
-    TRENDING_DOWN_EXIT  = -1.0   # gap_ratio threshold to exit (1.0× ATR hysteresis)
-
+    # Thresholds are module-level constants (see top of file) so the engine can
+    # derive each disabled tier's exact re-enable condition for the dashboard.
     if atr and atr > 0:
         gap_ratio = (price - trendline) / atr
     else:
