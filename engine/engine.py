@@ -423,6 +423,18 @@ _prev_weekend_mode: bool = False
 # Recentre only fires after DRIFT_CONFIRM_CYCLES cycles — filters single-candle spikes.
 _drift_confirm_cycles: int = 0
 DRIFT_CONFIRM_CYCLES: int = 3
+# Regime-aware recentre gate (added 2026-05-29, validated via backtest.py over
+# the post-stabilisation window May 22–29). That window showed recentres fired
+# during a trend almost never pay off: 100% of trending_down recentres and 83%
+# of trending_up recentres earned <2 fills in the following hour — the grid was
+# chasing a directional move it couldn't fill, cancelling resting orders for no
+# churn. Suppressing all 21 trending_down recentres in that window would have
+# forgone 0 fills. So: during trending_down only recentre on an extreme
+# (>2x deploy width) safety-valve move; during trending_up require a wider
+# threshold AND more confirmation cycles. RANGE recentring is unchanged.
+TREND_DOWN_RECENTRE_EXTREME_MULT: float = 2.0  # trending_down: recentre only if drift exceeds this × deploy width
+TREND_UP_DRIFT_MULT: float = 1.10              # trending_up: wider drift threshold (vs 0.85 in RANGE)
+TREND_UP_CONFIRM_CYCLES: int = 6               # trending_up: more consecutive confirmations (vs 3 in RANGE)
 # Track the last start/stop action sent to each bot so we don't spam
 # redundant enable/disable API calls every cycle.  3Commas re-places
 # all grid orders on every enable call, so calling start_bot() on an
@@ -491,6 +503,28 @@ def _compute_tier_states(state, trendline, trendline_active):
          "reason": "Active — permanent safety net", "reenable_when": None,
          "reenable_price": None},
     ]
+
+
+def _recentre_gate_params(trending_down: bool, trending_up: bool):
+    """Regime-aware recentre gate parameters.
+
+    Returns (drift_mult, required_confirm, tag) for the drift check:
+      - trending_down → 2.0× deploy width, normal confirm — a safety valve only,
+        because backtest showed 100% of trending_down recentres earned <2 fills.
+      - trending_up   → 1.10× width and 6 confirmation cycles — chase only
+        sustained, larger drifts (83% of trending_up recentres were duds).
+      - RANGE/other    → 0.85× width, 3 confirmation cycles (unchanged).
+
+    Pure function (no globals beyond module constants) so it is unit-testable.
+    """
+    trending_up = trending_up and not trending_down
+    if trending_down:
+        return (TREND_DOWN_RECENTRE_EXTREME_MULT, DRIFT_CONFIRM_CYCLES,
+                f"  [{TREND_DOWN_RECENTRE_EXTREME_MULT:.2f}x trending_down safety-valve]")
+    if trending_up:
+        return (TREND_UP_DRIFT_MULT, TREND_UP_CONFIRM_CYCLES,
+                f"  [{TREND_UP_DRIFT_MULT:.2f}x / {TREND_UP_CONFIRM_CYCLES}cyc trending_up]")
+    return (0.85, DRIFT_CONFIRM_CYCLES, "")
 
 
 def run():
@@ -1377,18 +1411,23 @@ def run():
         # not the current ATR-derived width. This prevents a temporary ATR dip
         # from narrowing the threshold and triggering a premature recentre.
         #
-        # Threshold multiplier: 85% in normal conditions; widened to 125% when
-        # trending_down is active (outer-only mode) so the outer bot isn't
-        # chased downward on every leg of a sustained drop.
+        # ── Regime-aware recentre gate ────────────────────────────────────
+        # Threshold multiplier + confirmation cycles depend on the trend state
+        # (see _recentre_gate_params): RANGE = 0.85× / 3 cycles; trending_up =
+        # 1.10× / 6 cycles; trending_down = 2.0× safety-valve only. Recentring
+        # during a trend almost never earns fills (backtest May 22–29:
+        # trending_down 100% / trending_up 83% of recentres earned <2 fills in
+        # the next hour), so we chase far less aggressively when a trend is on.
         #
-        # Stabilisation: drift must be confirmed for DRIFT_CONFIRM_CYCLES
-        # consecutive cycles (≈6 min) before a recentre fires — filters
-        # single-candle spikes that reverse before the next cycle.
+        # Stabilisation: drift must be confirmed for _required_confirm
+        # consecutive cycles before a recentre fires — filters single-candle
+        # spikes that reverse before the next cycle.
         _trending_down_now = bool(getattr(state, "trending_down", False))
-        _drift_mult        = 1.25 if _trending_down_now else 0.85
+        _drift_mult, _required_confirm, _drift_tag = _recentre_gate_params(
+            _trending_down_now, bool(getattr(state, "trending_up", False))
+        )
         _drift_gw          = state.deploy_grid_width or state.grid_width
         _drift_threshold   = _drift_gw * _drift_mult
-        _drift_tag         = "  [125% trending_down]" if _trending_down_now else ""
         print(f"  Drift check: deploy_gw=${_drift_gw:,.0f}  current_gw=${state.grid_width:,.0f}"
               f"  dist=${abs(state.price - (state.center + (state.tilt or 0))):,.0f}"
               f"  threshold=${_drift_threshold:,.0f}{_drift_tag}")
@@ -1396,12 +1435,12 @@ def run():
                           tilt=state.tilt or 0, threshold_mult=_drift_mult):
             _drift_confirm_cycles += 1
             state.drift_triggered = True
-            if _drift_confirm_cycles < DRIFT_CONFIRM_CYCLES:
+            if _drift_confirm_cycles < _required_confirm:
                 # ── Stabilisation wait ────────────────────────────────────────
                 # Don't recentre on the first cycle beyond the threshold —
-                # require DRIFT_CONFIRM_CYCLES consecutive hits to confirm the
+                # require _required_confirm consecutive hits to confirm the
                 # move is sustained, not a spike reverting next candle.
-                print(f"  Drift stabilising: {_drift_confirm_cycles}/{DRIFT_CONFIRM_CYCLES} cycles "
+                print(f"  Drift stabilising: {_drift_confirm_cycles}/{_required_confirm} cycles "
                       f"beyond threshold — waiting for confirmation")
                 # Fall through to normal tiered bot decisions on current ranges
             elif state.inventory_mode in ("BUY_ONLY", "SELL_ONLY") or _prev_weekend_mode:

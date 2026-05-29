@@ -119,6 +119,7 @@ def load_cycles(path, since_epoch=None):
                 "trending_up": bool(d.get("trending_up", False)),
                 "compression": bool(d.get("compression", False)),
                 "center": d.get("center"),
+                "grid_width": d.get("grid_width"),
                 "drift_triggered": bool(d.get("drift_triggered", False)),
                 "inventory_mode": d.get("inventory_mode"),
                 "inner_step": inner.get("step"),
@@ -304,6 +305,49 @@ def detect_recenters(cycles, eps=1.0):
     return events
 
 
+def simulate_fill_gate(cycles, events, fills_by_cycle, min_fills, extreme_mult,
+                       threshold_mult=0.85):
+    """Counterfactual: which historical recentres would the fill-aware payoff
+    gate have suppressed?
+
+    The gate blocks a recentre if the *previous* deployment has not yet earned
+    `min_fills` fills, UNLESS price has drifted beyond `extreme_mult` x the
+    normal drift threshold (a genuine large shift the grid must follow).
+
+    Returns a dict keyed by event-cycle-index -> {"suppress": bool,
+    "earned_before": int, "drift_ratio": float|None}. `earned_before` is the
+    fill count of the deployment this recentre would replace; because suppressing
+    keeps the old grid live, prev_event only advances when a recentre fires.
+
+    Note: an offline approximation — logged post-recentre fills reflect the
+    grid that actually deployed, so a suppressed grid's true future payoff is
+    unknowable. We therefore judge the gate by ACTUAL forward payoff of each
+    event (see run_recenter's 2x2), not by re-simulating fills.
+    """
+    def fills_between(a, b):  # fills in (a, b]
+        return sum(len(fills_by_cycle.get(j, [])) for j in range(a + 1, b + 1))
+
+    decisions = {}
+    prev_event = 0
+    for ei in events:
+        earned = fills_between(prev_event, ei)
+        c = cycles[ei]
+        gw, price, ctr = c.get("grid_width"), c.get("price"), c.get("center")
+        drift_ratio = None
+        if gw and price and ctr:
+            drift_ratio = abs(price - ctr) / gw
+        extreme = drift_ratio is not None and drift_ratio > extreme_mult * threshold_mult
+        suppress = (earned < min_fills) and not extreme
+        decisions[ei] = {
+            "suppress": suppress,
+            "earned_before": earned,
+            "drift_ratio": drift_ratio,
+        }
+        if not suppress:
+            prev_event = ei
+    return decisions
+
+
 def run_recenter(cycles, fills_idx, args):
     print("\n=== RECENTER EVENT ANALYSIS ===")
     days = _span_days(cycles)
@@ -358,6 +402,38 @@ def run_recenter(cycles, fills_idx, args):
     print("combined with non-trivial post-recentre drawdown, indicates twitchy")
     print("recentring that cancels orders without earning churn — the case for")
     print("widening the drift threshold or adding a stabilisation/hysteresis gate.")
+
+    # ── Fill-aware payoff gate counterfactual ───────────────────────────────
+    min_fills = args.gate_fills
+    decisions = simulate_fill_gate(cycles, events, fills_by_cycle,
+                                   min_fills=min_fills,
+                                   extreme_mult=args.extreme_mult)
+    # 2x2: gate decision (suppress/fire) x actual forward payoff (low/high).
+    # low payoff = this event earned <2 fills in the look-ahead window.
+    payoff_low = {ei: (fc < 2) for ei, fc in zip(events, fills_per_event)}
+    good_supp = bad_supp = let_low = kept_high = 0
+    for ei in events:
+        supp = decisions[ei]["suppress"]
+        low = payoff_low[ei]
+        if supp and low:        good_supp += 1
+        elif supp and not low:  bad_supp += 1
+        elif not supp and low:  let_low += 1
+        else:                   kept_high += 1
+    n_supp = good_supp + bad_supp
+    print(f"\n--- FILL-AWARE GATE counterfactual "
+          f"(min_fills={min_fills}, extreme={args.extreme_mult}x) ---")
+    print(f"Would SUPPRESS {n_supp}/{len(events)} recentres "
+          f"({n_supp/len(events)*100:.0f}%).")
+    print(f"  GOOD  suppress + low-payoff (avoided a dud):     {good_supp}")
+    print(f"  BAD   suppress + high-payoff (lost a good one):  {bad_supp}")
+    print(f"  let through + low-payoff (gate missed):          {let_low}")
+    print(f"  kept + high-payoff (correctly retained):         {kept_high}")
+    if n_supp:
+        print(f"Suppression precision: {good_supp}/{n_supp} "
+              f"({good_supp/n_supp*100:.0f}%) of blocked recentres were duds.")
+    fills_saved_dud = sum(fc for ei, fc in zip(events, fills_per_event)
+                          if decisions[ei]["suppress"] and fc >= 2)
+    print(f"Fills forgone by blocking high-payoff recentres: {fills_saved_dud}")
 
 
 # ── Mode: spacing ──────────────────────────────────────────────────────────
@@ -443,6 +519,10 @@ def main(argv=None):
     p.add_argument("--exit", dest="exit", type=float, default=DEPLOYED_EXIT, help="trending_down exit threshold")
     p.add_argument("--sweep", action="store_true", help="trend-down: compare a range of thresholds")
     p.add_argument("--window", type=int, default=30, help="recenter: look-ahead window in cycles")
+    p.add_argument("--gate-fills", dest="gate_fills", type=int, default=2,
+                   help="recenter: fill-aware gate min fills the prior deployment must earn")
+    p.add_argument("--extreme-mult", dest="extreme_mult", type=float, default=2.0,
+                   help="recenter: drift multiple (x normal threshold) that overrides the gate")
     args = p.parse_args(argv)
 
     since_epoch = None

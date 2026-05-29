@@ -399,3 +399,48 @@ class TestTierStates:
         assert t["inner"]["reenable_price"] is None
         # Condition string still present even without a numeric price
         assert t["inner"]["reenable_when"] is not None
+
+
+class TestRecentreGate:
+    """Regime-aware recentre gate (added 2026-05-30).
+
+    Backtest (May 22–29) showed recentres during a trend almost never pay off
+    (trending_down 100% / trending_up 83% earned <2 fills in the next hour), so
+    the drift check chases far less aggressively when a trend is active:
+      - trending_down → 2.0× deploy width (safety valve only), normal confirm
+      - trending_up   → 1.10× width AND 6 confirmation cycles
+      - RANGE          → 0.85× width, 3 confirmation cycles (unchanged)
+    """
+
+    def test_range_uses_baseline(self):
+        import engine
+        mult, confirm, tag = engine._recentre_gate_params(False, False)
+        assert mult == 0.85
+        assert confirm == engine.DRIFT_CONFIRM_CYCLES == 3
+        assert tag == ""
+
+    def test_trending_down_is_safety_valve(self):
+        import engine
+        mult, confirm, tag = engine._recentre_gate_params(True, False)
+        assert mult == engine.TREND_DOWN_RECENTRE_EXTREME_MULT == 2.0
+        assert confirm == engine.DRIFT_CONFIRM_CYCLES
+        assert "trending_down" in tag
+        # Far wider than the old 1.25× chase, so routine downtrend legs no
+        # longer recentre — they were 100% duds in the backtest.
+        assert mult > 1.25
+
+    def test_trending_up_widens_and_requires_more_confirmation(self):
+        import engine
+        mult, confirm, tag = engine._recentre_gate_params(False, True)
+        assert mult == engine.TREND_UP_DRIFT_MULT == 1.10
+        assert confirm == engine.TREND_UP_CONFIRM_CYCLES == 6
+        assert confirm > engine.DRIFT_CONFIRM_CYCLES
+        assert mult > 0.85
+        assert "trending_up" in tag
+
+    def test_trending_down_takes_precedence_over_up(self):
+        import engine
+        # If both flags somehow set, down (outer-only safety) wins.
+        mult, confirm, tag = engine._recentre_gate_params(True, True)
+        assert mult == engine.TREND_DOWN_RECENTRE_EXTREME_MULT
+        assert "trending_down" in tag
