@@ -44,11 +44,11 @@ Do not mirror raw chat. Log decisions, deploys, tests, bugs, blockers, performan
    ssh -o StrictHostKeyChecking=no root@165.232.101.253 'command'
    ```
 
-7. **Engine uses the venv Python — NEVER `python3`**. The system Python lacks all packages. Correct restart:
+7. **Engine runs under systemd (`grid-engine.service`) — NOT tmux.** (Corrected 2026-05-29; older notes said tmux session `grid`.) The service launches `dashboard_server.py`, which spawns `engine.py` as a child, both via the venv Python. Correct restart:
    ```bash
-   ssh -o StrictHostKeyChecking=no root@165.232.101.253 'tmux new-session -d -s grid -c /root/grid-engine "venv/bin/python engine.py 2>&1 | tee -a engine_stdout.log"'
+   ssh -o StrictHostKeyChecking=no root@165.232.101.253 'systemctl restart grid-engine.service && sleep 4 && systemctl is-active grid-engine.service'
    ```
-   Venv location: `/root/grid-engine/venv/bin/python`
+   Engine uses the venv Python — NEVER `python3` (system Python lacks all packages). Venv: `/root/grid-engine/venv/bin/python`. Engine files live at `/root/grid-engine/*.py` (flat, no `engine/` subdir — the repo's `engine/` maps to the droplet root).
 
 8. **`inventory_settings.json` on the droplet holds the LIVE inventory thresholds** — the defaults in `inventory.py` are fallbacks. Always check the live settings via `GET /inventory/settings`.
 
@@ -332,6 +332,7 @@ Uses Lightweight Charts `setMarkers()` — known limitation: only one marker per
 - Faster compression exit
 - Drift-zone cap scaled per tier
 - DCA launch error surfacing in notifications
+- Per-tier re-enable conditions (`status.tier_states`) — each tier reports enabled flag, reason, and exact re-enable condition + numeric resume price (added 2026-05-29, observability only)
 
 ---
 

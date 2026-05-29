@@ -3,84 +3,84 @@
 > Updated by the last agent to work on this project. Read this before starting.
 
 ## Current State
-- **Project:** grid-engine
+- **Project:** grid-engine (canonical AI OS key — NOT `gridbot`)
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** becf77c
+- **Last known commit:** 620c045
 - **Active task:** None — deployed and running
-- **Status:** All 3 bots live, weekend mode active (Fri 21:00 → Mon 07:00 UTC)
+- **Status:** All 3 bots live, RANGE regime, healthy coverage
 
-## What's Running Right Now (May 23 2026)
+## How It Runs (IMPORTANT — corrected 2026-05-29)
+- The engine runs under **systemd: `grid-engine.service`**, NOT tmux.
+- The service starts `dashboard_server.py`, which spawns `engine.py` as a child — both via venv Python.
+- Restart: `ssh root@165.232.101.253 'systemctl restart grid-engine.service && sleep 4 && systemctl is-active grid-engine.service'`
+- Engine files are flat at `/root/grid-engine/*.py` (repo's `engine/` maps to droplet root).
+- SSH works via the Bash tool (Mac keys). Always use it before asking Ash to SSH.
 
-- BTC price: ~$75,745
-- Trendline: $76,413
-- ATR: $364.50, gap_ratio: ~-1.83×ATR
-- trending_down: False — all bots running
-- Regime: RANGE / compression ON (weekend mode, drift suppressed)
-- Grid centre: $75,791
+## What's Running Right Now (May 29 2026)
+- BTC price: ~$73,509
+- Regime: RANGE (mild compression, not confirmed → all bots on)
+- gap_ratio: +2.5×ATR (price above trendline ~$72,622)
+- trending_up: False, trending_down: False
+- Inventory: NORMAL, BTC 41.7% (target 45%)
+- Bots: Narrow 2/3 orders, Mid 5/6, Wider 3/4 — all enabled
 
-## Session Summary (May 22–23 2026)
+## Session Summary (May 29 2026)
 
-### Problem diagnosed and fixed: trending_down oscillation (becf77c)
+### Deployed: per-tier re-enable-condition observability (620c045)
+Answers the 2026-05-29 daily-review request to define the exact market
+condition that re-enables Narrow (inner) and Mid lanes, so disabled tiers no
+longer rely on operator memory.
 
-After the May 22 recentre at $76,510, BTC drifted down to ~$75,640.
-This put gap_ratio right on the -2.0×ATR threshold (trendline $76,413,
-ATR ~$380 → threshold = $75,653). The `trending_down` flag in
-`trend_strength()` was a simple `bool(gap_ratio < -2.0)` with no state
-memory — it flipped True/False every 2-min cycle, starting and stopping
-inner+mid bots continuously.
+**Change (observability only — does NOT influence bot actions):**
+- New `engine._compute_tier_states()` and `status.tier_states`. For each tier
+  (Narrow/inner, Mid/mid, Wider/outer) it reports: `enabled`, `reason`,
+  `reenable_when`, `reenable_price`.
+- Re-enable logic mirrors the TIERED BOT DECISIONS table:
+  - Inner/Mid re-enable when gap_ratio recovers above **-1.0×ATR**
+    (price > trendline − 1×ATR) after a downside move, OR on COMPRESSION exit.
+  - Inner additionally re-enables when a `trending_up` run cools to
+    gap_ratio < **4.5×ATR**.
+  - Outer is a permanent safety net (no re-enable condition).
+- Promoted the four trend-strength Schmitt thresholds
+  (`TRENDING_UP_ENTRY/EXIT`, `TRENDING_DOWN_ENTRY/EXIT`) to module-level
+  constants in `regime.py` so the engine can derive resume prices.
+- 5 new tests in `tests/test_engine_decisions.py` (`TestTierStates`).
+  Full suite: **199 passed**.
 
-**Root cause:** `trending_down` had no hysteresis; `trending_up` already had
-a proper Schmitt trigger (entry 5.5, exit 4.5). The `trending_down` flag
-lacked the equivalent.
-
-**Fix (engine/regime.py):**
-- Added `TRENDING_DOWN_ENTRY = -2.0` and `TRENDING_DOWN_EXIT = -1.0` constants
-- Schmitt trigger: once below -2.0, stays True until gap_ratio recovers above -1.0
-  (price must reach trendline − 1×ATR = ~$76,049 before clearing)
-- State persisted as `"trending_down_flag"` in `regime_state.json`
-
-This is a pure state-logic fix — no threshold values changed, entry is identical
-to before. The 1×ATR dead zone (entry at -2.0, exit at -1.0) eliminates chop.
-
-### Earlier changes in this session (80c8d29 — May 22)
-Three improvements to drift/recentre timing:
-1. Stabilisation requirement: 3 consecutive cycles before recentre fires
-2. Wider threshold during trending_down: 125% vs 85% of deploy_grid_width
-3. Longer flood guard during trending_down: 45 min vs 20 min
+Deployed via direct SCP (engine.py + regime.py) + `systemctl restart` to avoid
+the known stale GitHub-raw-cache issue on `/deploy`. Verified `tier_states`
+present in live `engine_status.json`.
 
 ## Files Changed
-- `engine/regime.py` (becf77c) — trending_down Schmitt trigger
-- `engine/engine.py` (80c8d29) — drift block improvements
-- `engine/grid_logic.py` (80c8d29) — drift_detected() / redeploy_allowed() params
+- `engine/engine.py` (620c045) — `_compute_tier_states()`, `tier_states` in status export, import of thresholds
+- `engine/regime.py` (620c045) — Schmitt thresholds promoted to module constants
+- `engine/tests/test_engine_decisions.py` (620c045) — `TestTierStates` (5 tests)
+- `CLAUDE.md`, `HANDOFF.md` — systemd correction + tier_states feature
 
-## Decisions Made
-- Schmitt trigger hysteresis band: 1×ATR (entry -2.0, exit -1.0). Mirrors trending_up's 1×ATR band (entry 5.5, exit 4.5). Prevents oscillation without changing the entry sensitivity.
-- `trending_down_flag` key chosen (not `trending_down_active`) to avoid collision with `trend_down_active` (TREND_DOWN regime flag) in the same regime_state.json file.
+## AI OS Updates Made This Session
+- Marked **5 tasks done** on `grid-engine`: both "Define re-enable condition for
+  Narrow/Mid", and the three "Investigate Narrow/Mid 0/N coverage" items
+  (resolved as not-bugs — snapshots from defensive TREND_DOWN cycles).
+- Logged memory entry (source `claude-code`, category `Agent Event`).
+- Added a project note summarising the deploy and remaining planned items.
+
+## Still PLANNED (daily-review items not yet built)
+- Review range-mode grid spacing (2026-05-27)
+- Measure recenter events vs fills/drawdown, add hysteresis if too twitchy (2026-05-29)
+- Backtest trend_down-regime triggers against fills (2026-05-29)
+
+All three need a **backtest harness (`backtest.py`) which does not yet exist** —
+that's the logical next build.
 
 ## Pending / Known Issues
-- P&L page fix deferred — nav link issues and token threading still need fixing
-- Port 5050 plain HTTP — token in URL
-- `bots_on` field in portfolio_log.jsonl is always [] — cosmetic bug, doesn't affect trading
+- Port 5050 plain HTTP — token in URL (Tailscale-only mitigates)
+- `bots_on` field in portfolio_log.jsonl always [] — cosmetic
+- Intensive sell 60% compression ignores fee guard (known)
+- 3Commas BTC ratio inflated during SELL_ONLY (bot-locked BTC counted)
 
-## What Ash Needs To Do
-Nothing urgent. All bots running, oscillation fix deployed.
-Weekend mode active until Mon 07:00 UTC.
-
-## Changes Since Last HANDOFF (2ed7aa8)
-
-- `engine/engine.py` — trending_down stop notification now includes resume price (trendline − 1×ATR). New clear notification fires when inner+mid come back online.
-- `engine/regime.py` — Schmitt trigger for trending_down (see previous entry)
-- `CLAUDE.md` — SSH via Bash tool works (Mac keys), engine restart uses venv/bin/python
-
-**Note on deploy mechanism:** The `/deploy` HTTP endpoint sometimes serves a stale GitHub raw cache. When that happens, SCP files directly then `pkill -f engine.py` + restart tmux. Correct restart command:
-```
-ssh root@165.232.101.253 'cd /root/grid-engine && tmux new-session -d -s grid "venv/bin/python engine.py 2>&1 | tee -a engine_stdout.log"'
-```
-
-## Recommended Next Action (for next Claude session)
-- Check fills are flowing now oscillation is fixed — BTC was $77,171 at session end, trending_up ON, all bots should be cycling
-- Revisit P&L page fix (auth token threading from main dashboard nav link)
-- Consider whether `bots_on` logging bug should be fixed (cosmetic)
+## Recommended Next Action
+- Build `backtest.py` to unblock the three planned data-led items above.
+- Consider surfacing `tier_states` on the dashboard (currently in status JSON only).
 
 ---
-*Last updated: claude-code, 2026-05-23*
+*Last updated: claude-code, 2026-05-29*
