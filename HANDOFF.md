@@ -5,9 +5,40 @@
 ## Current State
 - **Project:** grid-engine (canonical AI OS key — NOT `gridbot`)
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** 620c045
+- **Last known commit:** 75cb334 (regime-aware recentre gate)
 - **Active task:** None — deployed and running
-- **Status:** All 3 bots live, RANGE regime, healthy coverage
+- **Status:** All 3 bots live, RANGE regime, healthy coverage. Engine restarted
+  2026-05-29 23:1x UTC after gate deploy — 5 clean cycles, 0 tracebacks.
+
+## Session Summary (2026-05-30) — Regime-aware recentre gate (item 1, commit 75cb334)
+
+Implemented the long-pending "recentre stabilisation" item, but the data
+redefined the fix. Re-ran `backtest.py recenter --since 2026-05-22` (post the
+80c8d29 stabilisation fix) to avoid the earlier skew from pre-fix data:
+
+- Post-fix recentring is still twitchy — **7.8/day, 82% earn <2 fills** in the
+  next hour. NOT a pre-fix artifact.
+- Built a fill-aware-gate counterfactual into `backtest.py`. It showed the
+  fill-aware gate **doesn't discriminate**: 82% "precision" = base dud rate;
+  9/11 productive recentres followed a low-fill deployment. Wrong lever.
+- Root cause is **trending**: trending_down recentres were **100% duds (21/21,
+  0 fills forgone if all suppressed)**, trending_up **83% (15/18)**, RANGE 65%.
+
+**Change (engine.py `_recentre_gate_params`, pure + unit-tested):**
+| State | Before | After |
+|---|---|---|
+| RANGE | 0.85× / 3 cyc | unchanged |
+| trending_up | 0.85× / 3 cyc | **1.10× / 6 cyc** |
+| trending_down | 1.25× / 3 cyc | **2.0× safety-valve / 3 cyc** |
+
+trending_down keeps the 45-min flood guard + full redeploy path; it just won't
+fire unless drift exceeds 2× deploy width (genuine collapse). Deployed via SCP
++ `systemctl restart` (stale-cache avoidance). 4 new `TestRecentreGate` tests +
+12 backtest tests pass.
+
+> NOTE: 6 `TestBotDecisionTable` tests fail **on weekends only** (they don't
+> freeze the clock, so weekend mode hijacks bot decisions). Pre-existing,
+> confirmed against pristine code. Spawned a cleanup task to freeze the clock.
 
 ## How It Runs (IMPORTANT — corrected 2026-05-29)
 - The engine runs under **systemd: `grid-engine.service`**, NOT tmux.
@@ -94,11 +125,13 @@ implementation pending).
 - 3Commas BTC ratio inflated during SELL_ONLY (bot-locked BTC counted)
 
 ## Recommended Next Action
-- **Recentre stabilisation/hysteresis gate** — backtest shows 89% of recentres
-  earn <2 fills/hour. Require N stable cycles (or a wider drift threshold)
-  before a recentre fires. Highest-value remaining change.
+- **Verify the regime-aware gate in the wild** — next time the engine enters
+  `trending_down`/`trending_up`, confirm via `journalctl`/engine output that the
+  drift tag shows `[2.00x trending_down safety-valve]` / `[1.10x / 6cyc
+  trending_up]` and that recentres drop off. Re-run `backtest.py recenter
+  --since <deploy-date>` in ~1 week to measure the actual reduction in duds.
 - Consider surfacing `tier_states` on the dashboard (currently in status JSON only).
-- Optional: re-run `backtest.py all` after any threshold/drift change to confirm impact.
+- Cleanup: freeze the clock in `TestBotDecisionTable` (fails every weekend).
 
 ---
 *Last updated: claude-code, 2026-05-29*
