@@ -64,13 +64,28 @@ present in live `engine_status.json`.
 - Logged memory entry (source `claude-code`, category `Agent Event`).
 - Added a project note summarising the deploy and remaining planned items.
 
-## Still PLANNED (daily-review items not yet built)
-- Review range-mode grid spacing (2026-05-27)
-- Measure recenter events vs fills/drawdown, add hysteresis if too twitchy (2026-05-29)
-- Backtest trend_down-regime triggers against fills (2026-05-29)
+## Backtest tool + findings (added 2026-05-29, commit 49759a8)
 
-All three need a **backtest harness (`backtest.py`) which does not yet exist** —
-that's the logical next build.
+`engine/backtest.py` is a **read-only, non-trading** log analyser (stdlib,
+streams the 76MB `engine_log.jsonl`). On the droplet: `venv/bin/python backtest.py all`.
+Modes: `trend-down [--sweep]`, `recenter [--window N]`, `spacing`, `all`.
+Ran over 78 days / 37,954 cycles — findings:
+
+- **Recentring is twitchy (actionable):** 188 recentres (2.4/day), **89%
+  followed by <2 fills in the next hour** (median 0), median post-recentre
+  drawdown −0.25% / worst −2.39%. → add a stabilisation/hysteresis gate before
+  recentre fires. *This is the recommended next change.*
+- **trending_down over-pauses:** deployed −2.0/−1.0 pauses inner+mid 20.3% of
+  cycles but avoids almost no downside (worst single-cycle drop −0.73%; net
+  drift while paused +3.9%) and forgoes only 11 fills. Stricter −2.5/−1.5 would
+  pause 18.5% / forgo 2. Replay matches logged flag 98–99% (harness validated).
+- **RANGE spacing is fee-limited, not config-limited:** step $475 sits just
+  above the fee floor (~$440), step/ATR 1.21×, 99% fee_ok. Tightening would
+  breach the fee guard → no spacing change warranted.
+
+Tasks `Backtest trend_down` and `Review range spacing` marked **done**;
+`Measure recenter → add hysteresis` kept **planned** (measurement done,
+implementation pending).
 
 ## Pending / Known Issues
 - Port 5050 plain HTTP — token in URL (Tailscale-only mitigates)
@@ -79,8 +94,11 @@ that's the logical next build.
 - 3Commas BTC ratio inflated during SELL_ONLY (bot-locked BTC counted)
 
 ## Recommended Next Action
-- Build `backtest.py` to unblock the three planned data-led items above.
+- **Recentre stabilisation/hysteresis gate** — backtest shows 89% of recentres
+  earn <2 fills/hour. Require N stable cycles (or a wider drift threshold)
+  before a recentre fires. Highest-value remaining change.
 - Consider surfacing `tier_states` on the dashboard (currently in status JSON only).
+- Optional: re-run `backtest.py all` after any threshold/drift change to confirm impact.
 
 ---
 *Last updated: claude-code, 2026-05-29*
