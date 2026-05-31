@@ -5,10 +5,39 @@
 ## Current State
 - **Project:** grid-engine (canonical AI OS key — NOT `gridbot`)
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** 75cb334 (regime-aware recentre gate)
+- **Last known commit:** e2c6d64 (weekly backtest-review cron)
 - **Active task:** None — deployed and running
 - **Status:** All 3 bots live, RANGE regime, healthy coverage. Engine restarted
   2026-05-29 23:1x UTC after gate deploy — 5 clean cycles, 0 tracebacks.
+
+## Session Summary (2026-05-31) — Weekly backtest automation + clock-freeze fix
+
+- **Weekly automated backtest review (commit e2c6d64).** New
+  `engine/weekly_backtest_review.py` runs on the droplet via **system cron,
+  Mondays 08:13 London** (crontab line 27, under `TZ=Europe/London`; cron daemon
+  active). It imports the read-only `backtest.py` building blocks, computes
+  recentre-payoff + fee-floor health metrics over a 14-day window, and files an
+  improvement suggestion onto the **grid-engine AI OS task list** via
+  `POST /projects/grid-engine/tasks/upsert` — but **only when a metric breaches
+  threshold**. Deduped by deterministic task id (quiet weeks stay silent;
+  resolved suggestions never reopen). Trending-state checks filter to post-gate
+  data (`GATE_DEPLOYED = "2026-05-30"`) so they measure the LIVE config. Also
+  logs a `/memory/log` entry each run. **Analysis only** — never changes trading
+  logic, deploys, or restarts. Supports `--dry-run`. Dry-run validated on the
+  droplet; local + droplet copies md5-identical.
+  - First real fire: **Monday 08:13 London**. Per the dry-run it would likely
+    file "trending_up recentres still mostly duds" (10 post-gate recentres,
+    ~100% <2 fills) — surfaced for human review, not auto-applied.
+  - **To retune:** edit the threshold constants near the top of the script, and
+    bump `GATE_DEPLOYED` whenever the recentre gate constants change.
+- **Clock-freeze test fix (commit bdc373c).** Closed the spawned cleanup task:
+  `TestBotDecisionTable` failed every weekend because the tests never froze the
+  clock, so the weekend window (Fri 21:00→Mon 07:00 UTC) hijacked bot decisions.
+  Added a single `_utcnow()` source in `engine.py` for all wall-clock logic and
+  patched it in the test harness to a fixed weekday. Pure time-source refactor,
+  no behaviour change. **Full suite: 25 passed** (previously 6 weekend fails).
+  NOT yet deployed to the droplet — test-only change, deploy opportunistically
+  with the next engine change.
 
 ## Session Summary (2026-05-30) — Regime-aware recentre gate (item 1, commit 75cb334)
 
@@ -131,7 +160,11 @@ implementation pending).
   trending_up]` and that recentres drop off. Re-run `backtest.py recenter
   --since <deploy-date>` in ~1 week to measure the actual reduction in duds.
 - Consider surfacing `tier_states` on the dashboard (currently in status JSON only).
-- Cleanup: freeze the clock in `TestBotDecisionTable` (fails every weekend).
+- ~~Cleanup: freeze the clock in `TestBotDecisionTable`~~ — DONE (commit bdc373c).
+- Review the weekly cron's first real output (Mon 08:13 London) — check
+  `/root/grid-engine/weekly_backtest_review.log` and the grid-engine task list.
+- Deploy the `_utcnow()` engine.py change to the droplet opportunistically with
+  the next engine change (test-only benefit; runtime behaviour unchanged).
 
 ---
-*Last updated: claude-code, 2026-05-29*
+*Last updated: claude-code, 2026-05-31*
