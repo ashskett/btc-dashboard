@@ -14,9 +14,16 @@ each call.
 import sys
 import time
 import json
+import datetime
 import pytest
 from unittest.mock import patch, MagicMock, call
 import pandas as pd
+
+
+# Fixed weekday clock so weekend-mode logic (Fri 21:00 → Mon 07:00 UTC) never
+# takes over the bot-decision tests. Wed 2026-01-07 12:00 UTC — well outside the
+# weekend window.
+_FIXED_WEEKDAY = datetime.datetime(2026, 1, 7, 12, 0, 0, tzinfo=datetime.timezone.utc)
 
 
 # ── Minimal fake DataFrame factory ────────────────────────────────────────
@@ -111,6 +118,7 @@ def _engine_patches(
         "write_log_entry": MagicMock(),
         "show_dashboard": MagicMock(),
         "portfolio_snapshot": MagicMock(return_value=None),
+        "_utcnow": MagicMock(return_value=_FIXED_WEEKDAY),
     }
 
 

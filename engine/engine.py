@@ -73,9 +73,19 @@ import datetime
 _action_timestamps: deque = deque()
 
 
+def _utcnow() -> datetime.datetime:
+    """Current UTC time as a timezone-aware datetime.
+
+    Single source of 'now' for all wall-clock logic (weekend window, rate
+    limiter). Tests patch this to run deterministically regardless of the real
+    day. Timezone-aware to avoid the utcnow() deprecation warning.
+    """
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
 def _can_act() -> bool:
     """Return True if we are under the MAX_ACTIONS_PER_HOUR limit."""
-    now = datetime.datetime.utcnow()
+    now = _utcnow()
     cutoff = now - datetime.timedelta(hours=1)
     # Drop timestamps older than 1 hour
     while _action_timestamps and _action_timestamps[0] < cutoff:
@@ -85,7 +95,7 @@ def _can_act() -> bool:
 
 def _record_action():
     """Record a bot action timestamp."""
-    _action_timestamps.append(datetime.datetime.utcnow())
+    _action_timestamps.append(_utcnow())
 
 load_dotenv()
 
@@ -316,8 +326,7 @@ def _is_weekend_grid_hours() -> bool:
         Sat & Sun all day
         Mon < 07:00 UTC  (before EU open)
     """
-    import datetime as _dt
-    now = _dt.datetime.utcnow()
+    now = _utcnow()
     wd  = now.weekday()   # Mon=0 … Fri=4, Sat=5, Sun=6
     if wd == 4 and now.hour >= 21:  return True   # Friday after US close
     if wd in (5, 6):                return True   # Saturday / Sunday
@@ -1647,8 +1656,7 @@ def run():
             # Already in weekend mode — log status each cycle
             # Sunday 23:00 UTC check: if Asia open and price has drifted > 40%
             # of tight grid width from centre, silently recentre the tight grid.
-            import datetime as _dt
-            _now = _dt.datetime.utcnow()
+            _now = _utcnow()
             _sunday_asia = (_now.weekday() == 6 and _now.hour >= 23)
             if _sunday_asia and state.tiers:
                 _tight_width   = state.tiers[0]["grid_high"] - state.tiers[0]["grid_low"]
