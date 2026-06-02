@@ -30,6 +30,7 @@ from grid_logic import (
 )
 from dashboard import show_dashboard
 from market_data import get_btc_data, get_btc_data_short
+import orderbook  # Phase 0: read-only order-book liquidity collector (no decisions)
 from indicators import add_indicators
 from regime import (detect_regime, trend_strength, compression_exit_fast, get_regime_state,
                     TRENDING_UP_EXIT, TRENDING_DOWN_EXIT)
@@ -556,6 +557,7 @@ def run():
 
     state = EngineState()
     _bo_state  = {}      # populated in breakout section; needed in finally block
+    _liquidity = None    # order-book snapshot (Phase 0); needed in finally block
     _pt_state  = None    # active price target (if any); needed in finally block
     _prox      = None    # proximity alert direction; needed in finally block
     TRENDLINE  = None    # declared early so finally block can always reference it
@@ -575,6 +577,18 @@ def run():
         state.price = df["close"].iloc[-1]
         state.atr = df["atr"].iloc[-1]
         state.volatility_ratio = state.atr / state.price
+
+        # ===============================
+        # ORDER-BOOK LIQUIDITY (Phase 0 — observability only, no decisions)
+        # Read-only Coinbase L2 snapshot. Wrapped so a book outage or slow fetch
+        # can NEVER interrupt the trading cycle — on any failure we simply carry
+        # no liquidity data this cycle.
+        # ===============================
+        try:
+            _liquidity = orderbook.snapshot(float(state.price), float(state.atr))
+        except Exception as _obe:
+            print(f"Warning: order-book snapshot failed: {_obe} — continuing without liquidity")
+            _liquidity = None
 
         # ===============================
         # FLASH MOVE DETECTION
@@ -1848,6 +1862,8 @@ def run():
                 "decision_summary": _decision_summary,
                 "bot_actions":     _bot_actions,
                 "tier_states":     _compute_tier_states(state, TRENDLINE, _trendline_active),
+                # Order-book liquidity (Phase 0 — observability only)
+                "liquidity":       _liquidity,
                 # Breakout state
                 "breakout_active":        _bo_state.get("active"),
                 "breakout_fire_price":    _bo_state.get("fire_price"),
