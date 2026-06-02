@@ -5,10 +5,48 @@
 ## Current State
 - **Project:** grid-engine (canonical AI OS key — NOT `gridbot`)
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** e2c6d64 (weekly backtest-review cron)
+- **Last known commit:** 1453c62 (order-book awareness Phase 0)
 - **Active task:** None — deployed and running
 - **Status:** All 3 bots live, RANGE regime, healthy coverage. Engine restarted
-  2026-05-29 23:1x UTC after gate deploy — 5 clean cycles, 0 tracebacks.
+  2026-06-02 after Phase 0 deploy — 0 tracebacks, `liquidity` populating in
+  status, `orderbook_log.jsonl` growing.
+
+## Session Summary (2026-06-02) — Order-book awareness, Phase 0 (commit 1453c62)
+
+Started making the engine order-book aware. Phase 0 = **read-only Coinbase L2
+liquidity collector, zero trading decisions** (same observability-first
+discipline as tier_states).
+
+- **`engine/orderbook.py`** — once per cycle reads the Coinbase BTC/USDC book via
+  the existing ccxt instance (`market_data.exchange.fetch_order_book`, limit
+  1000), aggregates into $50 buckets, flags walls (bucket ≥ 4× median), and
+  **tracks each wall's persistence across cycles** (persistence is the real
+  signal; size alone is spoofable; state in `orderbook_state.json`, survives
+  restarts). Emits a compact `status.liquidity` summary and appends a full
+  record (top-6 walls/side) to `orderbook_log.jsonl`.
+- **Wiring** — called in `engine.run()` right after market data, wrapped in
+  try/except so a book outage can NEVER interrupt the cycle. One status key
+  added (`liquidity`).
+- **`engine/orderbook_report.py`** — read-only. Reports collector health and
+  seeds the Phase-1 question: for each recentre, did a *persistent* wall sit
+  between old centre and the price we recentred toward (the future veto
+  condition)? Cross-tabbed vs dud outcome, reusing `backtest.py`. Defers
+  gracefully until ~1-2 weeks of book history exist.
+- **Venue reality (important):** Coinbase spot is dense near mid, thin far out
+  (~±1×ATR usable even 1000 levels deep). The big round-number walls on
+  multi-venue heatmaps are a cross-venue/perp phenomenon — **out of scope here**,
+  that's the parked aggregate feed (Phase 2). This collector measures the
+  liquidity our orders actually hit.
+- Verified live: real walls detected (e.g. ~42 BTC bid at 69,750), persistence
+  increments across cycles and survived the restart, 215 tests pass, 0
+  tracebacks post-deploy.
+
+**Roadmap (filed as planned tasks):** Phase 1 = order-book recentre veto (bolts
+onto `_recentre_gate_params`, highest fit — same dud target the weekly cron
+tracks). Phase 2 = range-boundary anchoring on deploy. Phase 3 = breakout
+confirmation + wall-erosion support-failure. Phase 1 should not start until
+`orderbook_report.py` shows the coincidence stats support it (~1-2 weeks of
+data).
 
 ## Session Summary (2026-05-31) — Weekly backtest automation + clock-freeze fix
 
@@ -163,8 +201,11 @@ implementation pending).
 - ~~Cleanup: freeze the clock in `TestBotDecisionTable`~~ — DONE (commit bdc373c).
 - Review the weekly cron's first real output (Mon 08:13 London) — check
   `/root/grid-engine/weekly_backtest_review.log` and the grid-engine task list.
-- Deploy the `_utcnow()` engine.py change to the droplet opportunistically with
-  the next engine change (test-only benefit; runtime behaviour unchanged).
+- ~~Deploy the `_utcnow()` engine.py change~~ — DONE (rode along with the Phase 0
+  deploy, commit 1453c62 includes it on the droplet).
+- **Order-book Phase 0 is collecting.** In ~1-2 weeks run
+  `venv/bin/python orderbook_report.py` on the droplet; if the recentre×wall
+  coincidence supports it, build **Phase 1** (order-book recentre veto).
 
 ---
-*Last updated: claude-code, 2026-05-31*
+*Last updated: claude-code, 2026-06-02*
