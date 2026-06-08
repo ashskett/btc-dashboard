@@ -367,29 +367,36 @@ def redeploy_all_bots(bot_ids, tiers):
         except Exception as e:
             print(f"  Warning: live portfolio fetch failed: {e}")
 
-    # Attempt 3: last-resort fallback — use a sane minimum, NEVER estimate from
-    # deployed qty (that creates a death spiral where low qty → low estimate → lower qty)
-    if portfolio_usd <= 0:
-        portfolio_usd = 60000  # conservative floor — better than under-deploying
-        print(f"  WARNING: Using fallback portfolio ${portfolio_usd:,.0f} "
-              f"(could not fetch real value)")
-
-    print(f"  Portfolio: ${portfolio_usd:,.0f}")
-    for b in budgets:
-        pct = b.get("pct", 0)
-        print(f"    {b['name']}: {pct}% = ${portfolio_usd * pct / 100:,.0f}")
+    # If both fetches failed, do NOT invent a portfolio value. The old behaviour
+    # used a hardcoded $60k floor, which under-deployed whenever the real
+    # portfolio was larger (e.g. 95% of $60k against a real $95k balance reads as
+    # ~60% allocated — the "allocation keeps resetting to 60%" bug). Instead skip
+    # capital re-sizing for this redeploy: grid ranges still update, but each
+    # bot's existing qty_per_grid is preserved (budget_usd=None) so we never
+    # deploy a wrong amount. Sizing self-corrects on the next good fetch.
+    _skip_sizing = portfolio_usd <= 0
+    if _skip_sizing:
+        print("  WARNING: could not determine portfolio value — SKIPPING capital "
+              "re-sizing this redeploy (preserving each bot's existing qty_per_grid). "
+              "Grid ranges still update.")
+    else:
+        print(f"  Portfolio: ${portfolio_usd:,.0f}")
+        for b in budgets:
+            pct = b.get("pct", 0)
+            print(f"    {b['name']}: {pct}% = ${portfolio_usd * pct / 100:,.0f}")
 
     results = []
     for i, bot_id in enumerate(bot_ids[:3]):
         tier = tiers[i] if i < len(tiers) else tiers[-1]
         tier_name = tier.get("name", f"tier{i}")
 
-        # Find matching budget
+        # Find matching budget (skipped entirely if portfolio is unknown — see above)
         budget_usd = None
-        for b in budgets:
-            if b["name"] == tier_name:
-                budget_usd = portfolio_usd * b["pct"] / 100.0
-                break
+        if not _skip_sizing:
+            for b in budgets:
+                if b["name"] == tier_name:
+                    budget_usd = portfolio_usd * b["pct"] / 100.0
+                    break
 
         ok = redeploy_bot(bot_id, tier, budget_usd=budget_usd)
         results.append((bot_id, tier_name, ok))
