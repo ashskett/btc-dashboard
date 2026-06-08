@@ -5,11 +5,46 @@
 ## Current State
 - **Project:** grid-engine (canonical AI OS key — NOT `gridbot`)
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** 1453c62 (order-book awareness Phase 0)
+- **Last known commit:** d47da90 (capital skip-resize fix) / a654502 (SF failsafe)
 - **Active task:** None — deployed and running
-- **Status:** All 3 bots live, RANGE regime, healthy coverage. Engine restarted
-  2026-06-02 after Phase 0 deploy — 0 tracebacks, `liquidity` populating in
-  status, `orderbook_log.jsonl` growing.
+- **Status:** All 3 bots live, ~$64k BTC. Engine restarted 2026-06-08 after the
+  support-failure + capital deploy — 0 tracebacks, the two stale stuck targets
+  expired cleanly (no erroneous sell), `support_targets` + `liquidity` in status.
+
+## Session Summary (2026-06-08) — SF breakdown failsafe (#2/#3) + capital reset fix
+
+Two separate issues.
+
+### Support-failure: no-retest breakdown failsafe + stranded expire (a654502)
+The 4-phase machine only fired via RETESTING, so a clean waterfall break that
+never bounced sat in BROKEN forever and never launched a SmartTrade. Two live
+DOWN targets ("Key Support" 65614, "bear flag fail" 69600) were found stuck this
+way (missed the retest band by $16 and $101).
+- **#2 failsafe** (`_advance_support_failure`, price_targets.py): close ≥
+  `breakdown_failsafe_atr` (1.5) ATR below trigger with no retest → fire, flagged
+  `sf_fire_reduced` so engine.py halves size (`failsafe_size_mult` 0.5). **Only
+  fires on a RECENT break** (`failsafe_max_age_h` 3h) — a stale break never dumps
+  a sell into a move that already happened.
+- **#3 stranded expire**: ran far (`stranded_expire_atr` 3) OR in BROKEN too long
+  (`stranded_expire_h` 24h) → `active=False` + recorded reason. New
+  `get_support_failure_status()` → `status.support_targets` (sf_phase visible).
+- All params per-target overridable in breakout_targets.json. 9 new tests, 223
+  pass. Verified live: both stale targets EXPIRED, fired nothing.
+
+### Capital "resets to 60%" — root-caused (d47da90)
+**tier_budgets.json was never modified** (95% / 38-31-26, unchanged since Apr 10);
+bots currently deploy 96%. The drop was the engine's autonomous
+`redeploy_all_bots` hitting a hardcoded **$60k portfolio fallback** when the
+portfolio fetch fails (the known intermittent 401): 95% × $60k against a real
+~$95k balance ≈ 60% deployed. **Fix:** on fetch failure, skip capital re-sizing
+entirely (preserve each bot's qty_per_grid) rather than size against a fake $60k.
+- NOTE: a second trap remains — the manual `/account/allocate_total` &
+  `/bots/<id>/capital` controls are overwritten by the engine's next budget-based
+  redeploy. Use the tier-budget sliders (tier_budgets.json), not the manual USD
+  allocators, or they'll revert.
+- OBSERVABILITY GAP found: engine stdout isn't persisted to disk (200-line memory
+  buffer + stale engine_stdout.log) — worth fixing so this class of issue is
+  auditable. Not done this session.
 
 ## Session Summary (2026-06-02) — Order-book awareness, Phase 0 (commit 1453c62)
 
