@@ -78,12 +78,37 @@ discipline as tier_states).
   increments across cycles and survived the restart, 215 tests pass, 0
   tracebacks post-deploy.
 
-**Roadmap (filed as planned tasks):** Phase 1 = order-book recentre veto (bolts
-onto `_recentre_gate_params`, highest fit — same dud target the weekly cron
-tracks). Phase 2 = range-boundary anchoring on deploy. Phase 3 = breakout
-confirmation + wall-erosion support-failure. Phase 1 should not start until
-`orderbook_report.py` shows the coincidence stats support it (~1-2 weeks of
-data).
+**Roadmap — UPDATED 2026-06-08 after 6.5d review (see below).** Phase 1
+(recentre veto) REJECTED by data. Phase 2 (range anchoring) is the active
+direction but gated on regime-segmented wall hold-rate. Phase 3 (breakout +
+erosion) unchanged/later.
+
+## Session note (2026-06-08) — order-book 6.5d review, roadmap re-spec
+
+`orderbook_report.py` rewritten: was hard-coding an optimistic "green light"
+line; now prints a **data-driven verdict** and tests the **Phase-2** question
+(do durable walls act as boundaries?) instead of the dead Phase-1 one.
+
+6.5d / 4230 cycles, collector healthy (durable wall present bid 70% / ask 96%,
+max persistence 251 cycles ≈ 8.4h):
+- **Phase 1 (recentre veto): REJECTED.** A wall sat between old centre and the
+  recentre target in only 5% of recentres (1/19, and it was productive); all 12
+  duds were on a clear path → veto catches zero, blocks good recentres.
+- **Phase 2 (wall-as-boundary): NOT SUPPORTED overall, but regime-suspect.**
+  Combined hold-rate 59% (need ≥60%). Asymmetric: ask/resistance 63% vs
+  bid/support 51% — over a 70k→62k **downtrend**, where support fails and
+  resistance holds by construction. So hold-rate is **likely regime-dependent**.
+- **Next step before any Phase-2 build:** regime-segment the hold-rate (add
+  regime to the orderbook snapshot, or join `orderbook_log.jsonl` to
+  `engine_log.jsonl` by ts) and report hold-rate per RANGE/trending_up/down.
+  Build anchoring only on the side+regime with hold-rate ≥60%; consider
+  asymmetric anchoring.
+
+> AI OS NOTE: the `grid-engine`/`gridbot` project disappeared from the API's
+> `/projects` store today (`tasks/upsert` → 404 "Project 'gridbot' not found"),
+> though `/agent/digest` and `/memory/log` for grid-engine still work. Roadmap
+> above was logged to `/memory/log` instead of the task list. Worth a look —
+> the project record may need re-creating in the AI OS.
 
 ## Session Summary (2026-05-31) — Weekly backtest automation + clock-freeze fix
 
