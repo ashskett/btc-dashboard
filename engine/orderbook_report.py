@@ -3,17 +3,21 @@
 
 Two jobs, both read-only:
 
-1. **Collector health** — confirm orderbook.py is actually gathering usable data:
-   cycle count, time span, cadence, how often a *persistent* wall is present,
-   the persistence distribution, and book imbalance / depth span.
+1. **Collector health** — confirm orderbook.py is gathering usable data: cycle
+   count, span, cadence, how often a *persistent* wall is present, the
+   persistence distribution, and book imbalance / depth span.
 
-2. **Recentre-coincidence seed (the Phase-1 question)** — for every grid recentre
-   in the window, join the nearest order-book snapshot and ask: *did a persistent
-   wall sit between the old grid centre and the price we recentred toward?* That
-   is exactly the future "order-book veto" condition. Cross-tabbed against whether
-   the recentre was a dud (<2 fills in the next ~hour, reusing backtest.py), it
-   answers "would the book have predicted the duds?" — but only once enough
-   recentres overlap the collected book history (needs ~1-2 weeks of data).
+2. **Phase-2 validation: do durable walls act as price boundaries?** Range
+   anchoring (Phase 2) only makes sense if a persistent wall is a level price
+   tends to *respect* (reverse at) rather than slice straight through. For every
+   distinct durable wall that price later approaches, this measures whether price
+   HELD at it (reversed) or BROKE through — plus how often a durable wall even
+   sits within anchoring range of mid. The verdict is **computed from those
+   numbers**, not hard-coded.
+
+   (The earlier Phase-1 "recentre veto" question was killed by the data: walls
+   almost never sat between the old centre and the recentre target, and the duds
+   were on clear paths. See git history / HANDOFF. We don't test it here anymore.)
 
 Nothing here changes trading logic. Usage on the droplet:
     venv/bin/python orderbook_report.py
@@ -25,14 +29,19 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OB_LOG = os.path.join(HERE, "orderbook_log.jsonl")
-ENGINE_LOG = os.path.join(HERE, "engine_log.jsonl")
-FILLS_LOG = os.path.join(HERE, "fills_log.jsonl")
 
-PERSIST_MIN = 3      # cycles a wall must survive to count as "durable"
-JOIN_TOL_S = 120     # max seconds between a recentre and the nearest book snapshot
-FWD_CYCLES = 30      # ~60 min payoff window after a recentre
-DUD_FILLS = 2        # <2 fills in the window = a dud recentre
-MIN_RECENTRES = 8    # below this, the coincidence stats aren't worth reporting
+# ── Phase-2 tunables ─────────────────────────────────────────────────────────
+PERSIST_MIN     = 3      # cycles a wall must survive to count as "durable"
+ANCHOR_ATR      = 1.5    # a wall is "anchorable" if within this many ATR of mid
+TOUCH_TOL_ATR   = 0.25   # price "approaches" a wall within this band
+BREAK_TOL_ATR   = 0.25   # price "breaks" a wall if it pushes past by this band
+FWD_CYCLES      = 30     # ~60 min forward window to judge hold vs break
+STALE_GAP       = 2      # wall absent this many cycles → a later return is a NEW event
+
+# Verdict thresholds (data-driven gate for building Phase 2)
+HOLD_RATE_GREEN = 0.60   # ≥ this share of approached walls must HOLD (reverse)
+AVAIL_GREEN     = 0.40   # ≥ this share of cycles must have a wall within anchor range
+MIN_EVENTS      = 15     # below this, sample too small to call
 
 
 def _load_ob():
@@ -91,105 +100,110 @@ def collector_health(ob):
     return True
 
 
-def _nearest_ob(ts, ob):
-    best, bd = None, JOIN_TOL_S + 1
-    for r in ob:
-        d = abs(r.get("ts", 0) - ts)
-        if d < bd:
-            best, bd = r, d
-    return best if bd <= JOIN_TOL_S else None
-
-
-def _blocking_wall(rec, old_center, price):
-    """Was there a durable wall between the old grid centre and the price we
-    recentred toward? That's the future veto trigger (price likely to revert)."""
-    if old_center is None or price is None:
-        return False
-    if price > old_center:  # drifted up → look for resistance (ask) in between
-        return any(w.get("persistence", 0) >= PERSIST_MIN
-                   and old_center < w["price"] < price
-                   for w in rec.get("ask_walls", []))
-    if price < old_center:  # drifted down → look for support (bid) in between
-        return any(w.get("persistence", 0) >= PERSIST_MIN
-                   and price < w["price"] < old_center
-                   for w in rec.get("bid_walls", []))
-    return False
-
-
-def recentre_coincidence(ob):
-    print("\n── Recentre × order-book coincidence (Phase-1 seed) ──────────")
-    if len(ob) < 30:
-        print("  Not enough book history to join against recentres yet.")
-        return
-    try:
-        sys.path.insert(0, HERE)
-        import backtest as bt
-    except Exception as e:  # noqa: BLE001
-        print(f"  Could not import backtest.py ({e}); skipping join.")
-        return
-    if not os.path.exists(ENGINE_LOG):
-        print("  engine_log.jsonl not found; skipping join.")
-        return
-
-    since = ob[0]["ts"] - 60
-    cy = bt.load_cycles(ENGINE_LOG, since)
-    if len(cy) < 30:
-        print("  Not enough overlapping engine cycles; skipping join.")
-        return
-    fills = bt.load_fills(FILLS_LOG, since) if os.path.exists(FILLS_LOG) else []
-    idx = bt.assign_fills_to_cycles(cy, fills)
-    fbc = {}
-    for f, i in idx:
-        fbc.setdefault(i, []).append(f)
-    events = bt.detect_recenters(cy)
-    n = len(cy)
-
-    def fwd(ei):
-        end = min(ei + FWD_CYCLES, n - 1)
-        return sum(len(fbc.get(j, [])) for j in range(ei + 1, end + 1))
-
-    # cross-tab: blocking durable wall present? × dud?
-    tab = {(True, True): 0, (True, False): 0, (False, True): 0, (False, False): 0}
-    joined = 0
-    for ei in events:
-        if ei == 0:
+def _durable_anchorable(r, side):
+    """Durable walls on `side` within ANCHOR_ATR of mid, as [(price, atr)]."""
+    out = []
+    atr = r.get("atr") or 0
+    for w in r.get(side, []):
+        if w.get("persistence", 0) < PERSIST_MIN:
             continue
-        rec = _nearest_ob(cy[ei]["ts"], ob)
-        if rec is None:
-            continue  # recentre predates the collector
-        joined += 1
-        blocked = _blocking_wall(rec, cy[ei - 1]["center"], cy[ei]["price"])
-        dud = fwd(ei) < DUD_FILLS
-        tab[(blocked, dud)] += 1
+        da = w.get("dist_atr")
+        if da is not None and abs(da) <= ANCHOR_ATR:
+            out.append(w["price"])
+    return out, atr
 
-    if joined < MIN_RECENTRES:
-        print(f"  Only {joined} recentre(s) overlap the book history (need ≥{MIN_RECENTRES}).")
-        print("  This is expected right after deploy — revisit in ~1-2 weeks.")
+
+def _wall_events(ob, side):
+    """Distinct durable-wall appearances within anchor range. A wall (price
+    bucket) that vanishes for > STALE_GAP cycles and returns counts as new."""
+    side_key = "bid_walls" if side == "bid" else "ask_walls"
+    tracked = {}          # price -> last cycle index seen
+    events = []           # (i, wall_price, atr_at_i)
+    for i, r in enumerate(ob):
+        prices, atr = _durable_anchorable(r, side_key)
+        for W in prices:
+            if W not in tracked:
+                events.append((i, W, atr or (r.get("price", 0) * 0.01)))
+            tracked[W] = i
+        # drop walls not seen recently so a later reappearance is a fresh event
+        for W in [w for w, last in tracked.items() if i - last > STALE_GAP]:
+            del tracked[W]
+    return events
+
+
+def _evaluate(ob, side, events):
+    """For each wall event, look forward FWD_CYCLES: did price approach the wall,
+    and if so did it HOLD (reverse) or BREAK through?"""
+    n = len(ob)
+    approached = held = broke = 0
+    for i, W, atr in events:
+        end = min(i + FWD_CYCLES, n - 1)
+        fut = [ob[j]["price"] for j in range(i + 1, end + 1) if ob[j].get("price")]
+        if not fut:
+            continue
+        touch = TOUCH_TOL_ATR * atr
+        brk = BREAK_TOL_ATR * atr
+        if side == "bid":   # support below — approach = price dips to it
+            reached = min(fut) <= W + touch
+            through = min(fut) < W - brk
+        else:               # resistance above — approach = price rises to it
+            reached = max(fut) >= W - touch
+            through = max(fut) > W + brk
+        if reached:
+            approached += 1
+            broke += 1 if through else 0
+            held += 0 if through else 1
+    return approached, held, broke
+
+
+def phase2_wall_respect(ob):
+    print("\n── Phase-2 validation: do durable walls act as boundaries? ───")
+    if len(ob) < 200:
+        print("  Not enough book history yet (need ≥200 cycles).")
         return
+    avail_bid = sum(1 for r in ob if _durable_anchorable(r, "bid_walls")[0]) / len(ob)
+    avail_ask = sum(1 for r in ob if _durable_anchorable(r, "ask_walls")[0]) / len(ob)
 
-    bt_, bf = tab[(True, True)], tab[(True, False)]
-    nt, nf = tab[(False, True)], tab[(False, False)]
-    blocked_total = bt_ + bf
-    print(f"  joined recentres: {joined}")
-    print(f"  blocking durable wall present: {blocked_total}  ({_pct(blocked_total, joined)})")
-    print( "                          dud    productive")
-    print(f"    wall in the way:     {bt_:4d}    {bf:5d}")
-    print(f"    clear path:          {nt:4d}    {nf:5d}")
-    if blocked_total:
-        print(f"  → when a wall blocked, {_pct(bt_, blocked_total)} were duds "
-              f"(veto would have suppressed these)")
-    if (nt + nf):
-        print(f"  → when path was clear, {_pct(nt, nt + nf)} were still duds "
-              f"(other dud causes remain)")
-    print("  Read: high left-column dud-rate + the veto sparing productive recentres")
-    print("  is the green light to wire the order-book veto into the recentre gate.")
+    tot_appr = tot_held = tot_broke = 0
+    for side in ("bid", "ask"):
+        ev = _wall_events(ob, side)
+        appr, held, broke = _evaluate(ob, side, ev)
+        tot_appr += appr; tot_held += held; tot_broke += broke
+        hr = held / appr if appr else 0.0
+        label = "support (bid)" if side == "bid" else "resistance (ask)"
+        print(f"  {label:16s} walls={len(ev):3d}  approached={appr:3d}  "
+              f"held={held:3d} broke={broke:3d}  hold-rate={_pct(held, appr)}")
+
+    print(f"  anchorable wall within ±{ANCHOR_ATR}×ATR of mid — "
+          f"bid: {_pct(int(avail_bid*len(ob)), len(ob))}  ask: {_pct(int(avail_ask*len(ob)), len(ob))}")
+
+    hold_rate = tot_held / tot_appr if tot_appr else 0.0
+    avail_min = min(avail_bid, avail_ask)
+    print(f"  combined hold-rate: {_pct(tot_held, tot_appr)} over {tot_appr} approaches")
+
+    # ── Data-driven verdict (no hard-coded optimism) ──────────────────────────
+    print("  VERDICT:", end=" ")
+    if tot_appr < MIN_EVENTS:
+        print(f"INSUFFICIENT DATA — only {tot_appr} wall approaches "
+              f"(need ≥{MIN_EVENTS}). Keep collecting.")
+    elif hold_rate >= HOLD_RATE_GREEN and avail_min >= AVAIL_GREEN:
+        print("SUPPORTED — durable walls hold often enough and sit near the grid "
+              "boundary frequently enough to anchor to. Build Phase 2.")
+    elif hold_rate < HOLD_RATE_GREEN:
+        print(f"NOT SUPPORTED — walls hold only {hold_rate*100:.0f}% of the time "
+              f"(need ≥{HOLD_RATE_GREEN*100:.0f}%); price slices through them too "
+              f"often to anchor boundaries safely.")
+    else:
+        print(f"WEAK — walls hold {hold_rate*100:.0f}% but a durable wall is in "
+              f"anchor range only {avail_min*100:.0f}% of cycles "
+              f"(need ≥{AVAIL_GREEN*100:.0f}%); anchoring would rarely apply.")
 
 
 def main():
     print(f"=== Order-book report {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} ===")
     ob = _load_ob()
     if collector_health(ob):
-        recentre_coincidence(ob)
+        phase2_wall_respect(ob)
 
 
 if __name__ == "__main__":
