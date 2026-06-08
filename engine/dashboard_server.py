@@ -2035,26 +2035,52 @@ def capital_events_delete(idx):
 
 # ── Engine process management ────────────────────────────
 _engine_proc   = None
-_engine_output = []   # rolling buffer of last 200 lines
+_engine_output = []   # rolling buffer of last 200 lines (for /engine/output)
 _engine_lock   = __import__("threading").Lock()
+
+# Persist engine stdout to disk so history survives past the 200-line memory
+# buffer (previously the only record — making issues like the capital-reset
+# fallback impossible to audit after the fact). Timestamped + size-rotated
+# (5MB × 5 = 25MB cap) so it can't grow unbounded.
+import logging as _logging
+from logging.handlers import RotatingFileHandler as _RotatingFileHandler
+
+_ENGINE_STDOUT_LOG = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "engine_stdout.log")
+_engine_file_logger = _logging.getLogger("engine_stdout")
+if not _engine_file_logger.handlers:
+    _engine_file_logger.setLevel(_logging.INFO)
+    _engine_file_logger.propagate = False
+    _h = _RotatingFileHandler(
+        _ENGINE_STDOUT_LOG, maxBytes=5 * 1024 * 1024, backupCount=5,
+        encoding="utf-8")
+    _h.setFormatter(_logging.Formatter("%(asctime)s %(message)s",
+                                       "%Y-%m-%dT%H:%M:%S"))
+    _engine_file_logger.addHandler(_h)
+
+
+def _record_engine_line(line):
+    """Append one engine stdout line to both the in-memory buffer (dashboard)
+    and the rotating disk log (audit). Never lets a logging error break drain."""
+    with _engine_lock:
+        _engine_output.append(line)
+        if len(_engine_output) > 200:
+            _engine_output.pop(0)
+    try:
+        _engine_file_logger.info(line)
+    except Exception:
+        pass
 
 
 def _drain_output(proc):
-    """Background thread: drain engine stdout into _engine_output buffer."""
+    """Background thread: drain engine stdout into the memory buffer + disk log."""
     for raw in iter(proc.stdout.readline, b""):
-        line = raw.decode("utf-8", errors="replace").rstrip()
-        with _engine_lock:
-            _engine_output.append(line)
-            if len(_engine_output) > 200:
-                _engine_output.pop(0)
+        _record_engine_line(raw.decode("utf-8", errors="replace").rstrip())
     # process has exited — read any remaining bytes
     rest = proc.stdout.read()
     if rest:
         for line in rest.decode("utf-8", errors="replace").splitlines():
-            with _engine_lock:
-                _engine_output.append(line)
-                if len(_engine_output) > 200:
-                    _engine_output.pop(0)
+            _record_engine_line(line)
 
 
 def _engine_running():
@@ -2073,6 +2099,24 @@ def engine_status():
 def engine_output():
     with _engine_lock:
         return jsonify({"lines": list(_engine_output)})
+
+@app.route("/engine/log")
+def engine_log_tail():
+    """Tail the persisted engine stdout log (survives restarts, unlike the
+    200-line memory buffer). ?lines=N (default 500, max 5000)."""
+    try:
+        n = max(1, min(int(request.args.get("lines", 500)), 5000))
+    except (TypeError, ValueError):
+        n = 500
+    if not os.path.exists(_ENGINE_STDOUT_LOG):
+        return jsonify({"lines": [], "msg": "no persisted log yet"})
+    try:
+        with open(_ENGINE_STDOUT_LOG, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+        return jsonify({"lines": lines[-n:], "total": len(lines),
+                        "path": os.path.basename(_ENGINE_STDOUT_LOG)})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"lines": [], "error": str(e)}), 500
 
 @app.route("/engine/start", methods=["POST"])
 def engine_start():
