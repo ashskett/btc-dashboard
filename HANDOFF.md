@@ -42,9 +42,11 @@ entirely (preserve each bot's qty_per_grid) rather than size against a fake $60k
   `/bots/<id>/capital` controls are overwritten by the engine's next budget-based
   redeploy. Use the tier-budget sliders (tier_budgets.json), not the manual USD
   allocators, or they'll revert.
-- OBSERVABILITY GAP found: engine stdout isn't persisted to disk (200-line memory
-  buffer + stale engine_stdout.log) — worth fixing so this class of issue is
-  auditable. Not done this session.
+- OBSERVABILITY GAP — FIXED (commit follows): engine stdout now persisted to
+  `engine_stdout.log` (timestamped, RotatingFileHandler 5MB×5=25MB cap) via
+  `_drain_output` in dashboard_server.py, so history survives past the 200-line
+  memory buffer. Both spawn paths covered. New `GET /engine/log?lines=N` tails it
+  (token-protected). Verified live: full cycles captured with timestamps.
 
 ## Session Summary (2026-06-02) — Order-book awareness, Phase 0 (commit 1453c62)
 
