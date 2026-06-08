@@ -22,13 +22,17 @@ Two jobs, both read-only:
 Nothing here changes trading logic. Usage on the droplet:
     venv/bin/python orderbook_report.py
 """
+import bisect
 import json
 import os
 import sys
+from collections import defaultdict
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OB_LOG = os.path.join(HERE, "orderbook_log.jsonl")
+ENGINE_LOG = os.path.join(HERE, "engine_log.jsonl")
+JOIN_TOL_S = 90    # max gap when matching an order-book ts to an engine cycle
 
 # ── Phase-2 tunables ─────────────────────────────────────────────────────────
 PERSIST_MIN     = 3      # cycles a wall must survive to count as "durable"
@@ -131,72 +135,120 @@ def _wall_events(ob, side):
     return events
 
 
-def _evaluate(ob, side, events):
-    """For each wall event, look forward FWD_CYCLES: did price approach the wall,
-    and if so did it HOLD (reverse) or BREAK through?"""
+def _event_outcome(ob, side, i, W, atr):
+    """Look forward FWD_CYCLES from event i: None if price never approached the
+    wall, else 'held' (reversed) or 'broke' (sliced through)."""
     n = len(ob)
-    approached = held = broke = 0
-    for i, W, atr in events:
-        end = min(i + FWD_CYCLES, n - 1)
-        fut = [ob[j]["price"] for j in range(i + 1, end + 1) if ob[j].get("price")]
-        if not fut:
-            continue
-        touch = TOUCH_TOL_ATR * atr
-        brk = BREAK_TOL_ATR * atr
-        if side == "bid":   # support below — approach = price dips to it
-            reached = min(fut) <= W + touch
-            through = min(fut) < W - brk
-        else:               # resistance above — approach = price rises to it
-            reached = max(fut) >= W - touch
-            through = max(fut) > W + brk
-        if reached:
-            approached += 1
-            broke += 1 if through else 0
-            held += 0 if through else 1
-    return approached, held, broke
+    end = min(i + FWD_CYCLES, n - 1)
+    fut = [ob[j]["price"] for j in range(i + 1, end + 1) if ob[j].get("price")]
+    if not fut:
+        return None
+    touch = TOUCH_TOL_ATR * atr
+    brk = BREAK_TOL_ATR * atr
+    if side == "bid":       # support below — approach = price dips to it
+        if min(fut) > W + touch:
+            return None
+        return "broke" if min(fut) < W - brk else "held"
+    else:                   # resistance above — approach = price rises to it
+        if max(fut) < W - touch:
+            return None
+        return "broke" if max(fut) > W + brk else "held"
+
+
+def _regime_lookup(ob):
+    """Build ts→regime by joining engine_log.jsonl cycles to order-book
+    timestamps. Returns a state_of(ts) function, or None if unavailable.
+    Buckets: 'trending_down' / 'trending_up' / 'RANGE' (per the engine's own
+    trend flags — the convention used everywhere else)."""
+    if not (os.path.exists(ENGINE_LOG) and ob):
+        return None
+    try:
+        sys.path.insert(0, HERE)
+        import backtest as bt
+        cy = bt.load_cycles(ENGINE_LOG, ob[0]["ts"] - 60)
+    except Exception as e:  # noqa: BLE001
+        print(f"  (regime join unavailable: {e})")
+        return None
+    if len(cy) < 30:
+        return None
+    ts_arr = [c["ts"] for c in cy]
+
+    def state_of(ts):
+        j = bisect.bisect_left(ts_arr, ts)
+        best, bd = None, JOIN_TOL_S + 1
+        for k in (j - 1, j):
+            if 0 <= k < len(cy):
+                d = abs(cy[k]["ts"] - ts)
+                if d < bd:
+                    best, bd = cy[k], d
+        if best is None or bd > JOIN_TOL_S:
+            return None
+        if best.get("trending_down"):
+            return "trending_down"
+        if best.get("trending_up"):
+            return "trending_up"
+        return "RANGE"
+
+    return state_of
+
+
+def _verdict(hold, appr):
+    if appr < MIN_EVENTS:
+        return f"INSUFFICIENT ({appr} approaches, need ≥{MIN_EVENTS})"
+    hr = hold / appr
+    if hr >= HOLD_RATE_GREEN:
+        return f"SUPPORTED ({hr*100:.0f}% ≥ {HOLD_RATE_GREEN*100:.0f}%)"
+    return f"NOT SUPPORTED ({hr*100:.0f}% < {HOLD_RATE_GREEN*100:.0f}%)"
 
 
 def phase2_wall_respect(ob):
-    print("\n── Phase-2 validation: do durable walls act as boundaries? ───")
+    print("\n── Phase-2 validation: do durable walls hold, by regime? ─────")
     if len(ob) < 200:
         print("  Not enough book history yet (need ≥200 cycles).")
         return
-    avail_bid = sum(1 for r in ob if _durable_anchorable(r, "bid_walls")[0]) / len(ob)
-    avail_ask = sum(1 for r in ob if _durable_anchorable(r, "ask_walls")[0]) / len(ob)
+    state_of = _regime_lookup(ob)
+    if state_of is None:
+        print("  No engine_log regime join — reporting un-segmented only.")
 
-    tot_appr = tot_held = tot_broke = 0
+    # tally[(regime, side)] = [approached, held, broke, n_walls]
+    tally = defaultdict(lambda: [0, 0, 0, 0])
+    overall = [0, 0, 0]   # appr, held, broke
     for side in ("bid", "ask"):
-        ev = _wall_events(ob, side)
-        appr, held, broke = _evaluate(ob, side, ev)
-        tot_appr += appr; tot_held += held; tot_broke += broke
-        hr = held / appr if appr else 0.0
+        for i, W, atr in _wall_events(ob, side):
+            regime = (state_of(ob[i]["ts"]) if state_of else "ALL") or "unknown"
+            cell = tally[(regime, side)]
+            cell[3] += 1
+            o = _event_outcome(ob, side, i, W, atr)
+            if o is None:
+                continue
+            overall[0] += 1; overall[1 if o == "held" else 2] += 1
+            cell[0] += 1; cell[1 if o == "held" else 2] += 1
+
+    print(f"  {'regime':14s} {'side':16s} {'walls':>5s} {'appr':>5s} "
+          f"{'held':>5s} {'broke':>5s} {'hold':>6s}")
+    order = ["RANGE", "trending_up", "trending_down", "unknown", "ALL"]
+    seen = sorted(tally.keys(),
+                  key=lambda k: (order.index(k[0]) if k[0] in order else 99, k[1]))
+    for regime, side in seen:
+        appr, held, broke, walls = tally[(regime, side)]
         label = "support (bid)" if side == "bid" else "resistance (ask)"
-        print(f"  {label:16s} walls={len(ev):3d}  approached={appr:3d}  "
-              f"held={held:3d} broke={broke:3d}  hold-rate={_pct(held, appr)}")
+        print(f"  {regime:14s} {label:16s} {walls:5d} {appr:5d} "
+              f"{held:5d} {broke:5d} {_pct(held, appr):>6s}")
 
-    print(f"  anchorable wall within ±{ANCHOR_ATR}×ATR of mid — "
-          f"bid: {_pct(int(avail_bid*len(ob)), len(ob))}  ask: {_pct(int(avail_ask*len(ob)), len(ob))}")
+    print(f"  OVERALL hold-rate: {_pct(overall[1], overall[0])} "
+          f"over {overall[0]} approaches")
 
-    hold_rate = tot_held / tot_appr if tot_appr else 0.0
-    avail_min = min(avail_bid, avail_ask)
-    print(f"  combined hold-rate: {_pct(tot_held, tot_appr)} over {tot_appr} approaches")
-
-    # ── Data-driven verdict (no hard-coded optimism) ──────────────────────────
-    print("  VERDICT:", end=" ")
-    if tot_appr < MIN_EVENTS:
-        print(f"INSUFFICIENT DATA — only {tot_appr} wall approaches "
-              f"(need ≥{MIN_EVENTS}). Keep collecting.")
-    elif hold_rate >= HOLD_RATE_GREEN and avail_min >= AVAIL_GREEN:
-        print("SUPPORTED — durable walls hold often enough and sit near the grid "
-              "boundary frequently enough to anchor to. Build Phase 2.")
-    elif hold_rate < HOLD_RATE_GREEN:
-        print(f"NOT SUPPORTED — walls hold only {hold_rate*100:.0f}% of the time "
-              f"(need ≥{HOLD_RATE_GREEN*100:.0f}%); price slices through them too "
-              f"often to anchor boundaries safely.")
-    else:
-        print(f"WEAK — walls hold {hold_rate*100:.0f}% but a durable wall is in "
-              f"anchor range only {avail_min*100:.0f}% of cycles "
-              f"(need ≥{AVAIL_GREEN*100:.0f}%); anchoring would rarely apply.")
+    # ── Verdict — focused on RANGE (the regime where the grid is most active
+    #    and where boundary-anchoring would actually apply). Per side, since
+    #    the downtrend sample showed support and resistance behave differently.
+    print("\n  VERDICT (per regime+side; build anchoring only where SUPPORTED):")
+    for regime in ("RANGE", "trending_up", "trending_down"):
+        for side in ("bid", "ask"):
+            if (regime, side) not in tally:
+                continue
+            appr, held, broke, _ = tally[(regime, side)]
+            label = "support" if side == "bid" else "resistance"
+            print(f"    {regime:14s} {label:11s} → {_verdict(held, appr)}")
 
 
 def main():
