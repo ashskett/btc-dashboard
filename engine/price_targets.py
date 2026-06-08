@@ -88,10 +88,20 @@ def save_targets(targets: list):
 
 # ── Support-failure phase logic ────────────────────────────────────────────────
 
-def _advance_support_failure(t: dict, close_price: float, high_price: float) -> bool:
+def _advance_support_failure(t: dict, close_price: float, high_price: float,
+                             atr: float = 0.0) -> bool:
     """
     Advance a support_failure target through its 4-phase state machine.
     Uses CLOSE prices only — wicks below support that snap back are ignored.
+
+    Two ATR-based escapes were added so a clean breakdown that never retests is
+    not lost (it used to sit in BROKEN forever):
+      • breakdown_failsafe_atr (default 1.5, 0 disables) — if price closes this
+        many ATRs below the level with no retest, FIRE anyway, flagged as a
+        reduced-size fire (sf_fire_reduced) since there's no retest confirmation.
+      • stranded_expire_atr (default 3.0, 0 disables) — safety net for when the
+        failsafe is off: a break that runs this far without retesting expires the
+        target (active=False) instead of staying dead, recording why.
 
     Returns True if the target should fire this cycle.
     """
@@ -130,7 +140,35 @@ def _advance_support_failure(t: dict, close_price: float, high_price: float) -> 
             t["sf_retest_high"] = close_price
             changed = True
 
-        retest_high = float(t.get("sf_retest_high", close_price))
+        retest_high    = float(t.get("sf_retest_high", close_price))
+        failsafe_atr   = float(t.get("breakdown_failsafe_atr", 1.5) or 0)
+        failsafe_max_h = float(t.get("failsafe_max_age_h", 3.0) or 0)
+        expire_atr     = float(t.get("stranded_expire_atr", 3.0) or 0)
+        expire_h       = float(t.get("stranded_expire_h", 24.0) or 0)
+        broken_at      = float(t.get("sf_broken_at") or 0)
+        broken_age_h   = ((time.time() - broken_at) / 3600.0) if broken_at else 0.0
+
+        # #2 Breakdown-distance failsafe — a runaway break that never retests is
+        # the MOST decisive break, yet the retest gate would never fire it. If
+        # price closes >= failsafe_atr×ATR below the level, fire without a retest,
+        # flagged reduced-size (no retest confirmation). Checked first so it wins
+        # over the slower retest/recover paths.
+        #
+        # SAFETY: only fire if the break is RECENT (<= failsafe_max_age_h). A
+        # break that happened long ago (engine restart, missed window, stale
+        # target) must NOT trigger a sell into a move that already played out —
+        # those fall through to the stranded-expire path below instead.
+        fresh = (failsafe_max_h <= 0) or (broken_age_h <= failsafe_max_h)
+        if (failsafe_atr > 0 and atr > 0 and fresh
+                and close_price <= trigger - failsafe_atr * atr):
+            print(f"[SFail] '{t['label']}' FAILSAFE — close ${close_price:,.0f} is "
+                  f"{(trigger - close_price)/atr:.1f}×ATR below ${trigger:,.0f} with no "
+                  f"retest (break {broken_age_h:.1f}h old) — FIRING (reduced size)")
+            t["sf_phase"]        = "watching"
+            t["sf_retest_high"]  = None
+            t["sf_fire_reason"]  = "failsafe_no_retest"
+            t["sf_fire_reduced"] = True
+            return True
 
         # Retest condition: price closed back up to within tolerance of support
         if retest_high >= trigger - tolerance_abs:
@@ -147,13 +185,37 @@ def _advance_support_failure(t: dict, close_price: float, high_price: float) -> 
             changed = True
             print(f"[SFail] '{t['label']}' → WATCHING (price recovered ${close_price:,.0f} > ${trigger:,.0f})")
 
+        # #3 Stranded safety net — the break ran far (expire_atr×ATR) OR has sat
+        # in BROKEN too long (expire_h) without retesting, recovering, or firing.
+        # Expire the target (deactivate) instead of leaving it dead in BROKEN, and
+        # record why so the dashboard can show it. This is also what safely
+        # retires old stale targets after a deploy rather than firing them.
+        elif ((atr > 0 and expire_atr > 0 and close_price <= trigger - expire_atr * atr)
+              or (expire_h > 0 and broken_age_h >= expire_h)):
+            if atr > 0:
+                reason = (f"broke down without retest; ran "
+                          f"{(trigger - close_price)/atr:.1f}×ATR below ${trigger:,.0f} "
+                          f"({broken_age_h:.1f}h in BROKEN)")
+            else:
+                reason = f"stranded in BROKEN for {broken_age_h:.1f}h without retest"
+            t["sf_phase"]          = "watching"
+            t["consec_above"]      = 0
+            t["sf_retest_high"]    = None
+            t["active"]            = False
+            t["sf_expired_reason"] = reason
+            t["sf_expired_at"]     = time.time()
+            changed = True
+            print(f"[SFail] '{t['label']}' EXPIRED (stranded) — {reason}")
+
     elif phase == "retesting":
         # If price closes below support again after the retest → FIRE
         if close_price < trigger:
             print(f"[SFail] '{t['label']}' CONFIRMED — failed retest, "
                   f"close ${close_price:,.0f} below ${trigger:,.0f} — FIRING")
             t["sf_phase"] = "watching"  # reset for next time
-            t["sf_retest_high"] = None
+            t["sf_retest_high"]  = None
+            t["sf_fire_reason"]  = "retest_fail"
+            t["sf_fire_reduced"] = False   # full size — retest confirmed the break
             return True   # ← signal to caller: fire now
 
         # Price recovered back above support and is holding — break was fake
@@ -166,6 +228,30 @@ def _advance_support_failure(t: dict, close_price: float, high_price: float) -> 
                   f"(retest succeeded — support held at ${close_price:,.0f})")
 
     return False
+
+
+def get_support_failure_status() -> list:
+    """Compact per-target view of support_failure targets for the dashboard —
+    makes a stuck/BROKEN target visible instead of silently dead. Read-only."""
+    out = []
+    try:
+        targets = load_targets()
+    except Exception:
+        return out
+    for t in targets:
+        if t.get("detection_mode") != "support_failure":
+            continue
+        out.append({
+            "label":          t.get("label"),
+            "trigger":        t.get("trigger_price"),
+            "active":         bool(t.get("active")),
+            "fired":          bool(t.get("fired")),
+            "sf_phase":       t.get("sf_phase", "watching"),
+            "sf_retest_high": t.get("sf_retest_high"),
+            "sf_broken_at":   t.get("sf_broken_at"),
+            "expired_reason": t.get("sf_expired_reason"),
+        })
+    return out
 
 
 # ── Core: check all targets against current price ─────────────────────────────
@@ -276,7 +362,7 @@ def check_targets(price: float, atr: float,
 
         # Support-failure mode: dedicated state machine
         if mode == "support_failure" and direction == "DOWN":
-            should_fire = _advance_support_failure(t, close, high)
+            should_fire = _advance_support_failure(t, close, high, atr)
             changed = True  # phase may have advanced
 
             if should_fire:

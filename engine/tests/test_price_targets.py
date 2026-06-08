@@ -361,3 +361,116 @@ class TestMultipleTargets:
         result = pt.check_targets(price=75000, atr=600)
         assert result is not None
         assert result["label"] == "active"
+
+
+# ── Support-failure breakdown failsafe (#2) + stranded expire (#3) ────────────
+
+def _sf_target(**kw):
+    """A DOWN support_failure target dict for driving _advance_support_failure
+    directly. confirm_closes=1 so one close below breaks it immediately."""
+    t = {
+        "label": "Key Support",
+        "trigger_price": 65000,
+        "confirm_closes": 1,
+        "retest_tolerance_pct": 0.5,   # band = $325 at 65k
+        "sf_phase": "watching",
+        "consec_above": 0,
+        "breakdown_failsafe_atr": 1.5,
+        "stranded_expire_atr": 3.0,
+    }
+    t.update(kw)
+    return t
+
+
+class TestSupportFailureFailsafe:
+    ATR = 1000.0
+
+    def _to_broken(self, t, close=64000):
+        """Drive watching → broken (one confirming close below)."""
+        fired = pt._advance_support_failure(t, close, close, self.ATR)
+        assert fired is False
+        assert t["sf_phase"] == "broken"
+
+    def test_retest_fail_still_fires_full_size(self):
+        """Classic path: break → bounce into retest band → close below = FIRE, full size."""
+        t = _sf_target()
+        self._to_broken(t, 64000)
+        # bounce back to within tolerance ($325) of 65000 → RETESTING
+        pt._advance_support_failure(t, 64800, 64800, self.ATR)
+        assert t["sf_phase"] == "retesting"
+        # close below again → fire
+        fired = pt._advance_support_failure(t, 64000, 64000, self.ATR)
+        assert fired is True
+        assert t["sf_fire_reason"] == "retest_fail"
+        assert t["sf_fire_reduced"] is False
+
+    def test_runaway_breakdown_fires_via_failsafe_reduced(self):
+        """No retest, price runs ≥1.5×ATR below → failsafe fires at reduced size."""
+        t = _sf_target()
+        self._to_broken(t, 64000)
+        # 63000 is 2×ATR below 65000 (≥1.5×ATR) and never retested
+        fired = pt._advance_support_failure(t, 63000, 63000, self.ATR)
+        assert fired is True
+        assert t["sf_fire_reason"] == "failsafe_no_retest"
+        assert t["sf_fire_reduced"] is True
+
+    def test_failsafe_not_triggered_just_below_threshold(self):
+        """A break that stays within 1.5×ATR and never retests does NOT fire."""
+        t = _sf_target()
+        self._to_broken(t, 64000)
+        # 63800 is 1.2×ATR below — under the 1.5×ATR failsafe, beyond retest band
+        fired = pt._advance_support_failure(t, 63800, 63800, self.ATR)
+        assert fired is False
+        assert t["sf_phase"] == "broken"
+        assert t.get("active", True) is True
+
+    def test_failsafe_disabled_then_expires_when_stranded(self):
+        """failsafe off + price runs ≥3×ATR below → target expires (active False)."""
+        t = _sf_target(breakdown_failsafe_atr=0)
+        self._to_broken(t, 64000)
+        fired = pt._advance_support_failure(t, 61000, 61000, self.ATR)  # 4×ATR below
+        assert fired is False
+        assert t["active"] is False
+        assert t["sf_expired_reason"]
+        assert t["sf_phase"] == "watching"
+
+    def test_no_atr_guards_failsafe_and_expire(self):
+        """With atr=0 neither escape engages — stays BROKEN, still active."""
+        t = _sf_target()
+        pt._advance_support_failure(t, 60000, 60000, 0.0)  # break with atr=0
+        assert t["sf_phase"] == "broken"
+        fired = pt._advance_support_failure(t, 55000, 55000, 0.0)  # far, atr=0
+        assert fired is False
+        assert t["sf_phase"] == "broken"
+        assert t.get("active", True) is True
+
+    def test_wick_below_does_not_fire_uses_close(self):
+        """A deep wick (low) that CLOSES back above support must not fire."""
+        t = _sf_target()
+        # close stays above trigger even though the bar's low pierced it
+        fired = pt._advance_support_failure(t, 65200, 65200, self.ATR)
+        assert fired is False
+        assert t["sf_phase"] == "watching"
+
+    def test_stale_break_does_not_fire_and_expires(self):
+        """A break that happened long ago (e.g. across a deploy) must NOT fire the
+        failsafe — it expires instead. Mirrors the live stranded-target scenario."""
+        t = _sf_target()
+        t["sf_phase"] = "broken"
+        t["sf_broken_at"] = time.time() - 100 * 3600   # 100h old break
+        t["sf_retest_high"] = 63000
+        # price 3×ATR below and break is stale → expire, never fire
+        fired = pt._advance_support_failure(t, 62000, 62000, self.ATR)
+        assert fired is False
+        assert t["active"] is False
+        assert t["sf_expired_reason"]
+
+    def test_old_broken_expires_by_age_even_without_atr(self):
+        """Stuck in BROKEN past stranded_expire_h expires on age alone."""
+        t = _sf_target()
+        t["sf_phase"] = "broken"
+        t["sf_broken_at"] = time.time() - 48 * 3600     # 48h > 24h default
+        t["sf_retest_high"] = 64000
+        fired = pt._advance_support_failure(t, 64000, 64000, 0.0)  # atr unknown
+        assert fired is False
+        assert t["active"] is False

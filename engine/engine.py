@@ -35,7 +35,7 @@ from indicators import add_indicators
 from regime import (detect_regime, trend_strength, compression_exit_fast, get_regime_state,
                     TRENDING_UP_EXIT, TRENDING_DOWN_EXIT)
 from threecommas import stop_bot, start_bot, redeploy_all_bots
-from price_targets import check_targets, update_target
+from price_targets import check_targets, update_target, get_support_failure_status
 from threecommas_dca import (
     create_dca_bot,
     enable_dca_bot,
@@ -1287,6 +1287,14 @@ def run():
                 _st_tp_steps = _pt_state.get("smart_trade_tp_steps") or []
                 _st_sl_pct   = float(_pt_state.get("smart_trade_sl_pct", 1.5))
                 _st_sell_pct = float(_pt_state.get("smart_trade_sell_pct", 25.0))
+                # Failsafe fires (breakdown ran away without a retest) carry less
+                # confirmation, so size them down (default ×0.5, per-target override
+                # via failsafe_size_mult). Set by price_targets._advance_support_failure.
+                if _pt_state.get("sf_fire_reduced"):
+                    _fs_mult = float(_pt_state.get("failsafe_size_mult", 0.5))
+                    _st_sell_pct *= _fs_mult
+                    print(f"  SmartTrade FAILSAFE fire (no retest) — reduced to "
+                          f"{_st_sell_pct:.1f}% (×{_fs_mult})")
 
                 if _st_enabled and _hold_secs_st == 0 and _st_tp_steps:
                     snap = portfolio_snapshot()
@@ -1879,6 +1887,9 @@ def run():
                 "price_target_tp":      _pt_state.get("price_target")  if _pt_state else None,
                 "price_target_dca_id":  _pt_state.get("dca_bot_id")    if _pt_state else None,
                 "dca_launch_error":     _dca_launch_error,
+                # Support-failure targets — surface sf_phase so a stuck/BROKEN
+                # target is visible on the dashboard instead of silently dead.
+                "support_targets":      get_support_failure_status(),
                 # Weekend mode
                 "weekend_mode": _prev_weekend_mode,
                 # TREND_DOWN stabilisation progress (for dashboard + future retest logic)
