@@ -249,6 +249,49 @@ def build_suggestions(m):
     return out
 
 
+def compute_amplitude():
+    """Distribution of the live swing-amplitude / fee-floor ratio over the window
+    (status.grid_amplitude, logged each cycle). Calibration data for the future
+    lean-in / lean-out thresholds — INFORMATIONAL ONLY, files no task. ratio≥1 =
+    swings clear the fee floor; 'thin' = sub-floor grind where the grid churns."""
+    if not os.path.exists(ENGINE_LOG):
+        return None
+    since = (datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)).timestamp()
+    ratios = []
+    bands = {"rich": 0, "ok": 0, "thin": 0}
+    bands_range = {"rich": 0, "ok": 0, "thin": 0}
+    with open(ENGINE_LOG) as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = d.get("ts")
+            if not ts or ts < since:
+                continue
+            ga = d.get("grid_amplitude")
+            if not isinstance(ga, dict) or ga.get("ratio") is None:
+                continue   # warming / pre-deploy / no reading
+            ratios.append(ga["ratio"])
+            band = ga.get("band")
+            if band in bands:
+                bands[band] += 1
+                if d.get("regime") == "RANGE":
+                    bands_range[band] += 1
+    n = len(ratios)
+    if n < 50:
+        return {"n": n}
+    ratios.sort()
+    def pctl(p):
+        return ratios[min(n - 1, int(p * n))]
+    nr = sum(bands_range.values())
+    return {
+        "n": n, "median": pctl(0.5), "p25": pctl(0.25), "p75": pctl(0.75),
+        "bands": bands, "range_n": nr,
+        "range_thin_frac": (bands_range["thin"] / nr if nr else 0.0),
+    }
+
+
 def main():
     print(f"=== Weekly backtest review {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} ===")
     m = compute()
@@ -263,6 +306,21 @@ def main():
         print(f"  {k:14s} {s['count']:3d} recentres, {s['duds']} duds "
               f"({s['dud_frac']*100:.0f}%)  [{scope}]")
     print(f"  RANGE fee_ok: {m['fee_ok_frac']*100:.0f}% of {m['range_cycles']} cycles")
+
+    # ── Amplitude vs fee floor (informational — calibration data, no task) ────
+    amp = compute_amplitude()
+    amp_line = ""
+    if amp and amp.get("n", 0) >= 50:
+        b = amp["bands"]
+        print(f"  Amplitude/fee-floor: median ratio {amp['median']:.2f} "
+              f"(p25 {amp['p25']:.2f} / p75 {amp['p75']:.2f}) over {amp['n']} reads; "
+              f"bands rich/ok/thin = {b['rich']}/{b['ok']}/{b['thin']}; "
+              f"RANGE-thin {amp['range_thin_frac']*100:.0f}%")
+        amp_line = (f" | amp median {amp['median']:.2f}, "
+                    f"RANGE-thin {amp['range_thin_frac']*100:.0f}% (n={amp['n']})")
+    elif amp is not None:
+        print(f"  Amplitude/fee-floor: only {amp.get('n', 0)} reads — accumulating.")
+        amp_line = f" | amp accumulating (n={amp.get('n', 0)})"
 
     suggestions = build_suggestions(m)
     existing = get_existing_task_ids()
@@ -286,7 +344,8 @@ def main():
             f"range {bs['RANGE']['count']}; fee_ok {m['fee_ok_frac']*100:.0f}%. "
             f"All within thresholds."
         )
-    log_memory(f"Weekly backtest review {datetime.now(timezone.utc):%Y-%m-%d}", insight)
+    log_memory(f"Weekly backtest review {datetime.now(timezone.utc):%Y-%m-%d}",
+               insight + amp_line)
     print(f"Done. {len(filed)} task(s) filed.")
 
 

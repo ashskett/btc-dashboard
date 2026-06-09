@@ -25,7 +25,10 @@ grid_logic), ratio, band rich/ok/thin}. ratio≥1 = swings clear the floor.
 Provisional bands are placeholders TO CALIBRATE. No trading decision uses it yet.
 Deployed; reads "warming" for ~15 min after a restart while the ring refills.
 NEXT: watch `grid_amplitude.ratio` across a few amplitude regimes, set the
-lean-in/lean-out cuts, then wire into tier activity/capital.
+lean-in/lean-out cuts, then wire into tier activity/capital. The Monday weekly
+review (`weekly_backtest_review.py`) now prints + logs the amplitude/fee-floor
+distribution (median ratio, p25/p75, rich/ok/thin bands, RANGE-thin %) each week
+— informational, files no task — so the calibration data accrues automatically.
 - **Status:** All 3 bots live, ~$64k BTC. Engine restarted 2026-06-08 after the
   support-failure + capital deploy — 0 tracebacks, the two stale stuck targets
   expired cleanly (no erroneous sell), `support_targets` + `liquidity` in status.
