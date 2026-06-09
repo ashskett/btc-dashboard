@@ -126,6 +126,30 @@ def log_memory(topic, insight):
     })
 
 
+def post_project_note(text):
+    """Attach the review to the grid-engine project record on the AI OS
+    (mirrors to Notion). Self-heals the project first in case the registry
+    dropped it."""
+    if DRY_RUN:
+        print(f"  [dry-run] WOULD POST PROJECT NOTE ({len(text)} chars)")
+        return
+    _req("GET", f"/projects/ensure?project={PROJECT}&name=Grid+Engine"
+                f"&status=active&source=weekly-backtest-cron")
+    st, _ = _req("POST", f"/projects/{PROJECT}/note",
+                 {"text": text, "added_by": "weekly-backtest-cron"})
+    print(f"  project note: HTTP {st}")
+
+
+def cos_notify(message):
+    """Deliver the review to Ash via the Chief-of-Staff channel (Telegram)."""
+    if DRY_RUN:
+        print(f"  [dry-run] WOULD COS-NOTIFY ({len(message)} chars)")
+        return
+    st, _ = _req("POST", "/cos/notify",
+                 {"source": "grid-engine weekly review", "message": message})
+    print(f"  cos notify: HTTP {st}")
+
+
 # ── Metrics ─────────────────────────────────────────────────────────────────
 def compute():
     if not os.path.exists(ENGINE_LOG):
@@ -327,76 +351,69 @@ def compute_orderbook():
 
 
 def main():
-    print(f"=== Weekly backtest review {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} ===")
+    today = f"{datetime.now(timezone.utc):%Y-%m-%d}"
+    report = []   # human-readable lines → printed, posted as note, sent to COS
+
+    def emit(line):
+        print(line)
+        report.append(line)
+
+    emit(f"=== Grid-engine weekly review {today} ===")
     m = compute()
     if m is None:
+        # compute() already logged a "skipped" memory entry
+        cos_notify(f"Grid-engine weekly review {today}: skipped — "
+                   f"fewer than 50 cycles in the window.")
         return
     bs = m["by_state"]
-    print(f"Window {m['days']:.1f}d | recentres {m['recentres']} ({m['rate']:.2f}/day)"
-          f" | post-gate {m['post_gate_days']:.1f}d")
+    emit(f"Window {m['days']:.1f}d | recentres {m['recentres']} "
+         f"({m['rate']:.2f}/day) | post-gate {m['post_gate_days']:.1f}d")
     for k in ("trending_down", "trending_up", "RANGE"):
         s = bs[k]
         scope = "post-gate" if k != "RANGE" else "full window"
-        print(f"  {k:14s} {s['count']:3d} recentres, {s['duds']} duds "
-              f"({s['dud_frac']*100:.0f}%)  [{scope}]")
-    print(f"  RANGE fee_ok: {m['fee_ok_frac']*100:.0f}% of {m['range_cycles']} cycles")
+        emit(f"  {k:14s} {s['count']:3d} recentres, {s['duds']} duds "
+             f"({s['dud_frac']*100:.0f}%)  [{scope}]")
+    emit(f"  RANGE fee_ok: {m['fee_ok_frac']*100:.0f}% of {m['range_cycles']} cycles")
 
     # ── Amplitude vs fee floor (informational — calibration data, no task) ────
     amp = compute_amplitude()
-    amp_line = ""
     if amp and amp.get("n", 0) >= 50:
         b = amp["bands"]
-        print(f"  Amplitude/fee-floor: median ratio {amp['median']:.2f} "
-              f"(p25 {amp['p25']:.2f} / p75 {amp['p75']:.2f}) over {amp['n']} reads; "
-              f"bands rich/ok/thin = {b['rich']}/{b['ok']}/{b['thin']}; "
-              f"RANGE-thin {amp['range_thin_frac']*100:.0f}%")
-        amp_line = (f" | amp median {amp['median']:.2f}, "
-                    f"RANGE-thin {amp['range_thin_frac']*100:.0f}% (n={amp['n']})")
+        emit(f"  Amplitude/fee-floor: median ratio {amp['median']:.2f} "
+             f"(p25 {amp['p25']:.2f} / p75 {amp['p75']:.2f}) over {amp['n']} reads; "
+             f"bands rich/ok/thin = {b['rich']}/{b['ok']}/{b['thin']}; "
+             f"RANGE-thin {amp['range_thin_frac']*100:.0f}%")
     elif amp is not None:
-        print(f"  Amplitude/fee-floor: only {amp.get('n', 0)} reads — accumulating.")
-        amp_line = f" | amp accumulating (n={amp.get('n', 0)})"
+        emit(f"  Amplitude/fee-floor: only {amp.get('n', 0)} reads — accumulating.")
 
     # ── Order-book: collector health + RANGE wall hold-rate (Phase-2 signal) ──
     ob = compute_orderbook()
-    ob_line = ""
     if ob and ob.get("n", 0) >= 200:
         def _hr(regime, side):
             t = ob["tally"].get((regime, side))
             return f"{100*t[1]/t[0]:.0f}%({t[0]})" if t and t[0] else "n/a"
-        print(f"  Order-book: {ob['n']} cyc/{ob['span_h']/24:.1f}d, durable wall "
-              f"bid {ob['dur_bid']*100:.0f}%/ask {ob['dur_ask']*100:.0f}%; "
-              f"RANGE hold support {_hr('RANGE','bid')} resistance {_hr('RANGE','ask')}")
-        ob_line = (f" | OB RANGE-hold sup {_hr('RANGE','bid')}/"
-                   f"res {_hr('RANGE','ask')}")
+        emit(f"  Order-book: {ob['n']} cyc/{ob['span_h']/24:.1f}d, durable wall "
+             f"bid {ob['dur_bid']*100:.0f}%/ask {ob['dur_ask']*100:.0f}%; "
+             f"RANGE hold support {_hr('RANGE','bid')} resistance {_hr('RANGE','ask')}")
     elif ob is not None:
-        print(f"  Order-book: {ob.get('n', 0)} cycles — accumulating.")
-        ob_line = f" | OB accumulating (n={ob.get('n', 0)})"
+        emit(f"  Order-book: {ob.get('n', 0)} cycles — accumulating.")
 
+    # ── File any threshold-breach suggestions ────────────────────────────────
     suggestions = build_suggestions(m)
     existing = get_existing_task_ids()
     filed = []
     for tid, title, summary in suggestions:
         if file_suggestion(tid, title, summary, existing):
             filed.append(title)
+    emit(f"  Suggestions filed to dev list: {'; '.join(filed) if filed else 'none'}")
 
-    if filed:
-        insight = (
-            f"Recentres {m['recentres']} ({m['rate']:.2f}/day); "
-            f"td {bs['trending_down']['count']}/{bs['trending_down']['dud_frac']*100:.0f}%dud, "
-            f"tu {bs['trending_up']['count']}/{bs['trending_up']['dud_frac']*100:.0f}%dud, "
-            f"range {bs['RANGE']['count']}/{bs['RANGE']['dud_frac']*100:.0f}%dud; "
-            f"fee_ok {m['fee_ok_frac']*100:.0f}%. Filed: " + "; ".join(filed)
-        )
-    else:
-        insight = (
-            f"No actionable findings. Recentres {m['recentres']} ({m['rate']:.2f}/day); "
-            f"td {bs['trending_down']['count']}, tu {bs['trending_up']['count']}, "
-            f"range {bs['RANGE']['count']}; fee_ok {m['fee_ok_frac']*100:.0f}%. "
-            f"All within thresholds."
-        )
-    log_memory(f"Weekly backtest review {datetime.now(timezone.utc):%Y-%m-%d}",
-               insight + amp_line + ob_line)
-    print(f"Done. {len(filed)} task(s) filed.")
+    # ── Publish: memory log + project note + COS (Telegram) delivery ─────────
+    report_text = "\n".join(report)
+    insight = report_text if filed else ("No new actionable findings.\n" + report_text)
+    log_memory(f"Weekly backtest review {today}", insight)
+    post_project_note(report_text)
+    cos_notify(report_text)
+    print(f"Done. {len(filed)} task(s) filed; review delivered to project + COS.")
 
 
 if __name__ == "__main__":

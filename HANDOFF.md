@@ -35,6 +35,15 @@ dry-run: RANGE hold support 57% / resistance 64% — resistance clears the 60%
 Phase-2 bar, support doesn't; anchoring the upper boundary looks the more viable
 half.) NOTE: this turn also deployed the regime-segmented `orderbook_report.py`
 to the droplet (the earlier scp had failed during an SSH outage).
+
+PUBLISHING: the weekly review now delivers itself three ways (in addition to
+the droplet `weekly_backtest_review.log`): (1) `/memory/log` as before, (2)
+`POST /projects/grid-engine/note` — attaches the full review to the project
+record (mirrors to Notion); self-heals via `GET /projects/ensure` first, (3)
+`POST /cos/notify` — pushes it to Ash's Chief-of-Staff Telegram bot
+(@ash_ai_army_bot). All verified live (note + COS both HTTP 200; a real run
+delivered the actual review). The grid-engine project registry was repaired
+AI-OS-side on 2026-06-08 (the earlier "gridbot not found" 404 is resolved).
 - **Status:** All 3 bots live, ~$64k BTC. Engine restarted 2026-06-08 after the
   support-failure + capital deploy — 0 tracebacks, the two stale stuck targets
   expired cleanly (no erroneous sell), `support_targets` + `liquidity` in status.
