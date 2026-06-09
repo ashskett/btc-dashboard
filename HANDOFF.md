@@ -2,6 +2,30 @@
 
 > Updated by the last agent to work on this project. Read this before starting.
 
+## ⚠️ Dashboard memory bloat — ROOT CAUSE FIXED (2026-06-09)
+
+**Symptom (recurring):** budget sliders showed 30/20/15 (=65%, the code defaults)
+and wouldn't stick; capital "looked too low". **Not a file reset** —
+`tier_budgets.json` was correct at 95% (38/31/26) and bots were deployed 93%
+the whole time.
+
+**Root cause:** `engine_log.read_log()` opened the **100MB** `engine_log.jsonl`
+and json-parsed EVERY line (~40k dicts) on each call, keeping only the last N.
+`/notifications` calls it and the dashboard polls `/notifications`, so on the
+**1GB droplet** the dashboard process climbed to 650MB+ RSS and thrashed 1.9GB
+swap — listening but unable to answer `/budgets` (→ showed code defaults) or save.
+This also explains the recurring SSH banner timeouts (box swap-starved).
+
+**Fix (commit pushed):** `read_log()` now seeks a **bounded tail** (O(limit), not
+O(file)); same for the `/engine/log` endpoint. After deploy+restart: dashboard
+responsive, `/notifications` 0.2s (was timing out), `/budgets` returns the real
+95%, **swap 1.9GB→255MB**, dashboard RSS stable ~500MB.
+
+**STILL UNDERSIZED — recommend to Ash:** 961MB total RAM, dashboard baseline
+~500MB (Flask+pandas+ccxt+numpy). Headroom is thin even fixed. **Resize the
+droplet to 2GB** for durability. Minor follow-up: `engine_log.jsonl` grows
+unbounded (100MB) — rotate it (tail-read makes it non-urgent now).
+
 ## Current State
 - **Project:** grid-engine (canonical AI OS key — NOT `gridbot`)
 - **Branch:** claude/grid-engine-chat-review-hEEGu
