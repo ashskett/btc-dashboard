@@ -31,6 +31,7 @@ from grid_logic import (
 from dashboard import show_dashboard
 from market_data import get_btc_data, get_btc_data_short
 import orderbook  # Phase 0: read-only order-book liquidity collector (no decisions)
+import amplitude  # Phase 0: realized swing amplitude vs fee floor (observability)
 from indicators import add_indicators
 from regime import (detect_regime, trend_strength, compression_exit_fast, get_regime_state,
                     TRENDING_UP_EXIT, TRENDING_DOWN_EXIT)
@@ -558,6 +559,7 @@ def run():
     state = EngineState()
     _bo_state  = {}      # populated in breakout section; needed in finally block
     _liquidity = None    # order-book snapshot (Phase 0); needed in finally block
+    _amplitude = None    # swing-amplitude vs fee floor (Phase 0); needed in finally
     _pt_state  = None    # active price target (if any); needed in finally block
     _prox      = None    # proximity alert direction; needed in finally block
     TRENDLINE  = None    # declared early so finally block can always reference it
@@ -577,6 +579,19 @@ def run():
         state.price = df["close"].iloc[-1]
         state.atr = df["atr"].iloc[-1]
         state.volatility_ratio = state.atr / state.price
+
+        # ===============================
+        # SWING AMPLITUDE vs FEE FLOOR (Phase 0 — observability only)
+        # Push price onto the ~30-min ring and read the swing/fee-floor ratio.
+        # No API call, no trading decision — feeds status + log so we can
+        # calibrate lean-in/lean-out thresholds from live data.
+        # ===============================
+        try:
+            amplitude.update(state.price)
+            _amplitude = amplitude.snapshot(float(state.price))
+        except Exception as _ae:
+            print(f"Warning: amplitude snapshot failed: {_ae}")
+            _amplitude = None
 
         # ===============================
         # ORDER-BOOK LIQUIDITY (Phase 0 — observability only, no decisions)
@@ -1872,6 +1887,8 @@ def run():
                 "tier_states":     _compute_tier_states(state, TRENDLINE, _trendline_active),
                 # Order-book liquidity (Phase 0 — observability only)
                 "liquidity":       _liquidity,
+                # Swing amplitude vs fee floor (Phase 0 — observability only)
+                "grid_amplitude":  _amplitude,
                 # Breakout state
                 "breakout_active":        _bo_state.get("active"),
                 "breakout_fire_price":    _bo_state.get("fire_price"),
