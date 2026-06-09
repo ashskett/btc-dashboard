@@ -2111,10 +2111,16 @@ def engine_log_tail():
     if not os.path.exists(_ENGINE_STDOUT_LOG):
         return jsonify({"lines": [], "msg": "no persisted log yet"})
     try:
-        with open(_ENGINE_STDOUT_LOG, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-        return jsonify({"lines": lines[-n:], "total": len(lines),
-                        "path": os.path.basename(_ENGINE_STDOUT_LOG)})
+        # Bounded tail read — never load the whole file into memory.
+        approx = max(n * 400, 512 * 1024)
+        size = os.path.getsize(_ENGINE_STDOUT_LOG)
+        with open(_ENGINE_STDOUT_LOG, "rb") as f:
+            if size > approx:
+                f.seek(-approx, os.SEEK_END)
+                f.readline()
+            data = f.read()
+        lines = data.decode("utf-8", errors="replace").splitlines()
+        return jsonify({"lines": lines[-n:], "path": os.path.basename(_ENGINE_STDOUT_LOG)})
     except Exception as e:  # noqa: BLE001
         return jsonify({"lines": [], "error": str(e)}), 500
 

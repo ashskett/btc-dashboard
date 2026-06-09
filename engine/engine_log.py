@@ -26,18 +26,36 @@ def write_log_entry(state_dict: dict):
         f.write(json.dumps(entry) + "\n")
 
 def read_log(limit=500):
-    """Return last N log entries as a list of dicts."""
+    """Return the last N log entries as a list of dicts.
+
+    Reads ONLY the tail of the file. engine_log.jsonl grows unbounded (100MB+),
+    and the previous implementation json-parsed every line into ~40k dicts on
+    every call — on the 1GB droplet that pinned the dashboard process at 650MB+
+    RSS and thrashed swap, making the dashboard unresponsive (budgets wouldn't
+    load/save). Seeking to a bounded tail keeps memory at O(limit), not O(file).
+    """
     if not os.path.exists(LOG_PATH):
         return []
+    # Tail chunk sized to comfortably hold `limit` lines (each ~1-2KB), min 1MB.
+    approx = max(limit * 4096, 1_000_000)
+    try:
+        size = os.path.getsize(LOG_PATH)
+        with open(LOG_PATH, "rb") as f:
+            if size > approx:
+                f.seek(-approx, os.SEEK_END)
+                f.readline()  # discard the partial first line after the seek
+            data = f.read()
+    except OSError:
+        return []
     entries = []
-    with open(LOG_PATH, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    entries.append(json.loads(line))
-                except Exception:
-                    pass
+    for raw in data.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            entries.append(json.loads(raw))
+        except Exception:
+            pass
     return entries[-limit:]
 
 def clear_log():
