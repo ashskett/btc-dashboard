@@ -5,8 +5,27 @@
 ## Current State
 - **Project:** grid-engine (canonical AI OS key — NOT `gridbot`)
 - **Branch:** claude/grid-engine-chat-review-hEEGu
-- **Last known commit:** d47da90 (capital skip-resize fix) / a654502 (SF failsafe)
-- **Active task:** None — deployed and running
+- **Last known commit:** amplitude gate (Phase 0) — swing-vs-fee-floor in status
+- **Active task:** Calibrate amplitude lean-in/lean-out thresholds from live data
+
+## Session note — grid amplitude research + observability gate
+
+Ash observed the grid harvests better at the range lows than the highs.
+`fills_research.py` (read-only, 85 days) CONFIRMED it: realized 30-min swing
+~0.57% at 58-64k vs ~0.24% at 74-82k (≈2×), grid productivity 6.3 vs 3.4 profit
+round-trips/RANGE-day. KEY: mean swing is BELOW the ~0.6% fee floor in every band
+— the grid lives off the minority of spikes that clear the floor (common at lows,
+rare at highs). So the fix is NOT tighter spacing (fee floor blocks it) but
+**scaling activity with measured swing-vs-fee-floor**, keyed off measured
+amplitude (self-correcting), not price level (this sample was one 82k→59k drop).
+
+Built `amplitude.py` (observability only): ~30-min in-memory price ring →
+`status.grid_amplitude` = {swing_pct, fee_floor_pct (0.6, imported from
+grid_logic), ratio, band rich/ok/thin}. ratio≥1 = swings clear the floor.
+Provisional bands are placeholders TO CALIBRATE. No trading decision uses it yet.
+Deployed; reads "warming" for ~15 min after a restart while the ring refills.
+NEXT: watch `grid_amplitude.ratio` across a few amplitude regimes, set the
+lean-in/lean-out cuts, then wire into tier activity/capital.
 - **Status:** All 3 bots live, ~$64k BTC. Engine restarted 2026-06-08 after the
   support-failure + capital deploy — 0 tracebacks, the two stale stuck targets
   expired cleanly (no erroneous sell), `support_targets` + `liquidity` in status.
