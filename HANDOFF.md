@@ -27,8 +27,14 @@ Deployed; reads "warming" for ~15 min after a restart while the ring refills.
 NEXT: watch `grid_amplitude.ratio` across a few amplitude regimes, set the
 lean-in/lean-out cuts, then wire into tier activity/capital. The Monday weekly
 review (`weekly_backtest_review.py`) now prints + logs the amplitude/fee-floor
-distribution (median ratio, p25/p75, rich/ok/thin bands, RANGE-thin %) each week
-— informational, files no task — so the calibration data accrues automatically.
+distribution (median ratio, p25/p75, rich/ok/thin bands, RANGE-thin %) AND the
+order-book summary (collector health + regime-segmented RANGE wall hold-rate,
+reusing orderbook_report helpers) each week — both informational, file no task —
+so calibration data for both research threads accrues automatically. (Latest
+dry-run: RANGE hold support 57% / resistance 64% — resistance clears the 60%
+Phase-2 bar, support doesn't; anchoring the upper boundary looks the more viable
+half.) NOTE: this turn also deployed the regime-segmented `orderbook_report.py`
+to the droplet (the earlier scp had failed during an SSH outage).
 - **Status:** All 3 bots live, ~$64k BTC. Engine restarted 2026-06-08 after the
   support-failure + capital deploy — 0 tracebacks, the two stale stuck targets
   expired cleanly (no erroneous sell), `support_targets` + `liquidity` in status.

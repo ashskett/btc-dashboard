@@ -292,6 +292,40 @@ def compute_amplitude():
     }
 
 
+def compute_orderbook():
+    """Order-book collector health + regime-segmented wall hold-rate (the Phase-2
+    signal: do durable walls hold as boundaries, especially in RANGE?).
+    INFORMATIONAL ONLY — files no task. Reuses orderbook_report helpers so the
+    wall logic has a single source of truth."""
+    try:
+        sys.path.insert(0, HERE)
+        import orderbook_report as obr
+    except Exception:
+        return None
+    ob = obr._load_ob()
+    if not ob or len(ob) < 200:
+        return {"n": len(ob) if ob else 0}
+    span_h = (ob[-1]["ts"] - ob[0]["ts"]) / 3600.0
+    n = len(ob)
+    dur_bid = sum(1 for r in ob if any(
+        w.get("persistence", 0) >= obr.PERSIST_MIN for w in r.get("bid_walls", []))) / n
+    dur_ask = sum(1 for r in ob if any(
+        w.get("persistence", 0) >= obr.PERSIST_MIN for w in r.get("ask_walls", []))) / n
+    state_of = obr._regime_lookup(ob)
+    tally = {}   # (regime, side) -> [approached, held]
+    for side in ("bid", "ask"):
+        for i, W, atr in obr._wall_events(ob, side):
+            regime = (state_of(ob[i]["ts"]) if state_of else "ALL") or "unknown"
+            o = obr._event_outcome(ob, side, i, W, atr)
+            if o is None:
+                continue
+            t = tally.setdefault((regime, side), [0, 0])
+            t[0] += 1
+            t[1] += 1 if o == "held" else 0
+    return {"n": n, "span_h": span_h, "dur_bid": dur_bid, "dur_ask": dur_ask,
+            "tally": tally}
+
+
 def main():
     print(f"=== Weekly backtest review {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} ===")
     m = compute()
@@ -322,6 +356,22 @@ def main():
         print(f"  Amplitude/fee-floor: only {amp.get('n', 0)} reads — accumulating.")
         amp_line = f" | amp accumulating (n={amp.get('n', 0)})"
 
+    # ── Order-book: collector health + RANGE wall hold-rate (Phase-2 signal) ──
+    ob = compute_orderbook()
+    ob_line = ""
+    if ob and ob.get("n", 0) >= 200:
+        def _hr(regime, side):
+            t = ob["tally"].get((regime, side))
+            return f"{100*t[1]/t[0]:.0f}%({t[0]})" if t and t[0] else "n/a"
+        print(f"  Order-book: {ob['n']} cyc/{ob['span_h']/24:.1f}d, durable wall "
+              f"bid {ob['dur_bid']*100:.0f}%/ask {ob['dur_ask']*100:.0f}%; "
+              f"RANGE hold support {_hr('RANGE','bid')} resistance {_hr('RANGE','ask')}")
+        ob_line = (f" | OB RANGE-hold sup {_hr('RANGE','bid')}/"
+                   f"res {_hr('RANGE','ask')}")
+    elif ob is not None:
+        print(f"  Order-book: {ob.get('n', 0)} cycles — accumulating.")
+        ob_line = f" | OB accumulating (n={ob.get('n', 0)})"
+
     suggestions = build_suggestions(m)
     existing = get_existing_task_ids()
     filed = []
@@ -345,7 +395,7 @@ def main():
             f"All within thresholds."
         )
     log_memory(f"Weekly backtest review {datetime.now(timezone.utc):%Y-%m-%d}",
-               insight + amp_line)
+               insight + amp_line + ob_line)
     print(f"Done. {len(filed)} task(s) filed.")
 
 
