@@ -32,6 +32,7 @@ from dashboard import show_dashboard
 from market_data import get_btc_data, get_btc_data_short
 import orderbook  # Phase 0: read-only order-book liquidity collector (no decisions)
 import amplitude  # Phase 0: realized swing amplitude vs fee floor (observability)
+import fills_capture  # persist BUY/SELL fills each cycle before 3Commas wipes them
 from indicators import add_indicators
 from regime import (detect_regime, trend_strength, compression_exit_fast, get_regime_state,
                     TRENDING_UP_EXIT, TRENDING_DOWN_EXIT)
@@ -604,6 +605,18 @@ def run():
         except Exception as _obe:
             print(f"Warning: order-book snapshot failed: {_obe} — continuing without liquidity")
             _liquidity = None
+
+        # ===============================
+        # FILL CAPTURE (persist BUY/SELL fills before 3Commas wipes market_orders
+        # on the next bot restart — fixes the chart's missing buy arrows). Pure
+        # data capture, wrapped so it can never interrupt the cycle.
+        # ===============================
+        try:
+            _nf = fills_capture.capture(GRID_BOTS)
+            if _nf:
+                print(f"  Captured {_nf} new fill(s) to fills_log.jsonl")
+        except Exception as _fe:
+            print(f"Warning: fill capture failed: {_fe}")
 
         # ===============================
         # FLASH MOVE DETECTION
