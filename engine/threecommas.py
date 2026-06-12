@@ -143,11 +143,19 @@ def redeploy_bot(bot_id, tier, budget_usd=None):
     grids = int(tier["levels"])
     mid_price = (lower + upper) / 2
 
-    # Calculate qty_per_grid from budget if provided
+    # Calculate qty_per_grid from budget if provided.
+    # A grid of N lines places only N-1 live orders — the line nearest price
+    # sits neutral (the base position, no order). Sizing qty against `grids`
+    # therefore under-deploys by (N-1)/N: negligible at 10 levels (~10%) but a
+    # big 33% shortfall once the fee guard squeezes a tier to 3 levels in low
+    # vol. Size against the live-order count so the full budget is deployed
+    # regardless of level count.
+    active_orders = max(grids - 1, 1)
     if budget_usd and budget_usd > 0 and mid_price > 0:
-        qty = budget_usd / (grids * mid_price)
+        qty = budget_usd / (active_orders * mid_price)
         print(f"    Budget: ${budget_usd:,.0f} → qty_per_grid={qty:.6f} BTC "
-              f"(${budget_usd/grids:,.0f}/level × {grids} levels)")
+              f"(${budget_usd/active_orders:,.0f}/order × {active_orders} live orders "
+              f"of {grids} lines)")
     else:
         # Fallback: preserve original qty (legacy behaviour for manual calls)
         qty = float(current.get("quantity_per_grid") or 0) or (100.0 / mid_price)
