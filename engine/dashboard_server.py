@@ -957,7 +957,12 @@ def bot_fills():
         # These persist across bot restarts, unlike market_orders.
         for i, bid in enumerate(ids[:3]):
             offset = 0
-            while offset < 2000:
+            # Recent page only. Previously paginated up to 2000 profits/bot
+            # (~60 sequential 3Commas calls) on EVERY /bots/fills request, which
+            # grew past the 25s timeout and hung the dashboard. Older profits are
+            # already persisted in fills_log.jsonl, so one recent page suffices to
+            # pick up new ones; history is loaded from disk below.
+            while offset < 100:
                 r = signed_request("GET", f"/ver1/grid_bots/{bid}/profits",
                                    params={"limit": 100, "offset": offset})
                 if r.status_code != 200:
