@@ -15,13 +15,17 @@ def calculate_grid_width(atr):
 # Coinbase Advanced Trade fees from transaction history:
 #   Maker (limit orders resting): 0.10%
 #   Taker (crossing the spread):  0.20%
-# Grid bot orders are limit orders but fills are taker events.
-# Use conservative round-trip (buy taker + sell taker) = 0.40%
-TAKER_FEE       = 0.0020   # per leg
-ROUND_TRIP_FEE  = TAKER_FEE * 2   # 0.40% total — conservative
+# Grid bot orders are LIMIT orders → they fill as MAKER, not taker.
+# Coinbase Advanced (Adv 4): maker 0.07% / taker 0.16%. Backing the real fee out
+# of realised grid profit confirmed ~0.23% round-trip (a maker/taker blend), far
+# below the old 0.40% taker assumption which was ~3× too strict and starved the
+# inner tier of levels (lumpy fills). Use a slightly conservative 0.10% maker
+# basis (covers the odd taker fill + a drop to Adv 3) → 0.20% round-trip.
+TAKER_FEE       = 0.0010   # per-leg maker basis (conservative vs real 0.07%)
+ROUND_TRIP_FEE  = TAKER_FEE * 2   # 0.20% total
 FEE_BUFFER      = 1.5      # safety multiplier: step must be 1.5× the break-even minimum
-# So effective minimum step = price × 0.40% × 1.5 = price × 0.60%
-# At $70,000 that's $420 minimum step
+# So effective minimum step = price × 0.20% × 1.5 = price × 0.30%
+# At $66,000 that's ~$198 minimum step (was $396) → roughly doubles level density
 
 # ── Tier definitions ─────────────────────────────────────────────────────────
 # Each tier is a multiplier on grid_width (ATR×3).

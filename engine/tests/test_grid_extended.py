@@ -86,17 +86,16 @@ class TestFeeGuard:
 
     def test_fee_guard_reduces_levels_when_step_too_small(self):
         """
-        At a moderate ATR where the natural step is below min_step but the
-        guard can find a valid level count, verify levels are reduced vs base.
-        atr=200 at price=70000:
-          mid grid_width = 3 * 200 * 1.5 = 900, range = 1800
-          natural step at 6 levels = 300; min_step = 70000 * 0.004 * 1.5 = 420
-          → fee guard fires; max_levels = floor(1800/420) = 4
+        At a low ATR the natural step falls below the (recalibrated, maker-based)
+        min_step, so the guard reduces levels. atr=100 at price=70000:
+          mid grid_width = 3 * 100 * 1.5 = 450, range = 900
+          natural step at 6 levels = 150; min_step = 70000 * 0.002 * 1.5 = 210
+          → fee guard fires; max_levels = floor(900/210) = 4
         """
-        result = _calc(price=70000, atr=200, session="EUROPE")
+        result = _calc(price=70000, atr=100, session="EUROPE")
         mid = result["tiers"][1]
         # Fee guard should have reduced levels below the base (6)
-        assert mid["levels"] <= 6
+        assert mid["levels"] < 6
 
     def test_weekend_inner_uses_lower_fee_buffer(self):
         """

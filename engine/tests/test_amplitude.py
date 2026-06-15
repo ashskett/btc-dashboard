@@ -8,9 +8,9 @@ def _push(prices):
         amp.update(p)
 
 
-def test_fee_floor_is_point_six_pct():
-    # ROUND_TRIP_FEE (0.4%) × FEE_BUFFER (1.5) = 0.6%
-    assert round(amp.FEE_FLOOR_PCT, 2) == 0.6
+def test_fee_floor_is_point_three_pct():
+    # ROUND_TRIP_FEE (0.20% maker basis) × FEE_BUFFER (1.5) = 0.30%
+    assert round(amp.FEE_FLOOR_PCT, 2) == 0.3
 
 
 def test_warming_until_min_samples():
@@ -38,6 +38,6 @@ def test_thin_when_swing_below_floor():
 def test_ratio_tracks_fee_floor():
     _push([70000, 70210, 70000, 70100, 70050, 70000])  # 0.3% range
     s = amp.snapshot(70000)
-    # 0.3% swing / 0.6% floor ≈ 0.5
-    assert 0.4 <= s["ratio"] <= 0.6
-    assert s["band"] == "thin"
+    # 0.3% swing / 0.30% floor ≈ 1.0
+    assert 0.9 <= s["ratio"] <= 1.1
+    assert s["band"] == "ok"
