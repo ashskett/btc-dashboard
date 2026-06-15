@@ -135,6 +135,11 @@ def _run_cycle(patches_dict, prev_regime=None, bot_ids=None):
         engine._prev_regime = prev_regime
         # Reset rate limiter
         engine._action_timestamps.clear()
+        # Reset the _act() dedup cache so bot start/stop calls aren't skipped as
+        # "redundant" based on state leaked from a previous test (made the
+        # decision-table assertions order-dependent).
+        engine._bot_last_action.clear()
+        engine._bot_action_cycle = 0
         engine.run()
         return patches_dict
 
@@ -452,3 +457,31 @@ class TestRecentreGate:
         mult, confirm, tag = engine._recentre_gate_params(True, True)
         assert mult == engine.TREND_DOWN_RECENTRE_EXTREME_MULT
         assert "trending_down" in tag
+
+
+class TestBreakoutBuyOnlyOverride:
+    """BREAKOUT_UP must NOT pause inner+mid when in BUY_ONLY — keep accumulating."""
+
+    def _bo_up(self, btc_ratio, prev_inv):
+        import engine
+        p = _engine_patches(regime="RANGE", breakout_active="UP", btc_ratio=btc_ratio)
+        # avoid None math in the breakout block, and skip the BUY_ONLY *entry*
+        # transition so the cycle reaches the active-breakout bot logic
+        p["get_breakout_state"].return_value["fire_price"] = 70000.0
+        engine._prev_inventory_mode = prev_inv
+        _run_cycle(p, prev_regime="RANGE")
+        return p
+
+    def test_breakout_up_buy_only_keeps_all_on(self):
+        p = self._bo_up(btc_ratio=0.05, prev_inv="BUY_ONLY")
+        start_ids = [c.args[0] for c in p["start_bot"].call_args_list]
+        stop_ids  = [c.args[0] for c in p["stop_bot"].call_args_list]
+        assert "bot_inner" in start_ids and "bot_mid" in start_ids and "bot_outer" in start_ids
+        assert "bot_inner" not in stop_ids and "bot_mid" not in stop_ids
+
+    def test_breakout_up_normal_still_pauses_inner_mid(self):
+        p = self._bo_up(btc_ratio=0.60, prev_inv="NORMAL")
+        stop_ids  = [c.args[0] for c in p["stop_bot"].call_args_list]
+        start_ids = [c.args[0] for c in p["start_bot"].call_args_list]
+        assert "bot_inner" in stop_ids and "bot_mid" in stop_ids
+        assert "bot_outer" in start_ids

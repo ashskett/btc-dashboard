@@ -960,8 +960,19 @@ def run():
                 if _active_dir == "UP":
                     increment_active_cycles()
                     _cycles = _bo_state.get("cycles_active", 0) + 1  # +1 = value after increment
-                    _inner_ready = breakout_inner_ready(df)
-                    if _inner_ready:
+                    # BUY_ONLY override: when BTC is critically low the inventory
+                    # system is in BUY_ONLY trying to rebuild it. Pausing inner+mid
+                    # for a BREAKOUT_UP would freeze the very accumulation we need
+                    # (and forced a manual breakout-clear to buy). In BUY_ONLY the
+                    # tiers are buy-only grids, so keeping them ON means "keep
+                    # buying the dips", not "buy the spike". Override the pause.
+                    if state.inventory_mode == "BUY_ONLY":
+                        print(f"BREAKOUT_UP active ({_cycles} cycles) — BUY_ONLY: all "
+                              f"tiers stay ON to keep accumulating BTC (pause overridden)")
+                        for i, bot in enumerate(GRID_BOTS[:3]):
+                            tier_name = ["inner", "mid", "outer"][i]
+                            _act(bot, True, f"{tier_name} (breakout UP — BUY_ONLY accumulate)")
+                    elif breakout_inner_ready(df):
                         print(f"BREAKOUT_UP active ({_cycles} cycles) — momentum fading, "
                               f"restarting inner bot (mid still off, outer running)")
                         for i, bot in enumerate(GRID_BOTS[:3]):
