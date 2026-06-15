@@ -33,6 +33,7 @@ from market_data import get_btc_data, get_btc_data_short
 import orderbook  # Phase 0: read-only order-book liquidity collector (no decisions)
 import amplitude  # Phase 0: realized swing amplitude vs fee floor (observability)
 import fills_capture  # persist BUY/SELL fills each cycle before 3Commas wipes them
+import ride_mode  # manually-armed trend-up accumulation mode
 from indicators import add_indicators
 from regime import (detect_regime, trend_strength, compression_exit_fast, get_regime_state,
                     TRENDING_UP_EXIT, TRENDING_DOWN_EXIT)
@@ -252,6 +253,36 @@ def _make_intensive_sell_tiers(price: float, tiers: list) -> list:
     return result
 
 
+def _make_ride_tiers(price: float, tiers: list, buy_frac: float = 0.75) -> list:
+    """Buy-heavy + light-sell tiers for RIDE mode (trend-up accumulation).
+
+    Unlike the intensive-buy grid (all below price, 60% compressed), the ride grid
+    STRADDLES price — weighted ~75% below (buy every pullback) / ~25% above (a few
+    light sells to bank spike profit), at near-full width so it has room to catch
+    real pullbacks. As the engine trails it up, the buys keep sitting just under
+    price; the small sell band tops up profit without dumping the position.
+    """
+    import copy as _copy
+    result = []
+    for tier in tiers:
+        t = _copy.deepcopy(tier)
+        orig_width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
+        new_width  = round(orig_width, 2)                     # full width — pullback room
+        new_low    = round(price - new_width * buy_frac, 2)   # 75% below price → buys
+        new_high   = round(price + new_width * (1 - buy_frac), 2)  # 25% above → light sells
+        n          = _apply_intensive_fee_guard(t, new_width)
+        new_step   = round(new_width / max(n - 1, 1), 2)
+        t["grid_high"]   = new_high
+        t["grid_low"]    = new_low
+        t["levels"]      = n
+        t["step"]        = new_step
+        if t.get("min_step"):
+            t["fee_ok"] = bool(new_step >= float(t["min_step"]))
+        t["grid_levels"] = [round(new_low + i * new_step, 2) for i in range(n)]
+        result.append(t)
+    return result
+
+
 _TL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trendlines.json")
 
 def _try_auto_activate_trendline(td_last_low: float, current_price: float,
@@ -430,6 +461,7 @@ _last_run_ts = 0
 _prev_regime: str | None = None
 _prev_trending_down: bool = False
 _prev_inventory_mode: str | None = None
+_prev_ride_active: bool = False   # was RIDE mode active last cycle (entry detection)
 _prev_weekend_mode: bool = False
 # Drift stabilisation: counts consecutive cycles where drift threshold is exceeded.
 # Recentre only fires after DRIFT_CONFIRM_CYCLES cycles — filters single-candle spikes.
@@ -540,7 +572,7 @@ def _recentre_gate_params(trending_down: bool, trending_up: bool):
 
 
 def run():
-    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle, _drift_confirm_cycles
+    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle, _drift_confirm_cycles, _prev_ride_active
     now = time.time()
     if now - _last_run_ts < 100:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
@@ -1000,6 +1032,65 @@ def run():
                 except Exception as _ct_err:
                     print(f"  Warning: target side-effect check failed: {_ct_err}")
                 return  # breakout still active — do not fall through to normal regime logic
+
+        # ===============================
+        # RIDE MODE (manually-armed trend-up accumulation)
+        # ===============================
+        # When armed, overrides inventory + tiered decisions: deploy a buy-heavy
+        # grid (75% buys below price / 25% light sells above), keep ALL tiers on,
+        # and trail UP with price so it buys every pullback and never sells the
+        # position down. Auto-disarms if price falls disarm_pct below the trailing
+        # high (trend break), then falls through to normal logic. Placed AFTER
+        # flash-move/breakout so those safety paths still take precedence.
+        state.ride_active = False
+        try:
+            _ride = ride_mode.get_state()
+        except Exception:
+            _ride = {"armed": False}
+        if _ride.get("armed"):
+            ride_mode.update_trailing_high(state.price)
+            _ride = ride_mode.get_state()
+            if ride_mode.should_auto_disarm(state.price):
+                _rm = (f"auto: ${state.price:,.0f} fell "
+                       f"{_ride.get('disarm_pct', 5):.0f}% below high "
+                       f"${_ride.get('trailing_high', 0):,.0f}")
+                ride_mode.disarm(_rm)
+                notify_critical(f"RIDE auto-disarmed at ${state.price:,.0f} — "
+                                f"trend break; reverting to normal grid")
+                _prev_ride_active = False
+                # fall through to normal logic (no return) so the engine re-manages
+                # the now-larger BTC position this same cycle
+            else:
+                _ride_tiers = _make_ride_tiers(state.price, state.tiers)
+                _entering   = not _prev_ride_active
+                _gw         = state.grid_width or 1
+                _trail      = (state.center is None) or \
+                              ((state.price - (state.center or state.price)) > _gw * 0.5)
+                if _entering or _trail:
+                    _why = "entering" if _entering else "trailing up"
+                    print(f"[Ride] {_why} — buy-heavy accumulation grid at ${state.price:,.0f}")
+                    notify(f"RIDE mode {_why} — buy-heavy accumulation at ${state.price:,.0f}")
+                    if DRY_RUN:
+                        print(f"  [SIM] Would deploy ride tiers (buy-heavy + light sells)")
+                    elif _can_act():
+                        _record_action()
+                        redeploy_all_bots(GRID_BOTS, _ride_tiers)
+                        _mark_all_bots_started()
+                        update_grid_center(state.price, grid_width=state.grid_width,
+                                           deployed_tiers=_ride_tiers)
+                    else:
+                        print(f"  Rate limit reached — ride deploy deferred to next cycle")
+                for i, bot in enumerate(GRID_BOTS[:3]):
+                    _act(bot, True, f"{['inner','mid','outer'][i]} (RIDE accumulate)")
+                state.inventory_mode = "RIDE"
+                state.ride_active = True
+                _disarm_lvl = ride_mode.disarm_level(_ride) or 0
+                _decision_summary = (f"RIDE: buy-heavy accumulation, trailing up "
+                                     f"(disarm < ${_disarm_lvl:,.0f})")
+                _prev_ride_active = True
+                return   # skip normal inventory/tiered logic — status export runs in finally
+        else:
+            _prev_ride_active = False   # not armed — reset entry detection
 
         # ===============================
         # PRICE TARGETS (user-defined trigger levels)
@@ -1913,6 +2004,9 @@ def run():
                 "liquidity":       _liquidity,
                 # Swing amplitude vs fee floor (Phase 0 — observability only)
                 "grid_amplitude":  _amplitude,
+                # Ride mode (manually-armed trend-up accumulation)
+                "ride_mode":       ride_mode.get_state(),
+                "ride_active":     bool(getattr(state, "ride_active", False)),
                 # Breakout state
                 "breakout_active":        _bo_state.get("active"),
                 "breakout_fire_price":    _bo_state.get("fire_price"),

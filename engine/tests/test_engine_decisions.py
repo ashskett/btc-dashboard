@@ -485,3 +485,47 @@ class TestBreakoutBuyOnlyOverride:
         start_ids = [c.args[0] for c in p["start_bot"].call_args_list]
         assert "bot_inner" in stop_ids and "bot_mid" in stop_ids
         assert "bot_outer" in start_ids
+
+
+class TestRideMode:
+    """Manually-armed trend-up accumulation overrides inventory + tiered logic."""
+
+    def test_make_ride_tiers_straddles_price_75_25(self):
+        import engine
+        tiers = [{"name": "inner", "grid_low": 64000, "grid_high": 66000,
+                  "levels": 6, "min_step": 100}]
+        out = engine._make_ride_tiers(65000, tiers, buy_frac=0.75)[0]
+        below = 65000 - out["grid_low"]
+        above = out["grid_high"] - 65000
+        assert out["grid_low"] < 65000 < out["grid_high"]      # straddles price
+        assert abs(below - 1500) < 60 and abs(above - 500) < 60  # 75% / 25% of 2000
+
+    @staticmethod
+    def _no_flash(p):
+        from unittest.mock import MagicMock
+        p["detect_flash_move"] = MagicMock(return_value={"status": "none"})
+        p["get_flash_move_state"] = MagicMock(return_value={"active": None, "cooldown_remaining": 0})
+        return p
+
+    def test_armed_keeps_all_bots_on_and_marks_ride(self, tmp_path, monkeypatch):
+        import ride_mode
+        monkeypatch.setattr(ride_mode, "STATE_FILE", str(tmp_path / "ride_mode.json"))
+        ride_mode.arm(70000, 5.0)
+        p = self._no_flash(_engine_patches(regime="RANGE", price=70000, btc_ratio=0.60))
+        _run_cycle(p, prev_regime="RANGE")
+        # redeploy_all_bots starts the bots + _mark_all_bots_started, so _act(True)
+        # dedups (no start_bot). "All on" = nothing stopped + ride grid deployed.
+        assert [c.args[0] for c in p["stop_bot"].call_args_list] == []
+        assert p["redeploy_all_bots"].called
+        status = p["write_status"].call_args.args[0]
+        assert "RIDE" in status["decision_summary"]
+        assert status["inventory_mode"] == "RIDE"
+        assert status["ride_active"] is True
+
+    def test_auto_disarms_on_drawdown_below_trailing_high(self, tmp_path, monkeypatch):
+        import ride_mode
+        monkeypatch.setattr(ride_mode, "STATE_FILE", str(tmp_path / "ride_mode.json"))
+        ride_mode.arm(75000, 5.0)                 # high 75000 → disarm at 71250
+        p = self._no_flash(_engine_patches(regime="RANGE", price=70000))  # below 71250
+        _run_cycle(p, prev_regime="RANGE")
+        assert ride_mode.is_armed() is False      # auto-disarmed

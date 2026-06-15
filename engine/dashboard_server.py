@@ -1707,6 +1707,44 @@ def breakout_clear():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+# ── Ride mode (manually-armed trend-up accumulation) ──────
+@app.route("/ride/arm", methods=["POST"])
+def ride_arm():
+    """Arm trend-up ride mode at the current price. Body: {disarm_pct?: float}."""
+    import ride_mode
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        disarm_pct = float(body.get("disarm_pct", ride_mode.DEFAULT_DISARM_PCT))
+        # current price from the latest engine status
+        price = 0.0
+        sf = os.path.join(os.path.dirname(__file__), "engine_status.json")
+        if os.path.exists(sf):
+            price = float(json.load(open(sf)).get("price") or 0)
+        if price <= 0:
+            return jsonify({"ok": False, "msg": "no current price available"}), 503
+        s = ride_mode.arm(price, disarm_pct)
+        return jsonify({"ok": True, "msg": f"Ride mode ARMED at ${price:,.0f}", "state": s})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/ride/disarm", methods=["POST"])
+def ride_disarm():
+    """Manually disarm ride mode — engine reverts to normal next cycle."""
+    import ride_mode
+    try:
+        s = ride_mode.disarm("manual (dashboard)")
+        return jsonify({"ok": True, "msg": "Ride mode disarmed", "state": s})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/ride/state")
+def ride_state():
+    import ride_mode
+    return jsonify(ride_mode.get_state())
+
+
 @app.route("/flash-move/clear", methods=["POST"])
 def flash_move_clear():
     """Clear flash move state — resume normal operation."""
