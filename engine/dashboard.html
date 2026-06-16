@@ -637,6 +637,27 @@
     </div>
   </div>
 
+  <!-- RIDE MODE -->
+  <div class="sec">
+    <div class="sec-title">Ride Mode <span style="font-size:9px;color:var(--muted);font-weight:400;">trend-up accumulation</span></div>
+    <div id="rideStatus" style="font-size:11px;font-family:'Space Mono',monospace;color:var(--muted);margin:4px 0 8px;">Disarmed</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+      <div style="font-size:9px;color:var(--muted);">DISARM %</div>
+      <input type="number" id="rideDisarmPct" min="1" max="20" step="0.5" value="3"
+        style="width:64px;background:#080c10;border:1px solid #243044;color:var(--fg);
+        font-family:'Space Mono',monospace;font-size:11px;padding:4px 6px;border-radius:4px;box-sizing:border-box;">
+      <span style="font-size:9px;color:var(--muted);">below trailing high</span>
+    </div>
+    <div class="btn-row">
+      <button class="cbtn" onclick="rideArm()" style="border-color:var(--green);color:var(--green);">Arm</button>
+      <button class="cbtn on-r" onclick="rideDisarm()">Disarm</button>
+    </div>
+    <div style="font-size:9px;color:var(--muted);margin-top:5px;line-height:1.5;">
+      Buys every pullback (buy-heavy grid), trails up, holds the position — no sell-down.
+      Auto-disarms on a drop below the trailing high.
+    </div>
+  </div>
+
   <!-- MASTER CONTROLS -->
   <div class="sec">
     <div class="sec-title">Master Controls</div>
@@ -1205,7 +1226,7 @@ function showAlertModal(message, danger){
 
 const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
 
-let chart, candles, gridLines=[], targetLines=[];
+let chart, candles, ma200=null, gridLines=[], targetLines=[];
 let showGrid=true, showTL=true;
 let priceTargets = [];
 let currentTf='1h';
@@ -1269,10 +1290,36 @@ function initChart(){
     },
   });
 
+  // 200-day moving average overlay (gold line). Computed from daily candles.
+  ma200 = chart.addLineSeries({
+    color:'#f5c518', lineWidth:2, priceLineVisible:false,
+    lastValueVisible:true, crosshairMarkerVisible:false, title:'200D MA',
+  });
+
   new ResizeObserver(()=>{
     const m = document.querySelector('main');
     chart.resize(m.clientWidth, m.clientHeight);
   }).observe(document.querySelector('main'));
+}
+
+// ── 200-DAY MA ────────────────────────────────────────────
+async function loadMA200(){
+  if(!ma200) return;
+  try{
+    const r = await fetch(`${API}/candles?tf=1d&limit=300`);
+    if(!r.ok) return;
+    const data = await r.json();
+    if(!Array.isArray(data) || data.length < 200) return;
+    const rows = data.map(c=>({t:Math.floor(c[0]/1000), c:c[4]})).sort((a,b)=>a.t-b.t);
+    const out = [];
+    let sum = 0;
+    for(let i=0;i<rows.length;i++){
+      sum += rows[i].c;
+      if(i >= 200) sum -= rows[i-200].c;
+      if(i >= 199) out.push({time:rows[i].t, value:+(sum/200).toFixed(2)});
+    }
+    ma200.setData(out);
+  }catch(e){}
 }
 
 // ── CANDLE LOAD ───────────────────────────────────────────
@@ -1515,6 +1562,7 @@ async function pollStatus(){
 
     document.getElementById('sInvMode').textContent = d.inventory_mode||'—';
     document.getElementById('sRegime').innerHTML    = `<span class="badge ${d.regime}">${d.regime}</span>`;
+    updateRideStatus(d.ride_mode);
 
     // inventory bar — don't overwrite if manual override is active
     if(!invOverrideActive){
@@ -2096,6 +2144,34 @@ async function saveBandSettings(){
     if(d.error) throw new Error(d.error);
     toast(`Band settings saved — target ${Math.round(target*100)}%, band ${Math.round(lower*100)}%–${Math.round(upper*100)}%, stops ${Math.round(min_btc*100)}%–${Math.round(max_btc*100)}%`, 'ok');
   } catch(e){ toast(`Error: ${e.message}`, 'err'); }
+}
+
+// ── RIDE MODE ────────────────────────────────────────────
+async function rideArm(){
+  const pct = parseFloat(document.getElementById('rideDisarmPct').value) || 3;
+  if(!confirm(`Arm RIDE mode? Buy-heavy accumulation, trails up, holds the position. Auto-disarm ${pct}% below the trailing high.`)) return;
+  try{
+    const r = await fetch(`${API}/ride/arm`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disarm_pct:pct})});
+    const d = await r.json();
+    toast(d.msg || (d.ok?'Ride armed':'Failed'), d.ok ? 'ok' : 'err');
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+async function rideDisarm(){
+  try{
+    const r = await fetch(`${API}/ride/disarm`, {method:'POST'});
+    const d = await r.json();
+    toast(d.msg || 'Disarmed', d.ok ? 'ok' : 'err');
+  } catch(e){ toast(`Error: ${e.message}`,'err'); }
+}
+function updateRideStatus(rm){
+  const el = document.getElementById('rideStatus'); if(!el) return;
+  if(rm && rm.armed){
+    const th = rm.trailing_high || rm.armed_price || 0;
+    const dl = th * (1 - (rm.disarm_pct||3)/100);
+    el.innerHTML = `<span style="color:var(--green);">● ARMED</span> · high $${Math.round(th).toLocaleString()} · disarm &lt; $${Math.round(dl).toLocaleString()}`;
+  } else {
+    el.textContent = 'Disarmed';
+  }
 }
 
 // ── BREAKOUT CLEAR ───────────────────────────────────────
@@ -3671,6 +3747,7 @@ initTlCanvas();
 chart.timeScale().subscribeVisibleLogicalRangeChange(_onLogicalRangeChange);
 
 loadCandles(currentTf);
+loadMA200();
 pollStatus();
 loadBots();
 loadFills();
@@ -3684,6 +3761,7 @@ setInterval(pollStatus, 5000);
 setInterval(pollEngineProc, 5000);
 setInterval(pollLogStatus, 10000);
 setInterval(()=>loadCandles(currentTf), 60000);
+setInterval(loadMA200, 600000);   // 200D MA changes slowly — refresh every 10 min
 loadBots();
 setInterval(loadBots, 30000);
 setInterval(loadFills, 300000);

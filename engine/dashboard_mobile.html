@@ -395,6 +395,20 @@ input[type="range"] { width:100%; accent-color:var(--accent); height:20px; }
     </div>
     <button class="action-btn" style="background:rgba(0,212,255,.12);border:1px solid var(--accent);color:var(--accent)" onclick="saveBandSettings()">Save Band Settings</button>
   </div>
+  <!-- Ride Mode -->
+  <div class="section">
+    <div class="sec-title">Ride Mode <span style="font-size:10px;color:var(--muted);font-weight:400;">trend-up accumulation</span></div>
+    <div id="rideStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px;">Disarmed</div>
+    <div style="margin-bottom:8px;">
+      <div class="form-label">Disarm % below trailing high</div>
+      <input type="number" id="rideDisarmPct" class="form-input" value="3" min="1" max="20" step="0.5" style="width:110px;">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <button class="action-btn" style="background:rgba(0,230,118,.12);border:1px solid #00e676;color:#00e676" onclick="rideArm()">Arm</button>
+      <button class="action-btn" style="background:rgba(255,61,90,.12);border:1px solid #ff3d5a;color:#ff3d5a" onclick="rideDisarm()">Disarm</button>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4;">Buys pullbacks, trails up, holds the position — no sell-down. Auto-disarms on a drop below the trailing high.</div>
+  </div>
   <!-- Inventory Override -->
   <div class="section">
     <div class="sec-title">Inventory Override</div>
@@ -766,6 +780,7 @@ async function pollStatus(){
     // Inventory
     if(d.btc_ratio!=null){ const pct=(d.btc_ratio*100).toFixed(1); document.getElementById('invFill').style.width=pct+'%'; document.getElementById('invPct').textContent=pct+'%'; document.getElementById('iBtcR').textContent=pct+'%'; }
     document.getElementById('iMode').textContent=d.inventory_mode||'-';
+    updateRideStatus(d.ride_mode);
     const modes={NORMAL:['mNormal','on-b'],BUY_ONLY:['mBuy','on-g'],SELL_ONLY:['mSell','on-r']};
     Object.entries(modes).forEach(([k,[id,cls]])=>{ document.getElementById(id).className=`mbtn ${d.inventory_mode===k?cls:''}`; });
     // Alerts
@@ -1159,6 +1174,22 @@ async function saveBandSettings(){
   const t=parseFloat(document.getElementById('bsTarget').value)/100, l=parseFloat(document.getElementById('bsLower').value)/100, u=parseFloat(document.getElementById('bsUpper').value)/100;
   const tp=parseFloat(document.getElementById('bsTaper').value)/100, mn=parseFloat(document.getElementById('bsMinBtc').value)/100, mx=parseFloat(document.getElementById('bsMaxBtc').value)/100;
   try{const r=await fetch('/inventory/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_btc:t,lower_band:l,upper_band:u,taper_zone:tp,min_btc:mn,max_btc:mx})}); const d=await r.json(); if(d.error) throw new Error(d.error); toast(`Bands saved: ${Math.round(l*100)}%-${Math.round(u*100)}%`,'ok');}catch(e){toast(e.message,'err');}
+}
+
+// ── RIDE MODE ──
+async function rideArm(){
+  const pct=parseFloat(document.getElementById('rideDisarmPct').value)||3;
+  if(!confirm(`Arm RIDE mode? Buy-heavy accumulation, trails up, auto-disarm ${pct}% below high.`)) return;
+  try{const r=await fetch('/ride/arm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disarm_pct:pct})}); const d=await r.json(); toast(d.msg||(d.ok?'Armed':'Failed'), d.ok?'ok':'err');}catch(e){toast(e.message,'err');}
+}
+async function rideDisarm(){
+  try{const r=await fetch('/ride/disarm',{method:'POST'}); const d=await r.json(); toast(d.msg||'Disarmed', d.ok?'ok':'err');}catch(e){toast(e.message,'err');}
+}
+function updateRideStatus(rm){
+  const el=document.getElementById('rideStatus'); if(!el) return;
+  if(rm&&rm.armed){const th=rm.trailing_high||rm.armed_price||0; const dl=th*(1-(rm.disarm_pct||3)/100);
+    el.innerHTML=`<span style="color:#00e676">● ARMED</span> · high $${Math.round(th).toLocaleString()} · disarm &lt; $${Math.round(dl).toLocaleString()}`;
+  } else { el.textContent='Disarmed'; }
 }
 
 // ── MACRO ──
