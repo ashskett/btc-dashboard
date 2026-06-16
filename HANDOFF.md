@@ -2,6 +2,47 @@
 
 > Updated by the last agent to work on this project. Read this before starting.
 
+## Session 2026-06-16 — major batch (all deployed unless noted)
+
+**Trading-logic changes (live):**
+- **Fee guard recalibration (grid_logic.py):** grid orders fill as MAKER, not
+  taker. Coinbase Adv-4 = 0.07% maker. Floor cut **0.60% → 0.30%**
+  (`TAKER_FEE 0.0020→0.0010`). **Inner 3 → 7 levels** — fixes lumpy fills.
+  ⚠️ This re-frames all prior "swings below fee floor" analysis: the old floor
+  was ~3× too high, so ~2-3× more chop is actually harvestable. amplitude.py
+  inherits the floor automatically. **Biggest performance lever found.**
+- **Capital sizing fix (threecommas.py `redeploy_bot`):** qty sized against
+  `(grids-1)` live orders, not `grids` (a grid leaves one line neutral). Inner/mid
+  verified at 98-99% of budget. NOT over-deploying (the "130%" was a measurement
+  artifact counting the neutral line). Lumpy inner fills are structural (big
+  budget on few fee-guard-limited levels), now mitigated by the fee recal.
+- **RIDE MODE (ride_mode.py + engine.py):** manually-armed trend-up accumulation.
+  Buy-heavy grid (75% buys/25% light sells), trails up, holds position, suppresses
+  forced selling. Auto-disarm default **3%** below trailing high (configurable per
+  arm). Endpoints `/ride/arm,/disarm,/state`; UI card on desktop + mobile.
+  **Currently DISARMED** — arm via dashboard or `POST /ride/arm {disarm_pct}`.
+- **Recentre gate tightened:** trending_up 1.10×/6cyc → **1.60×/8cyc**,
+  trending_down 2.0× → **2.5×** (RIDE mode covers deliberate trend-riding, so the
+  autonomous gate stops chasing — was 80-86% dud).
+- **Order-book Phase 2 wall anchoring (engine.py `_anchor_tiers_to_walls`):**
+  RANGE+NORMAL only — nudges tier boundaries onto durable bid/ask walls (bounded
+  0.5×ATR, fee-safe). 13d data: walls hold 61%/63% in RANGE. `status.wall_anchored`.
+- **BUY_ONLY-breakout override:** BREAKOUT_UP no longer pauses inner+mid in
+  BUY_ONLY (keep accumulating). SF failsafe (#2/#3) earlier in session.
+
+**Observability/infra:** every-cycle buy-fill capture (fills_capture.py), engine
+stdout persisted (engine_stdout.log + /engine/log), dashboard memory fix (read_log
+tail), /bots/fills profits-pagination cap, **droplet resized to 2GB**, 200-day MA
+on chart (light-grey, opted out of autoscale so it never hides candles).
+
+**Weekly review delivery BROKEN (needs Ash):** AI OS rotated its API key + removed
+`/cos/notify`. ALL keys on the droplet 403 "Invalid API key". Report still writes
+to `weekly_backtest_review.log`. Needs the new key + new COS endpoint from Ash.
+Also blocks `/memory/log` — so this session is NOT in AI OS memory.
+
+**248 tests pass.** Last weekly (2026-06-15): recentres 4.2/day (was 7.6 on 6/8),
+RANGE fee_ok 100%, RANGE wall hold-rate support 61%/resistance 63%.
+
 ## ⚠️ Dashboard memory bloat — ROOT CAUSE FIXED (2026-06-09)
 
 **Symptom (recurring):** budget sliders showed 30/20/15 (=65%, the code defaults)
