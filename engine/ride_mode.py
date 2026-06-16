@@ -21,7 +21,10 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, "ride_mode.json")
 
-DEFAULT_DISARM_PCT = 5.0   # auto-disarm if price falls this % below the trailing high
+# Auto-disarm if price falls this % below the trailing high. Default 3% (tight —
+# exits quickly on a reversal); override per-arm via arm(price, disarm_pct=...)
+# or POST /ride/arm {"disarm_pct": N}.
+DEFAULT_DISARM_PCT = 3.0
 
 
 def _load() -> dict:
