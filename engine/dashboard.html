@@ -1290,10 +1290,14 @@ function initChart(){
     },
   });
 
-  // 200-day moving average overlay (gold line). Computed from daily candles.
+  // 200-day moving average overlay. Computed from daily candles.
+  // autoscaleInfoProvider:null — the MA must NOT drive the price scale, or when
+  // it sits far from price (e.g. MA $77k vs price $66k) it zooms the candles off
+  // the view. Colour kept distinct from the gold/orange trendlines.
   ma200 = chart.addLineSeries({
-    color:'#f5c518', lineWidth:2, priceLineVisible:false,
+    color:'#b8c4d4', lineWidth:2, priceLineVisible:false,
     lastValueVisible:true, crosshairMarkerVisible:false, title:'200D MA',
+    autoscaleInfoProvider: () => null,
   });
 
   new ResizeObserver(()=>{
