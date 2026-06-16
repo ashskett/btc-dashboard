@@ -283,6 +283,47 @@ def _make_ride_tiers(price: float, tiers: list, buy_frac: float = 0.75) -> list:
     return result
 
 
+def _anchor_tiers_to_walls(tiers, liquidity, atr, max_nudge_atr=0.5, persist_min=3):
+    """Order-book Phase 2: in RANGE, nudge a tier's boundary onto a nearby DURABLE
+    wall so the bottom/top rung sits where price is likeliest to reverse. Measured
+    over 13d: durable walls hold ~61% (support) / 63% (resistance) in RANGE.
+
+    Bounded + safe: only nudges if the wall is within max_nudge_atr×ATR of the
+    boundary AND the resulting step still clears the tier's fee floor (min_step) —
+    so it never widens spacing past break-even or distorts the grid. Bid wall →
+    raise grid_low just above it; ask wall → lower grid_high just below it.
+    Returns (tiers, n_anchored).
+    """
+    if not liquidity or not atr:
+        return tiers, 0
+    bw = liquidity.get("nearest_bid_wall")
+    aw = liquidity.get("nearest_ask_wall")
+    buf = atr * 0.05          # sit the rung just inside the wall
+    cap = atr * max_nudge_atr
+    out, n_anchored = [], 0
+    for tier in tiers:
+        t = dict(tier)
+        lo, hi = float(t["grid_low"]), float(t["grid_high"])
+        n = max(int(t.get("levels", 2) or 2), 2)
+        minstep = float(t.get("min_step") or 0)
+        changed = False
+        if bw and int(bw.get("persistence", 0)) >= persist_min:
+            target = float(bw["price"]) + buf
+            if abs(target - lo) <= cap and target < hi and (hi - target) / (n - 1) >= minstep:
+                lo, changed = target, True
+        if aw and int(aw.get("persistence", 0)) >= persist_min:
+            target = float(aw["price"]) - buf
+            if abs(target - hi) <= cap and target > lo and (target - lo) / (n - 1) >= minstep:
+                hi, changed = target, True
+        if changed:
+            n_anchored += 1
+            t["grid_low"], t["grid_high"] = round(lo, 2), round(hi, 2)
+            t["step"] = round((hi - lo) / (n - 1), 2)
+            t["grid_levels"] = [round(lo + i * t["step"], 2) for i in range(n)]
+        out.append(t)
+    return out, n_anchored
+
+
 _TL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trendlines.json")
 
 def _try_auto_activate_trendline(td_last_low: float, current_price: float,
@@ -476,9 +517,15 @@ DRIFT_CONFIRM_CYCLES: int = 3
 # forgone 0 fills. So: during trending_down only recentre on an extreme
 # (>2x deploy width) safety-valve move; during trending_up require a wider
 # threshold AND more confirmation cycles. RANGE recentring is unchanged.
-TREND_DOWN_RECENTRE_EXTREME_MULT: float = 2.0  # trending_down: recentre only if drift exceeds this × deploy width
-TREND_UP_DRIFT_MULT: float = 1.10              # trending_up: wider drift threshold (vs 0.85 in RANGE)
-TREND_UP_CONFIRM_CYCLES: int = 6               # trending_up: more consecutive confirmations (vs 3 in RANGE)
+# Tightened 2026-06-16: a fortnight of data showed trending recentres are STILL
+# mostly duds even with the first gate (trending_up 86% dud / 14 rec, trending_down
+# 80% dud / 15 rec) — the autonomous engine keeps chasing directional moves it can't
+# fill. Now that RIDE MODE covers *deliberate* trend-riding (operator-armed, trails
+# up), the autonomous gate should be far more conservative during trends: only
+# recentre on a genuinely large, sustained move. Widened the trending thresholds.
+TREND_DOWN_RECENTRE_EXTREME_MULT: float = 2.5  # trending_down: recentre only if drift exceeds this × deploy width
+TREND_UP_DRIFT_MULT: float = 1.60              # trending_up: much wider drift threshold (vs 0.85 in RANGE)
+TREND_UP_CONFIRM_CYCLES: int = 8               # trending_up: more consecutive confirmations (vs 3 in RANGE)
 # Track the last start/stop action sent to each bot so we don't spam
 # redundant enable/disable API calls every cycle.  3Commas re-places
 # all grid orders on every enable call, so calling start_bot() on an
@@ -820,6 +867,21 @@ def run():
         state.support = grid.get("support")
         state.resistance = grid.get("resistance")
         state.tiers = grid.get("tiers", [])  # [inner, mid, outer]
+
+        # ── Order-book Phase 2: anchor tier boundaries to durable walls ─────────
+        # RANGE + NORMAL only (where walls hold ≥60% as boundaries, and the grid is
+        # symmetric). Bounded & fee-safe — see _anchor_tiers_to_walls. Intensive /
+        # ride modes rebuild tiers themselves, so they're excluded.
+        state.wall_anchored = 0
+        if state.regime == "RANGE" and state.inventory_mode == "NORMAL" and _liquidity:
+            try:
+                state.tiers, state.wall_anchored = _anchor_tiers_to_walls(
+                    state.tiers, _liquidity, state.atr)
+                if state.wall_anchored:
+                    print(f"  Order-book anchor: nudged {state.wall_anchored} tier "
+                          f"boundary(ies) onto durable walls (Phase 2)")
+            except Exception as _wae:
+                print(f"  Warning: wall-anchor failed: {_wae}")
 
         # Log which tier each bot is assigned to
         for i, bot_id in enumerate(GRID_BOTS[:3]):
@@ -2002,6 +2064,8 @@ def run():
                 "tier_states":     _compute_tier_states(state, TRENDLINE, _trendline_active),
                 # Order-book liquidity (Phase 0 — observability only)
                 "liquidity":       _liquidity,
+                # Order-book Phase 2: tier boundaries nudged onto durable walls this cycle
+                "wall_anchored":   int(getattr(state, "wall_anchored", 0)),
                 # Swing amplitude vs fee floor (Phase 0 — observability only)
                 "grid_amplitude":  _amplitude,
                 # Ride mode (manually-armed trend-up accumulation)

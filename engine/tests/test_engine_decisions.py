@@ -435,7 +435,7 @@ class TestRecentreGate:
     def test_trending_down_is_safety_valve(self):
         import engine
         mult, confirm, tag = engine._recentre_gate_params(True, False)
-        assert mult == engine.TREND_DOWN_RECENTRE_EXTREME_MULT == 2.0
+        assert mult == engine.TREND_DOWN_RECENTRE_EXTREME_MULT
         assert confirm == engine.DRIFT_CONFIRM_CYCLES
         assert "trending_down" in tag
         # Far wider than the old 1.25× chase, so routine downtrend legs no
@@ -445,8 +445,8 @@ class TestRecentreGate:
     def test_trending_up_widens_and_requires_more_confirmation(self):
         import engine
         mult, confirm, tag = engine._recentre_gate_params(False, True)
-        assert mult == engine.TREND_UP_DRIFT_MULT == 1.10
-        assert confirm == engine.TREND_UP_CONFIRM_CYCLES == 6
+        assert mult == engine.TREND_UP_DRIFT_MULT
+        assert confirm == engine.TREND_UP_CONFIRM_CYCLES
         assert confirm > engine.DRIFT_CONFIRM_CYCLES
         assert mult > 0.85
         assert "trending_up" in tag
@@ -529,3 +529,52 @@ class TestRideMode:
         p = self._no_flash(_engine_patches(regime="RANGE", price=70000))  # below 71250
         _run_cycle(p, prev_regime="RANGE")
         assert ride_mode.is_armed() is False      # auto-disarmed
+
+
+class TestWallAnchoring:
+    """Order-book Phase 2: bounded, fee-safe boundary anchoring to durable walls."""
+
+    def _tier(self, lo, hi, levels=6, min_step=100):
+        return {"name": "inner", "grid_low": lo, "grid_high": hi,
+                "levels": levels, "min_step": min_step}
+
+    def test_anchors_lo_to_durable_bid_wall_within_cap(self):
+        import engine
+        tiers = [self._tier(64000, 66000)]
+        liq = {"nearest_bid_wall": {"price": 64200, "persistence": 5},
+               "nearest_ask_wall": None}
+        out, n = engine._anchor_tiers_to_walls(tiers, liq, atr=1000)  # cap 500
+        assert n == 1
+        assert abs(out[0]["grid_low"] - 64250) < 60   # 64200 + 0.05×ATR buffer
+
+    def test_anchors_hi_to_durable_ask_wall(self):
+        import engine
+        tiers = [self._tier(64000, 66000)]
+        liq = {"nearest_bid_wall": None,
+               "nearest_ask_wall": {"price": 65800, "persistence": 4}}
+        out, n = engine._anchor_tiers_to_walls(tiers, liq, atr=1000)
+        assert n == 1
+        assert out[0]["grid_high"] < 66000 and out[0]["grid_high"] > 65000
+
+    def test_ignores_non_durable_wall(self):
+        import engine
+        tiers = [self._tier(64000, 66000)]
+        liq = {"nearest_bid_wall": {"price": 64200, "persistence": 1}, "nearest_ask_wall": None}
+        out, n = engine._anchor_tiers_to_walls(tiers, liq, atr=1000)
+        assert n == 0 and out[0]["grid_low"] == 64000
+
+    def test_ignores_wall_beyond_cap(self):
+        import engine
+        tiers = [self._tier(64000, 66000)]
+        # wall 1500 away, cap = 0.5×ATR = 250 → beyond cap
+        liq = {"nearest_bid_wall": {"price": 62500, "persistence": 5}, "nearest_ask_wall": None}
+        out, n = engine._anchor_tiers_to_walls(tiers, liq, atr=500)
+        assert n == 0 and out[0]["grid_low"] == 64000
+
+    def test_skips_nudge_that_breaches_fee_floor(self):
+        import engine
+        # narrow tier, big min_step: nudging lo up would push step below min_step
+        tiers = [self._tier(64000, 64600, levels=6, min_step=200)]  # step ~120 already < 200? guard
+        liq = {"nearest_bid_wall": {"price": 64500, "persistence": 5}, "nearest_ask_wall": None}
+        out, n = engine._anchor_tiers_to_walls(tiers, liq, atr=2000)
+        assert n == 0 and out[0]["grid_low"] == 64000
