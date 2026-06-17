@@ -2,6 +2,24 @@
 
 > Updated by the last agent to work on this project. Read this before starting.
 
+## Session 2026-06-17 — min profit-per-fill floor (inner $4→$51/fill)
+
+- **Regression:** the fee recal (0.60%→0.30%) let inner pack to 9 levels →
+  **~$4 net/fill** (63% of gross eaten by fees). The fee guard only enforces
+  *percentage* profitability, never *dollars* per fill.
+- **Fix (grid_logic.py):** new `MIN_PROFIT_PER_FILL_USD = 40.0` floor. Given the
+  tier's capital budget, `_build_tier` trims level count (ATR range fixed → step
+  widens, per-order qty grows) until net $/fill clears the target, down to
+  `MIN_FILL_LEVELS = 3`. Helper `_net_profit_per_fill()`; tiers now expose
+  `net_per_fill`. `calculate_grid_parameters(..., budgets={name:usd})`.
+- **engine.py** passes per-tier budgets = cached `portfolio_snapshot` × the
+  `tier_budgets.json` pct (cheap, no API call); skipped if portfolio unknown.
+- **Deployed + force-redeployed live.** inner 9→4 levels ($4→**$51**/fill), mid
+  6→5 ($57), outer 4 (untouched, $115). All fee_ok. 252 tests pass.
+- The fee recal (0.30% floor) is NOT reverted — it still helps mid/outer harvest
+  chop; the $/fill floor is the binding constraint for inner only.
+- Lever to tune: `MIN_PROFIT_PER_FILL_USD` in grid_logic.py (Ash chose $40).
+
 ## Session 2026-06-17 — weekly delivery fixed
 
 - **AI OS key rotated** (old `14b4748a…` / `76d41d…` are dead/403). New key is
