@@ -2,6 +2,26 @@
 
 > Updated by the last agent to work on this project. Read this before starting.
 
+## Session 2026-06-17 — weekly delivery fixed
+
+- **AI OS key rotated** (old `14b4748a…` / `76d41d…` are dead/403). New key is
+  live but **not committed** — it lives in `/root/grid-engine/.env` as
+  `ASH_BRAIN_API_KEY`, and the Monday cron now sources `.env` before running
+  `weekly_backtest_review.py`. Committed fallback is empty + a loud guard.
+- **`/cos/notify` was removed upstream.** weekly_backtest_review.py now posts to
+  `/webhook/cos {source,text}` and prints the queued status.
+- **Verified live (real run on droplet):** memory ✓, project note ✓ (Notion-
+  synced), task filing ✓ — all HTTP 200. The project-write routes had dropped
+  the `grid-engine` registration again; `post_project_note()` self-heals via
+  `/projects/ensure` first (already in code).
+- **Still blocked server-side:** Telegram/COS push. `/webhook/cos` returns
+  `queued:false reason:allowlist_miss`; `/briefing/notify` returns 503
+  `NTFY_TOPIC not set`. To turn delivery on, on the AI OS either **allowlist the
+  source `weekly-backtest-cron`** for `/webhook/cos`, or **set `NTFY_TOPIC`** and
+  switch cos_notify to `/briefing/notify`. Memory+project delivery works either way.
+- Latest review (2026-06-17, 14d): recentres **2.86/day** (was 4.2 → 7.6),
+  RANGE fee_ok **100%**, trending_up still **86% dud** → one suggestion filed.
+
 ## Session 2026-06-16 — major batch (all deployed unless noted)
 
 **Trading-logic changes (live):**
