@@ -25,10 +25,10 @@ from datetime import datetime, timezone, timedelta
 
 # ── Config ──────────────────────────────────────────────────────────────────
 API_BASE = "https://api.uncrewedmaritime.com"
-API_KEY = os.environ.get(
-    "ASH_BRAIN_API_KEY",
-    "14b4748a62916aba3c28fe00074dab8a9ca39516fed725c574da5001bd542b23",
-)
+# The live AI OS key is a secret and is NOT committed here (this repo syncs out
+# to other agents). It lives in /root/grid-engine/.env on the droplet as
+# ASH_BRAIN_API_KEY; the weekly cron sources .env before invoking this script.
+API_KEY = os.environ.get("ASH_BRAIN_API_KEY", "")
 PROJECT = "grid-engine"
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE_LOG = os.path.join(HERE, "engine_log.jsonl")
@@ -141,13 +141,25 @@ def post_project_note(text):
 
 
 def cos_notify(message):
-    """Deliver the review to Ash via the Chief-of-Staff channel (Telegram)."""
+    """Deliver the review to Ash via the Chief-of-Staff channel (Telegram).
+
+    The old /cos/notify endpoint was removed. Delivery now goes through
+    /webhook/cos, which is allowlist-gated server-side: it returns 200 with
+    {"queued": true} once the source is allowlisted, or {"queued": false,
+    "reason": "allowlist_miss"} until then. We report the queued status so a
+    silent non-delivery is visible in the cron log."""
     if DRY_RUN:
         print(f"  [dry-run] WOULD COS-NOTIFY ({len(message)} chars)")
         return
-    st, _ = _req("POST", "/cos/notify",
-                 {"source": "grid-engine weekly review", "message": message})
-    print(f"  cos notify: HTTP {st}")
+    st, body = _req("POST", "/webhook/cos",
+                    {"source": "weekly-backtest-cron", "text": message})
+    queued = isinstance(body, dict) and body.get("queued")
+    reason = body.get("reason") if isinstance(body, dict) else None
+    if queued:
+        print(f"  cos notify: HTTP {st} delivered")
+    else:
+        print(f"  cos notify: HTTP {st} NOT delivered (reason={reason}) "
+              f"-- allowlist 'weekly-backtest-cron' or set NTFY_TOPIC on AI OS")
 
 
 # ── Metrics ─────────────────────────────────────────────────────────────────
@@ -351,6 +363,10 @@ def compute_orderbook():
 
 
 def main():
+    if not API_KEY and not DRY_RUN:
+        print("ERROR: ASH_BRAIN_API_KEY not set. Add it to /root/grid-engine/.env "
+              "and ensure the cron sources .env before running.", file=sys.stderr)
+        sys.exit(1)
     today = f"{datetime.now(timezone.utc):%Y-%m-%d}"
     report = []   # human-readable lines → printed, posted as note, sent to COS
 
