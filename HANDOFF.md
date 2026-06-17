@@ -2,6 +2,28 @@
 
 > Updated by the last agent to work on this project. Read this before starting.
 
+## Session 2026-06-17 — sell-into-support protection
+
+- **Live event:** SELL_ONLY mass-market-sold **0.476 BTC** (all 3 bots at once,
+  06-17 20:27) right on the ascending support trendline at ~$64,288. Root cause =
+  the known feedback loop: 3Commas counts bot-locked BTC, inflating `btc_ratio`
+  to a phantom ~80% (it flip-flopped 44%↔82% in hours), so SELL_ONLY fired and
+  dumped at the worst price.
+- **Fix (engine.py):** new pure `_apply_sell_guards(mode, prev_mode, price, atr,
+  trendline, btc_ratio, confirm_count)` applied to the would-be inventory mode:
+  1. **Support guard** — hold (NORMAL) while price is within `SUPPORT_GUARD_ATR`
+     (1.0)×ATR *above* the active support trendline (`get_active_trendline`);
+     releases automatically once price breaks *below* it, so capital protection
+     resumes on a confirmed breakdown.
+  2. **Fresh-entry confirmation** — a new SELL_ONLY trigger must persist
+     `SELL_ONLY_CONFIRM_CYCLES` (3) cycles before selling; kills spike/noise dumps.
+- status exposes `sell_guard` (string when active, else null). 7 tests, 259 pass.
+  Deployed + verified live (clean cycle, field present; idle now at NORMAL/45%).
+- **Note:** this is a guard, not the root-cause fix. The inflated `btc_ratio`
+  (bot-locked BTC counted as held) still mis-fires the trigger — a deeper fix is
+  to exclude bot-locked BTC from the ratio (inventory.py). Tunables in engine.py:
+  `SUPPORT_GUARD_ATR`, `SELL_ONLY_CONFIRM_CYCLES`.
+
 ## Session 2026-06-17 — min profit-per-fill floor (inner $4→$51/fill)
 
 - **Regression:** the fee recal (0.60%→0.30%) let inner pack to 9 levels →
