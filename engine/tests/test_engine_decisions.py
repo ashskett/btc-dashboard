@@ -340,6 +340,66 @@ class TestIntensiveTierFeeGuard:
         assert inner["grid_high"] < 70000
 
 
+class TestSellGuards:
+    """Sell-into-support protection (added 2026-06-17). Reproduces the live event
+    where SELL_ONLY mass-sold 0.476 BTC right on the ascending support trendline."""
+
+    def test_non_sell_modes_pass_through(self):
+        import engine
+        for m in ("NORMAL", "BUY_ONLY"):
+            mode, cnt, note = engine._apply_sell_guards(
+                m, "NORMAL", 64200, 400, 64000, 0.80, 5)
+            assert mode == m and cnt == 0 and note == ""
+
+    def test_support_guard_suppresses_sell_near_trendline(self):
+        import engine
+        # price $64,200, support $64,000, ATR 400 → 0.5×ATR above support → hold
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "SELL_ONLY", 64200, 400, 64000, 0.80, 3)
+        assert mode == "NORMAL"
+        assert "suppressed" in note.lower()
+
+    def test_support_guard_releases_below_support(self):
+        import engine
+        # price has broken *below* support → distance negative → guard releases,
+        # selling proceeds (capital protection on a confirmed breakdown)
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "SELL_ONLY", 63800, 400, 64000, 0.80, 3)
+        assert mode == "SELL_ONLY"
+
+    def test_support_guard_releases_when_well_above(self):
+        import engine
+        # price far above support (>1×ATR) → not in the bounce zone → sell allowed
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "SELL_ONLY", 65000, 400, 64000, 0.80, 3)
+        assert mode == "SELL_ONLY"
+
+    def test_fresh_entry_requires_confirmation(self):
+        import engine
+        # fresh trigger, no trendline → must persist N cycles; first cycles hold
+        cnt = 0
+        mode, cnt, note = engine._apply_sell_guards("SELL_ONLY", "NORMAL", 70000, 400, None, 0.80, cnt)
+        assert mode == "NORMAL" and cnt == 1
+        mode, cnt, note = engine._apply_sell_guards("SELL_ONLY", "NORMAL", 70000, 400, None, 0.80, cnt)
+        assert mode == "NORMAL" and cnt == 2
+        mode, cnt, note = engine._apply_sell_guards("SELL_ONLY", "NORMAL", 70000, 400, None, 0.80, cnt)
+        assert mode == "SELL_ONLY" and cnt == engine.SELL_ONLY_CONFIRM_CYCLES
+
+    def test_staying_in_sell_only_no_reconfirm(self):
+        import engine
+        # already in SELL_ONLY, away from support → keep selling, no reconfirm
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "SELL_ONLY", 70000, 400, None, 0.80, engine.SELL_ONLY_CONFIRM_CYCLES)
+        assert mode == "SELL_ONLY"
+
+    def test_support_guard_overrides_confirmation(self):
+        import engine
+        # fresh trigger AND at support → support guard wins, counter resets
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "NORMAL", 64100, 400, 64000, 0.80, 2)
+        assert mode == "NORMAL" and cnt == 0
+
+
 class _FakeState:
     """Minimal stand-in for the engine state object used by _compute_tier_states."""
 

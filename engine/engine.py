@@ -504,6 +504,18 @@ _prev_trending_down: bool = False
 _prev_inventory_mode: str | None = None
 _prev_ride_active: bool = False   # was RIDE mode active last cycle (entry detection)
 _prev_weekend_mode: bool = False
+# Sell-into-support protection (added 2026-06-17). SELL_ONLY mass-market-sells
+# BTC; two guards stop it dumping at the worst moment:
+#  (1) a fresh SELL_ONLY trigger must persist SELL_ONLY_CONFIRM_CYCLES cycles
+#      before acting — btc_ratio is noisy/inflated (3Commas counts bot-locked
+#      BTC), so a single spike must not liquidate; and
+#  (2) never mass-sell while price sits within SUPPORT_GUARD_ATR×ATR *above* the
+#      active support trendline (most likely to bounce). Holds (NORMAL) until
+#      price recovers or breaks *below* support, where the guard releases and
+#      capital protection resumes.
+_sell_only_confirm: int = 0
+SELL_ONLY_CONFIRM_CYCLES: int = 3
+SUPPORT_GUARD_ATR: float = 1.0
 # Drift stabilisation: counts consecutive cycles where drift threshold is exceeded.
 # Recentre only fires after DRIFT_CONFIRM_CYCLES cycles — filters single-candle spikes.
 _drift_confirm_cycles: int = 0
@@ -618,8 +630,45 @@ def _recentre_gate_params(trending_down: bool, trending_up: bool):
     return (0.85, DRIFT_CONFIRM_CYCLES, "")
 
 
+def _apply_sell_guards(mode, prev_mode, price, atr, trendline, btc_ratio, confirm_count):
+    """Sell-into-support protection. Given a would-be inventory `mode`, decide
+    whether SELL_ONLY (which mass-market-sells BTC) is actually allowed to fire.
+
+    Returns (mode, confirm_count, note). Pure — no globals or IO, so it is unit
+    tested directly. Two guards (only SELL_ONLY is affected; BUY_ONLY/NORMAL pass
+    through):
+      1. Support guard — if price sits within SUPPORT_GUARD_ATR×ATR *above* the
+         active support trendline, hold (return NORMAL). This is the worst place
+         to sell (most likely to bounce). Releases automatically once price
+         breaks *below* support (distance goes negative) so capital protection
+         resumes on a confirmed breakdown.
+      2. Fresh-entry confirmation — a brand-new SELL_ONLY trigger must persist
+         SELL_ONLY_CONFIRM_CYCLES cycles before selling, because btc_ratio is
+         noisy/inflated (3Commas counts bot-locked BTC). A single spike holds.
+    """
+    note = ""
+    if mode != "SELL_ONLY":
+        return mode, 0, note
+    # Guard 1: support proximity (applies whether entering or already selling)
+    if trendline and atr and 0 < (price - trendline) < SUPPORT_GUARD_ATR * atr:
+        return "NORMAL", 0, (
+            f"SELL suppressed — price ${price:,.0f} within {SUPPORT_GUARD_ATR:.1f}×ATR "
+            f"(${SUPPORT_GUARD_ATR * atr:,.0f}) above support ${trendline:,.0f}; "
+            f"holding (NORMAL) until it recovers or breaks below.")
+    # Guard 2: fresh-entry confirmation
+    if prev_mode != "SELL_ONLY":
+        confirm_count += 1
+        if confirm_count < SELL_ONLY_CONFIRM_CYCLES:
+            return "NORMAL", confirm_count, (
+                f"SELL pending confirm {confirm_count}/{SELL_ONLY_CONFIRM_CYCLES} "
+                f"(ratio {btc_ratio:.0%}) — not acting on a single spike.")
+        return "SELL_ONLY", confirm_count, f"SELL confirmed after {confirm_count} cycles — proceeding."
+    # Already confirmed and staying, not at support → sell proceeds
+    return "SELL_ONLY", confirm_count, note
+
+
 def run():
-    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle, _drift_confirm_cycles, _prev_ride_active
+    global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle, _drift_confirm_cycles, _prev_ride_active, _sell_only_confirm
     now = time.time()
     if now - _last_run_ts < 100:
         print(f"Skipping — last cycle was {int(now - _last_run_ts)}s ago (min 240s between runs)")
@@ -829,6 +878,18 @@ def run():
                 state.inventory_mode = "BUY_ONLY"
             else:
                 state.inventory_mode = "NORMAL"
+
+            # ── Sell-into-support protection ────────────────────────────────────
+            # Two guards on SELL_ONLY (which mass-market-sells BTC) — see the pure
+            # helper _apply_sell_guards and the module note above.
+            state.inventory_mode, _sell_only_confirm, _sell_guard_note = _apply_sell_guards(
+                state.inventory_mode, _prev_inventory_mode, state.price, state.atr,
+                TRENDLINE, state.btc_ratio, _sell_only_confirm)
+            if _sell_guard_note:
+                print(f"  {_sell_guard_note}")
+            state.sell_guard = _sell_guard_note or None
+            # ─────────────────────────────────────────────────────────────────────
+
             _exit_note = ""
             if _prev_inventory_mode == "SELL_ONLY" and state.inventory_mode == "SELL_ONLY":
                 _exit_note = f", exit < {_sell_exit:.0%}"
@@ -2070,6 +2131,7 @@ def run():
                 "btc_ratio":      round(state.btc_ratio, 4) if state.btc_ratio is not None else None,
                 "skew":           round(state.skew, 4) if state.skew is not None else None,
                 "inventory_mode": state.inventory_mode,
+                "sell_guard":     getattr(state, "sell_guard", None),
                 "compression":    bool(state.compression),
                 "trending_up":    bool(getattr(state, "trending_up",   False)),
                 "trending_down":  bool(getattr(state, "trending_down",  False)),
