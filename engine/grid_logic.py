@@ -27,6 +27,33 @@ FEE_BUFFER      = 1.5      # safety multiplier: step must be 1.5× the break-eve
 # So effective minimum step = price × 0.20% × 1.5 = price × 0.30%
 # At $66,000 that's ~$198 minimum step (was $396) → roughly doubles level density
 
+# ── Minimum profit-per-fill floor ──────────────────────────────────────────────
+# The fee guard above only guarantees each fill is profitable as a *percentage*.
+# When the fee floor permits many tight levels, each order carries little capital
+# and the net *dollars* per completed buy→sell collapse. Live example: after the
+# 0.30% fee recal the inner tier packed 9 levels → ~$4 net/fill, with 63% of gross
+# eaten by fees. We add a hard floor on net $/fill: reduce the level count (keeping
+# the ATR-derived range fixed, which widens the step and grows the per-order qty)
+# until each fill clears MIN_PROFIT_PER_FILL_USD, down to a floor of MIN_FILL_LEVELS.
+# Needs the tier's capital budget (passed in from the engine); skipped if unknown.
+MIN_PROFIT_PER_FILL_USD = 40.0   # target net USD per completed buy→sell fill
+MIN_FILL_LEVELS         = 3      # never collapse a tier below this many levels
+
+
+def _net_profit_per_fill(levels, grid_low, grid_high, price, budget_usd):
+    """Net USD on one completed buy→sell at this grid density.
+
+    qty is sized exactly as the engine deploys it (budget / live-order count —
+    one grid line sits neutral, so active orders = levels-1). One fill captures
+    a single step of price move, minus the round-trip fee on that notional.
+    Returns None if inputs are unusable."""
+    if levels < 2 or not budget_usd or budget_usd <= 0 or price <= 0 or grid_high <= grid_low:
+        return None
+    active_orders = max(levels - 1, 1)
+    qty  = budget_usd / (active_orders * price)
+    step = (grid_high - grid_low) / levels
+    return qty * (step - price * ROUND_TRIP_FEE)
+
 # ── Tier definitions ─────────────────────────────────────────────────────────
 # Each tier is a multiplier on grid_width (ATR×3).
 # Inner bot catches chop, mid catches normal swings, outer catches extensions.
@@ -44,7 +71,7 @@ TIERS = [
 def _build_tier(price, atr, regime, session, skew, df, support, resistance,
                 range_mult, base_levels, compression, wkd_fee_buffer=None,
                 compression_mult=1.5, trend_tilt=0.0,
-                drift_limit=None, deploy_center=None):
+                drift_limit=None, deploy_center=None, budget_usd=None):
     """Build grid parameters for a single tier."""
     # Volatility ratio vs historical mean — computed before weekend ATR floor
     # so it reflects actual market conditions, not the artificial floor.
@@ -133,6 +160,20 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
             step   = (grid_high - grid_low) / levels
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── Min profit-per-fill floor ──────────────────────────────────────────────
+    # Trim levels (range stays fixed → step widens, per-order qty grows) until a
+    # completed fill clears MIN_PROFIT_PER_FILL_USD. Only when the tier budget is
+    # known; never goes below MIN_FILL_LEVELS or back above the fee-guard count.
+    if budget_usd and budget_usd > 0:
+        while levels > MIN_FILL_LEVELS:
+            npf = _net_profit_per_fill(levels, grid_low, grid_high, price, budget_usd)
+            if npf is None or npf >= MIN_PROFIT_PER_FILL_USD:
+                break
+            levels -= 1
+        step = (grid_high - grid_low) / levels
+    net_per_fill = _net_profit_per_fill(levels, grid_low, grid_high, price, budget_usd)
+    # ─────────────────────────────────────────────────────────────────────────
+
     grid_levels = generate_liquidity_grid(
         price, grid_low, grid_high, levels, support, resistance
     )
@@ -149,16 +190,22 @@ def _build_tier(price, atr, regime, session, skew, df, support, resistance,
         "grid_levels": grid_levels,
         "min_step":    round(min_step, 2),
         "fee_ok":      bool(step >= min_step),
+        "net_per_fill": round(net_per_fill, 2) if net_per_fill is not None else None,
     }
 
 
-def calculate_grid_parameters(price, atr, regime, session, skew, df, trend_tilt=0.0):
+def calculate_grid_parameters(price, atr, regime, session, skew, df, trend_tilt=0.0,
+                              budgets=None):
     """Returns a single (mid-tier) grid for backwards compatibility,
     plus a 'tiers' key with all three bot grids.
 
     trend_tilt: fractional multiplier applied only to the inner tier when
     regime == RANGE and trending_up. Shifts the inner grid toward the trend
     so the upper boundary doesn't idle the bot during a slow grind up.
+
+    budgets: optional {tier_name: usd} map of per-tier capital. When supplied,
+    each tier's level count is capped so net $/fill clears the min-profit floor
+    (see _net_profit_per_fill / MIN_PROFIT_PER_FILL_USD). Skipped if None.
     """
 
     volatility_ratio = atr / price
@@ -196,6 +243,7 @@ def calculate_grid_parameters(price, atr, regime, session, skew, df, trend_tilt=
             trend_tilt=tier_trend_tilt,
             drift_limit=_drift_limit,
             deploy_center=_deploy_center,
+            budget_usd=(budgets.get(t["name"]) if budgets else None),
         )
         tier_grid["name"] = t["name"]
         tiers.append(tier_grid)

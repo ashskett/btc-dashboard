@@ -323,3 +323,39 @@ class TestTrendTilt:
         baseline = _calc(price=70000, atr=600, trend_tilt=0.0)
         tilted   = _calc(price=70000, atr=600, trend_tilt=-0.15)
         assert tilted["tiers"][0]["grid_high"] < baseline["tiers"][0]["grid_high"]
+
+
+class TestMinProfitPerFill:
+    """The min-$/fill floor trims level density (range fixed → step widens) so
+    each completed buy→sell clears MIN_PROFIT_PER_FILL_USD. Reproduces the live
+    regression where the inner tier packed to ~$4/fill after the fee recal."""
+
+    def _calc_b(self, budgets, price=65750, atr=414):
+        return gl.calculate_grid_parameters(
+            price=float(price), atr=float(atr), regime="RANGE",
+            session="EUROPE", skew=0.0, df=_df(price, atr), budgets=budgets,
+        )
+
+    def test_no_budget_skips_floor(self):
+        """Without budgets the floor is inert — behaviour is unchanged."""
+        none = self._calc_b(None)
+        assert none["tiers"][0].get("net_per_fill") is None
+
+    def test_floor_reduces_inner_levels(self):
+        """A fat budget on a tight inner range collapses net/fill below target;
+        the floor must reduce levels vs the unbudgeted (fee-guard-only) count."""
+        uncapped = self._calc_b(None)["tiers"][0]["levels"]
+        capped   = self._calc_b({"inner": 28884.0})["tiers"][0]
+        assert capped["levels"] < uncapped
+        assert capped["net_per_fill"] >= gl.MIN_PROFIT_PER_FILL_USD
+
+    def test_floor_never_below_min_levels(self):
+        """Even a tiny budget can't push a tier below MIN_FILL_LEVELS."""
+        capped = self._calc_b({"inner": 100.0, "mid": 100.0, "outer": 100.0})
+        for t in capped["tiers"]:
+            assert t["levels"] >= gl.MIN_FILL_LEVELS
+
+    def test_net_per_fill_helper_matches_live(self):
+        """Sanity-pin the helper against the observed live inner numbers."""
+        npf = gl._net_profit_per_fill(9, 64839.85, 66702.80, 65750.85, 28884.0)
+        assert 3.5 < npf < 5.0   # live was ~$4.15

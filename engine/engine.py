@@ -846,6 +846,22 @@ def run():
         # and goes idle when price exits the upper boundary.
         # 0.12 shifts the inner grid up by 12% of its width (~$340 at current ATR).
         _trend_tilt = 0.12 if (state.regime == "RANGE" and state.trending_up) else 0.0
+
+        # Per-tier capital budgets (portfolio × pct) so the grid calc can enforce
+        # the min-$/fill floor by capping level density. Cheap cached read (no API
+        # call). If the portfolio value is unknown the floor is skipped and levels
+        # fall back to the fee-guard result — self-corrects on the next good cycle.
+        _tier_budgets = None
+        try:
+            from threecommas import load_tier_budgets
+            _snap = portfolio_snapshot()
+            _pf = _snap.get("portfolio_usd", 0) if _snap else 0
+            if _pf and _pf > 0:
+                _tier_budgets = {b["name"]: _pf * b.get("pct", 0) / 100.0
+                                 for b in load_tier_budgets()}
+        except Exception as _e:
+            print(f"  Warning: tier-budget calc for $/fill floor failed: {_e}")
+
         grid = calculate_grid_parameters(
             state.price,
             state.atr,
@@ -854,6 +870,7 @@ def run():
             state.skew,
             df,
             trend_tilt=_trend_tilt,
+            budgets=_tier_budgets,
         )
 
         state.grid_width = grid["grid_width"]
