@@ -2,6 +2,27 @@
 
 > Updated by the last agent to work on this project. Read this before starting.
 
+## Session 2026-06-17 — SELL_ONLY root cause fixed (was BUYING BTC)
+
+- **Root cause of the support dump + ratio swings:** `_make_intensive_sell_tiers`
+  placed the grid **entirely above price**. A 3Commas grid bot's base BTC
+  position ≈ the fraction of its range *above* price (the sell wall it must hold
+  BTC to back), so deploying an all-above grid made 3Commas **market-BUY BTC**.
+  Proven from `portfolio_log.jsonl`: entering SELL_ONLY spiked `btc_qty`
+  0.53→1.08 (USDC 41k→4.8k, ~$36k spent buying), inflating the ratio to 94%,
+  latching SELL_ONLY, churning, then dumping 0.476 BTC onto support.
+- **The ratio reading was correct all along** — the account genuinely held that
+  BTC. So do NOT subtract bot-locked BTC from the ratio (~91% of BTC lives in the
+  bots; subtracting pegs it near zero → permanent BUY_ONLY). The bug was bot
+  *behaviour*, not the ratio math.
+- **Fix:** `_make_intensive_sell_tiers` now repositions the grid to **straddle**
+  price, with only `sell_to_ratio` (default `target_btc`) of width above price.
+  Base settles near target → 3Commas **sheds** the excess via the bots' own limit
+  orders, never buys. Width uncompressed (steps stay fee-OK). 260 tests pass.
+  Deployed; idle at NORMAL/45%, applies next time BTC goes overweight.
+- Works with the support guard + confirmation (below). Breaking the buy-spike
+  also de-fangs the feedback loop that the confirmation guard was protecting against.
+
 ## Session 2026-06-17 — sell-into-support protection
 
 - **Live event:** SELL_ONLY mass-market-sold **0.476 BTC** (all 3 bots at once,

@@ -210,11 +210,31 @@ If calculated step < min_step, level count is reduced until profitable.
 **History:** Without hysteresis, inventory mode oscillated rapidly (4 flips in hours), triggering full redeploys each time. Each redeploy cancels all orders, so fills could only happen within ~2 minute windows.
 
 ### SELL_ONLY / BUY_ONLY Intensive Mode
-When entering SELL_ONLY/BUY_ONLY, `_make_intensive_sell_tiers()` / `_make_intensive_buy_tiers()` shifts all grid ranges above/below price (60% width compression). Drift is suppressed during intensive mode.
+`_make_intensive_buy_tiers()` (BUY_ONLY) shifts the grid below price.
+`_make_intensive_sell_tiers()` (SELL_ONLY) **straddles** price with only
+`sell_to_ratio` (default `target_btc`) of the range above price, so the bot's
+base position settles near target and 3Commas **sheds** the excess BTC via the
+bots' own limit orders. Reposition-downward, never buys.
 
-**Known issue:** The 60% compression on top of already-compressed grids can produce sub-fee-floor steps. The intensive sell functions do NOT run through the fee guard.
+**FIXED 2026-06-17 — SELL_ONLY used to BUY BTC.** The old `_make_intensive_sell_tiers`
+placed the range *entirely above price*. A 3Commas grid bot's base BTC position
+≈ the fraction of its range above price (the sell wall it must hold BTC to back),
+so deploying an all-above grid made 3Commas **market-buy BTC** on enable
+(observed live: btc_qty 0.53→1.08, ~$36k USDC spent), spiking the ratio to ~94%,
+latching SELL_ONLY, churning BTC, and dumping 0.476 BTC onto support. The ratio
+reading was *correct* (the BTC was really bought) — the bug was the all-above
+placement. The straddle fix above is the correct inverse. **Do NOT "fix" this by
+subtracting bot-locked BTC from the ratio** — ~91% of BTC lives in the bots, so
+that pegs the ratio near zero → permanent BUY_ONLY.
 
-**Known issue:** 3Commas reports BTC locked in grid bots as part of your balance. When SELL_ONLY deploys all-BTC ranges, the reported BTC ratio inflates artificially (e.g. 74% → 85%), creating a feedback loop. Consider raising max_btc to 0.80 if this causes problems.
+**Guards (also 2026-06-17):** SELL_ONLY is further gated by `_apply_sell_guards`
+— a support proximity hold (no selling within `SUPPORT_GUARD_ATR`×ATR above the
+active trendline; releases on a break below) and a `SELL_ONLY_CONFIRM_CYCLES`
+confirmation. `status.sell_guard` exposes the active reason.
+
+**Known issue (open):** the intensive functions still don't run through the full
+grid_logic fee guard (they use `_apply_intensive_fee_guard`); width is now left
+uncompressed so steps stay fee-OK, but it's a lighter check.
 
 ---
 
@@ -301,8 +321,9 @@ Uses Lightweight Charts `setMarkers()` — known limitation: only one marker per
 |-------|--------|
 | Port 5050 plain HTTP | Pending — nginx HTTPS wrapping needed |
 | Fill markers missing on chart | Known — setMarkers approach needs rebuild |
-| Intensive sell 60% compression ignores fee guard | Known — can produce sub-profitable steps |
-| 3Commas BTC ratio inflated during SELL_ONLY | Known — bot-locked BTC counted in ratio |
+| SELL_ONLY market-bought BTC (all-above grid) | FIXED 2026-06-17 — now straddles price & sheds (see Intensive Mode) |
+| 3Commas BTC ratio "inflated" during SELL_ONLY | Resolved — ratio was correct; the bot was really buying BTC. Fixed via straddle. |
+| Intensive sell uses lighter fee guard (`_apply_intensive_fee_guard`) | Known — width now uncompressed so steps stay fee-OK |
 | `auto_clear_h` per-target not in dashboard UI | Must edit breakout_targets.json directly |
 | Inventory API 401 intermittent | inventory_override.json as workaround |
 
