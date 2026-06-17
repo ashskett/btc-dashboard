@@ -216,32 +216,41 @@ def _make_intensive_buy_tiers(price: float, tiers: list) -> list:
     return result
 
 
-def _make_intensive_sell_tiers(price: float, tiers: list) -> list:
+def _make_intensive_sell_tiers(price: float, tiers: list, sell_to_ratio: float | None = None) -> list:
+    """Reposition each tier so the bot SHEDS BTC down toward target on deploy —
+    without ever buying BTC.
+
+    Root-cause fix (2026-06-17). A 3Commas grid bot's base BTC position is set,
+    on enable, to roughly the fraction of its range that sits *above* price —
+    those are the sell orders, and the bot must hold BTC to back them. The old
+    implementation placed the entire range *above* price (base ≈ 100% BTC), so
+    on deploy 3Commas MARKET-BOUGHT BTC to fund the sell wall. Live evidence:
+    entering SELL_ONLY spiked holdings 0.53→1.08 BTC (spent ~$36k of USDC) and
+    latched SELL_ONLY on via the inflated ratio, churning BTC up/down and
+    eventually dumping 0.476 BTC onto support. Selling by first buying is exactly
+    backwards.
+
+    Instead we keep the range straddling price with only `sell_to_ratio` of its
+    width above price (sell side) and the rest below (buy side). The bot's base
+    settles near `sell_to_ratio`, so 3Commas SELLS the excess down to it through
+    the bot's own limit orders — controlled, no market buy. Defaults to the
+    inventory target_btc. Width is left uncompressed so steps stay fee-OK (the
+    old 0.60 compression could fall below the fee floor).
     """
-    Build sell-biased tier parameters for SELL_ONLY mode.
+    from inventory import get_inventory_settings
+    if sell_to_ratio is None:
+        sell_to_ratio = get_inventory_settings().get("target_btc", 0.45)
+    sell_to_ratio = min(max(float(sell_to_ratio), 0.05), 0.95)  # clamp to sane band
 
-    Shifts each tier's range entirely above current price so the bot's initial
-    orders are sells only (no buy orders sit below price at deployment time).
-    Range is compressed to 60% of normal width to create a denser sell cluster.
-
-        grid_low  = price × 1.0005  (fractional buffer — avoids placing orders
-                                     right on the live price spread)
-        grid_high = grid_low + (original_width × 0.60)
-
-    As price rises into the range, sell orders fill and BTC converts to USDC.
-    If price falls further, orders remain unexecuted — no forced selling at a loss.
-    Levels and step are recalculated proportionally.
-    """
     import copy as _copy
     result = []
     for tier in tiers:
         t = _copy.deepcopy(tier)
-        orig_width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
-        new_width  = round(orig_width * 0.60, 2)
-        new_low    = round(price * 1.0005, 2)
-        new_high   = round(new_low + new_width, 2)
-        n          = _apply_intensive_fee_guard(t, new_width)
-        new_step   = round(new_width / (n - 1), 2)
+        width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
+        new_high = round(price + width * sell_to_ratio, 2)          # sell side above price
+        new_low  = round(price - width * (1.0 - sell_to_ratio), 2)  # buy side below price
+        n        = _apply_intensive_fee_guard(t, width)
+        new_step = round(width / (n - 1), 2)
         t["grid_high"]   = new_high
         t["grid_low"]    = new_low
         t["levels"]      = n

@@ -325,7 +325,24 @@ class TestIntensiveTierFeeGuard:
         assert inner["step"] >= inner["min_step"]
         assert inner["fee_ok"] is True
         assert len(inner["grid_levels"]) == inner["levels"]
-        assert inner["grid_low"] > 70000
+        # Root-cause fix: the sell grid must STRADDLE price (sheds BTC), NOT sit
+        # entirely above it (which made 3Commas market-buy BTC to back the wall).
+        assert inner["grid_low"] < 70000 < inner["grid_high"]
+
+    def test_intensive_sell_never_all_above_price(self):
+        """Regression guard for the 2026-06-17 buy-to-sell bug: with an
+        aggressive (low) sell_to_ratio the grid still straddles, never all-above."""
+        import engine
+        for ratio in (0.30, 0.45, 0.60):
+            tiers = engine._make_intensive_sell_tiers(70000, self._narrow_tiers(),
+                                                      sell_to_ratio=ratio)
+            inner = tiers[0]
+            # Never all-above price (that was the buy-to-sell bug) — always straddles.
+            assert inner["grid_low"] < 70000 < inner["grid_high"], f"all-above at ratio {ratio}"
+            below = 70000 - inner["grid_low"]
+            above = inner["grid_high"] - 70000
+            if ratio < 0.5:               # targeting <50% BTC base → biased to shed
+                assert below > above
 
     def test_intensive_buy_reduces_levels_until_fee_ok(self):
         import engine
