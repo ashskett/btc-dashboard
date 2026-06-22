@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Consolidated P&L — Ash + Mark & Lisa</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#0d1117; --panel2:#11161f; --border:#1c2433;
+    --text:#c9d4e0; --muted:#6b7a8d; --accent:#00d4ff; --green:#3fb950;
+    --red:#f85149; --amber:#ffab00; --purple:#a371f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:'Space Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    padding:20px;max-width:1100px;margin:0 auto;font-size:13px;line-height:1.5}
+  h1{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;margin:0 0 2px;letter-spacing:.02em}
+  .sub{color:var(--muted);font-size:11px;margin-bottom:18px}
+  .grid{display:grid;gap:14px}
+  .row2{grid-template-columns:1fr 1fr}
+  .row3{grid-template-columns:1fr 1fr 1fr}
+  @media(max-width:760px){.row2,.row3{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+  .card h2{font-family:'Syne',sans-serif;font-size:13px;font-weight:800;margin:0 0 12px;
+    letter-spacing:.06em;text-transform:uppercase;color:#aab6c4}
+  .big{font-size:30px;font-weight:700;font-family:'Syne',sans-serif;line-height:1.1}
+  .lbl{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+  .pos{color:var(--green)} .neg{color:var(--red)} .amb{color:var(--amber)} .acc{color:var(--accent)}
+  table{width:100%;border-collapse:collapse;margin-top:4px}
+  td{padding:5px 0;border-bottom:1px solid #131a24;vertical-align:top}
+  td:last-child{text-align:right;font-weight:700;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .tot td{border-top:2px solid var(--border);border-bottom:none;padding-top:8px;font-weight:700}
+  .pill{display:inline-block;font-size:9px;padding:2px 7px;border-radius:20px;
+    border:1px solid var(--border);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .pill.ring{border-color:#5a4a20;color:var(--amber);background:rgba(255,171,0,.06)}
+  .note{font-size:11px;color:var(--muted);margin-top:8px}
+  .hl{background:rgba(0,212,255,.05);border:1px solid #1d3a45;border-radius:8px;padding:12px 14px;margin-top:14px;font-size:12px}
+  .barwrap{height:8px;background:#131a24;border-radius:6px;overflow:hidden;margin:6px 0}
+  .bar{height:100%}
+  .small{font-size:11px}
+  .divider{height:1px;background:var(--border);margin:22px 0}
+  .foot{color:var(--muted);font-size:10px;margin-top:24px;line-height:1.7}
+</style>
+</head>
+<body>
+<h1>Consolidated P&L</h1>
+<div class="sub" id="sub">Ash + Mark &amp; Lisa · combined crypto pool · loading…</div>
+
+<!-- TOP-LINE -->
+<div class="grid row3" id="topline"></div>
+
+<div class="hl" id="headline"></div>
+
+<div class="divider"></div>
+
+<!-- BY OWNER -->
+<h2 style="font-family:'Syne',sans-serif;font-size:15px;letter-spacing:.04em;margin:0 0 12px">By Owner</h2>
+<div class="grid row2" id="owners"></div>
+
+<div class="divider"></div>
+
+<!-- GRID + THEFT -->
+<div class="grid row2">
+  <div class="card" id="gridcard"></div>
+  <div class="card" id="theftcard"></div>
+</div>
+
+<div class="foot" id="foot"></div>
+
+<script>
+// ── Auth: read ?token= (or stored), inject X-Dashboard-Token on same-origin fetches ──
+(function(){
+  const p = new URLSearchParams(location.search);
+  const t = p.get('token');
+  if(t) localStorage.setItem('dash_token', t);
+  const TOKEN = localStorage.getItem('dash_token') || '';
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function(url, opts = {}){
+    if(TOKEN && typeof url === 'string' && (url.startsWith('/') || url.startsWith(location.origin))){
+      opts = { ...opts, headers: { 'X-Dashboard-Token': TOKEN, ...(opts.headers || {}) } };
+    }
+    return _fetch(url, opts);
+  };
+})();
+
+// ── Reconciled figures (update when deposits / cold storage / theft change) ──
+const DATA = {
+  asOf: "22 June 2026",
+  usdPerGbp: 1.32,
+  grid: { valueGBP: 62112, realisedUSD: 11948, realisedGBP: 9010, vsHoldPts: 5.15 },
+  market: { btcChangePct: -30, label: "BTC since first buys (Jan 2026)" },
+  owners: [
+    { name:"Ash (you)", colour:"var(--accent)",
+      ownIn:73100, giftIn:10000, giftOut:0,
+      holdings:{ "Grid — your 50% share":31056, "Cold storage (ASH wallets)":26750 },
+      stolen:9300 },
+    { name:"Mark & Lisa (parents)", colour:"var(--purple)",
+      ownIn:130247, giftIn:0, giftOut:10000,
+      holdings:{ "Grid — their 50% share":31056, "Cold storage (M&L wallets)":53067, "Kraken (dust)":89 },
+      stolen:8300 }
+  ],
+  theft: {
+    note:"Phone stolen in Rio, 18 Apr 2026, followed by unauthorised access. A fraud loss — ring-fenced and being actively recovered. NOT a trading loss.",
+    items:[
+      {platform:"Nexo",     amount:6500, owner:"Ash",         status:"Final response sent — awaiting reply"},
+      {platform:"Coinbase", amount:5600, owner:"Joint pool",  status:"Complaint open → Ombudsman"},
+      {platform:"Kraken",   amount:5500, owner:"Mark & Lisa", status:"Chasing final response"}
+    ]
+  }
+};
+
+const f = n => "£" + Math.round(n).toLocaleString();
+const sg = n => (n>=0?"+":"−") + "£" + Math.abs(Math.round(n)).toLocaleString();
+const pct = n => (n>=0?"+":"−") + Math.abs(n).toFixed(1) + "%";
+
+function ownerDerived(o){
+  const deployed = o.ownIn + o.giftIn - o.giftOut;
+  const holdTotal = Object.values(o.holdings).reduce((a,b)=>a+b,0);
+  const marketChange = holdTotal + o.stolen - deployed; // unrealised market move (stolen ring-fenced separately in display)
+  const retPct = deployed ? (marketChange/deployed*100) : 0;
+  const retPctIfLost = deployed ? ((holdTotal-deployed)/deployed*100) : 0;
+  return {deployed, holdTotal, marketChange, retPct, retPctIfLost};
+}
+
+function render(grid){
+  const G = grid || DATA.grid;
+  document.getElementById('sub').textContent =
+    `Ash + Mark & Lisa · combined crypto pool · figures as of ${DATA.asOf}`;
+
+  // combined
+  let inSum=0, holdSum=0, stolenSum=0;
+  DATA.owners.forEach(o=>{ const d=ownerDerived(o); inSum+=o.ownIn; holdSum+=d.holdTotal; stolenSum+=o.stolen; });
+  const marketSum = (holdSum+stolenSum)-inSum;
+
+  document.getElementById('topline').innerHTML = `
+    <div class="card"><div class="lbl">Total invested (real money in)</div>
+      <div class="big">${f(inSum)}</div>
+      <div class="note">Ash ${f(DATA.owners[0].ownIn)} + parents ${f(DATA.owners[1].ownIn)}</div></div>
+    <div class="card"><div class="lbl">Holdings now</div>
+      <div class="big acc">${f(holdSum)}</div>
+      <div class="note">across grid, cold storage &amp; Kraken</div></div>
+    <div class="card"><div class="lbl">Stolen — recovery pending <span class="pill ring">ring-fenced</span></div>
+      <div class="big amb">${f(stolenSum)}</div>
+      <div class="note">fraud loss, being pursued — not trading</div></div>`;
+
+  document.getElementById('headline').innerHTML =
+    `<b>The trading is working.</b> The grid engine has earned <span class="pos">${sg(G.realisedGBP)}</span>
+     realised ($${G.realisedUSD.toLocaleString()}), and beat just-holding Bitcoin by ~${G.vsHoldPts} points.
+     The combined pool is <span class="neg">${sg(marketSum)}</span> on paper — that is
+     <b>unrealised crypto decline</b> (BTC ${pct(DATA.market.btcChangePct)} over the period) plus the
+     ring-fenced theft — <b>not</b> losses from the bot.`;
+
+  // owners
+  document.getElementById('owners').innerHTML = DATA.owners.map(o=>{
+    const d = ownerDerived(o);
+    const holdRows = Object.entries(o.holdings).map(([k,v])=>`<tr><td>${k}</td><td>${f(v)}</td></tr>`).join("");
+    const giftRow = o.giftIn ? `<tr><td>Gift received (from parents)</td><td>${f(o.giftIn)}</td></tr>`
+                  : o.giftOut ? `<tr><td>Gift given (to Ash)</td><td>−${f(o.giftOut)}</td></tr>` : "";
+    const cls = d.marketChange>=0?"pos":"neg";
+    return `<div class="card" style="border-top:3px solid ${o.colour}">
+      <h2 style="color:${o.colour}">${o.name}</h2>
+      <table>
+        <tr><td>Own money in</td><td>${f(o.ownIn)}</td></tr>
+        ${giftRow}
+        <tr class="tot"><td>Capital deployed</td><td>${f(d.deployed)}</td></tr>
+      </table>
+      <table style="margin-top:12px">${holdRows}
+        <tr class="tot"><td>Holdings now</td><td class="acc">${f(d.holdTotal)}</td></tr>
+      </table>
+      <table style="margin-top:12px">
+        <tr><td>Stolen — recovery pending <span class="pill ring">ring-fenced</span></td><td class="amb">${f(o.stolen)}</td></tr>
+        <tr class="tot"><td>Unrealised position</td><td class="${cls}">${sg(d.marketChange)} (${pct(d.retPct)})</td></tr>
+      </table>
+      <div class="note">vs Bitcoin ${pct(DATA.market.btcChangePct)} over the same period —
+        ${d.retPct>DATA.market.btcChangePct?'<span class="pos">outperformed the market</span>':'in line with the market'}.</div>
+    </div>`;
+  }).join("");
+
+  // grid card
+  document.getElementById('gridcard').innerHTML = `
+    <h2>Grid Trading Engine</h2>
+    <div class="lbl">Realised trading profit (all-time)</div>
+    <div class="big pos">${sg(G.realisedGBP)}</div>
+    <div class="note">$${G.realisedUSD.toLocaleString()} · the clean, deposit-proof number</div>
+    <table style="margin-top:12px">
+      <tr><td>Current grid value (joint)</td><td>${f(G.valueGBP)}</td></tr>
+      <tr><td>Beat just-holding BTC by</td><td class="pos">~${G.vsHoldPts} pts</td></tr>
+      <tr><td>Ownership</td><td>50% Ash / 50% M&amp;L</td></tr>
+    </table>
+    <div class="note">This is what the automated bot earned from trading — independent of deposits, withdrawals and price moves.</div>`;
+
+  // theft card
+  const t = DATA.theft;
+  const tTotal = t.items.reduce((a,b)=>a+b.amount,0);
+  document.getElementById('theftcard').innerHTML = `
+    <h2 style="color:var(--amber)">Stolen — Recovery Pending <span class="pill ring">ring-fenced</span></h2>
+    <div class="big amb">${f(tTotal)}</div>
+    <div class="note">${t.note}</div>
+    <table style="margin-top:12px">
+      ${t.items.map(i=>`<tr><td>${i.platform} <span class="small" style="color:var(--muted)">(${i.owner})</span><br>
+        <span class="small" style="color:var(--muted)">${i.status}</span></td><td class="amb">${f(i.amount)}</td></tr>`).join("")}
+    </table>`;
+
+  document.getElementById('foot').innerHTML =
+    `Sources: Coinbase &amp; Kraken read-only APIs (live), Ledger cold-storage export, Trading Mastersheet (owner-tagged deposits), `
+    + `Mark &amp; Lisa Q1 2026 report, and the grid engine's live performance log. `
+    + `Figures in GBP, as of ${DATA.asOf}; crypto values move with the market. `
+    + `Theft figures are claimed losses with recovery in progress. This is a personal summary, not financial advice.`;
+}
+
+// initial render with baked figures, then try a live grid-value refresh
+render();
+(async function(){
+  try{
+    const r = await fetch('/portfolio/log?limit=1');
+    if(!r.ok) return;
+    const rows = await r.json();
+    const last = Array.isArray(rows)?rows[rows.length-1]:null;
+    if(last && last.portfolio_usd){
+      const liveGBP = Math.round(last.portfolio_usd / DATA.usdPerGbp);
+      render(Object.assign({}, DATA.grid, { valueGBP: liveGBP }));
+      document.getElementById('sub').textContent += ' · grid value live';
+    }
+  }catch(e){ /* keep baked figures */ }
+})();
+</script>
+</body>
+</html>

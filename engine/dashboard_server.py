@@ -179,6 +179,11 @@ def index():
 def pnl_page():
     return send_from_directory('.', 'pnl.html')
 
+@app.route("/pnl-consolidated", strict_slashes=False)
+def pnl_consolidated_page():
+    # Consolidated owner-split P&L (Ash + Mark & Lisa) with ring-fenced theft.
+    return send_from_directory('.', 'pnl_consolidated.html')
+
 @app.route("/macro")
 def macro_desktop():
     return send_from_directory('.', 'btc_macro_dashboard.html')
