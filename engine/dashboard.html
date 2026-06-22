@@ -295,6 +295,7 @@
   #toast.show { opacity:1; transform:translateY(0); }
   #toast.ok  { border-color:var(--green); }
   #toast.err { border-color:var(--red); }
+  #toast.pending { border-color:var(--accent); color:var(--accent); }
 
   .ts { font-size:9px; color:var(--muted); text-align:center; padding:8px; margin-top:auto; }
   .hr { height:1px; background:var(--border); margin:6px 0; }
@@ -1154,6 +1155,29 @@
 // Since this page is served BY Flask, all API calls go to the same origin
 const API = '';   // empty = same origin (http://localhost:5050)
 
+// Map a command URL to a friendly "in progress" label for instant feedback.
+function _cmdLabel(url){
+  const u = String(url);
+  if (u.includes('/ride/arm'))        return 'Arming ride mode…';
+  if (u.includes('/ride/disarm'))     return 'Disarming ride mode…';
+  if (u.includes('force-redeploy'))   return 'Recentring grid…';
+  if (u.includes('/regime/clear'))    return 'Clearing regime…';
+  if (u.includes('/flash'))           return 'Clearing flash-move…';
+  if (u.includes('/breakout'))        return 'Clearing breakout…';
+  if (u.includes('/lock'))            return 'Locking bot…';
+  if (u.includes('/unlock'))          return 'Unlocking bot…';
+  if (/\/start\b/.test(u))            return 'Starting…';
+  if (/\/stop\b/.test(u))             return 'Stopping…';
+  if (u.includes('/inventory/mode'))  return 'Setting inventory mode…';
+  if (u.includes('/inventory'))       return 'Updating inventory…';
+  if (u.includes('/budgets'))         return 'Saving budgets…';
+  if (u.includes('/targets'))         return 'Saving price target…';
+  if (u.includes('/trendlines'))      return 'Saving trendlines…';
+  if (u.includes('/grid-capital'))    return 'Updating capital…';
+  if (u.includes('/engine/'))         return 'Sending engine command…';
+  return 'Sending command…';
+}
+
 // ── Auth token (reads ?token= from URL, stores in localStorage) ──
 (function() {
   const p = new URLSearchParams(window.location.search);
@@ -1164,6 +1188,12 @@ const API = '';   // empty = same origin (http://localhost:5050)
   window.fetch = function(url, opts = {}) {
     if (TOKEN && typeof url === 'string' && (url.startsWith('/') || url.startsWith(window.location.origin))) {
       opts = { ...opts, headers: { 'X-Dashboard-Token': TOKEN, ...(opts.headers || {}) } };
+    }
+    // Instant feedback: the moment any command (non-GET) fires, acknowledge it so
+    // you know the press registered — no waiting for the next engine cycle.
+    const m = (opts.method || 'GET').toUpperCase();
+    if (m !== 'GET' && m !== 'HEAD' && typeof url === 'string' && typeof toast === 'function') {
+      toast('⏳ ' + _cmdLabel(url), 'pending');
     }
     return _fetch(url, opts);
   };
@@ -2159,6 +2189,7 @@ async function rideArm(){
     const r = await fetch(`${API}/ride/arm`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disarm_pct:pct})});
     const d = await r.json();
     toast(d.msg || (d.ok?'Ride armed':'Failed'), d.ok ? 'ok' : 'err');
+    if(d.ok && d.state) updateRideStatus(d.state);   // optimistic — don't wait for the engine cycle
   } catch(e){ toast(`Error: ${e.message}`,'err'); }
 }
 async function rideDisarm(){
@@ -2166,6 +2197,7 @@ async function rideDisarm(){
     const r = await fetch(`${API}/ride/disarm`, {method:'POST'});
     const d = await r.json();
     toast(d.msg || 'Disarmed', d.ok ? 'ok' : 'err');
+    if(d.ok){ updateRideStatus(d.state || {armed:false}); }  // optimistic — instant badge update
   } catch(e){ toast(`Error: ${e.message}`,'err'); }
 }
 function updateRideStatus(rm){
