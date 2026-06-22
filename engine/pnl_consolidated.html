@@ -119,8 +119,11 @@ function ownerDerived(o){
   const holdTotal = Object.values(o.holdings).reduce((a,b)=>a+b,0);
   const marketChange = holdTotal + o.stolen - deployed; // unrealised market move (stolen ring-fenced separately in display)
   const retPct = deployed ? (marketChange/deployed*100) : 0;
-  const retPctIfLost = deployed ? ((holdTotal-deployed)/deployed*100) : 0;
-  return {deployed, holdTotal, marketChange, retPct, retPctIfLost};
+  // Position counting the theft as lost AND the gift-to-Ash as gone — i.e. holdings
+  // vs the owner's FULL contribution (giftOut + stolen both treated as losses).
+  const afterGiftTheft = holdTotal - o.ownIn;
+  const afterGiftTheftPct = o.ownIn ? (afterGiftTheft/o.ownIn*100) : 0;
+  return {deployed, holdTotal, marketChange, retPct, afterGiftTheft, afterGiftTheftPct};
 }
 
 function render(grid){
@@ -171,6 +174,7 @@ function render(grid){
       <table style="margin-top:12px">
         <tr><td>Stolen — recovery pending <span class="pill ring">ring-fenced</span></td><td class="amb">${f(o.stolen)}</td></tr>
         <tr class="tot"><td>Unrealised position</td><td class="${cls}">${sg(d.marketChange)} (${pct(d.retPct)})</td></tr>
+        ${o.giftOut?`<tr><td>Net of theft &amp; £${(o.giftOut/1000)}k gift to Ash <span class="small" style="color:var(--muted)">(both as losses)</span></td><td class="neg">${sg(d.afterGiftTheft)} (${pct(d.afterGiftTheftPct)})</td></tr>`:""}
       </table>
       <div class="note">vs Bitcoin ${pct(DATA.market.btcChangePct)} over the same period —
         ${d.retPct>DATA.market.btcChangePct?'<span class="pos">outperformed the market</span>':'in line with the market'}.</div>

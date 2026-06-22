@@ -59,6 +59,7 @@ _PUBLIC_PATHS = {
     "/", "/ping", "/deploy",
     "/macro", "/macro/mobile", "/mobile",
     "/pnl-page", "/pnl-page/",
+    "/pnl-consolidated", "/pnl-consolidated/",
 }
 
 @app.before_request
@@ -2079,6 +2080,19 @@ def capital_events_delete(idx):
     with open(_CAPITAL_EVENTS_FILE, "w") as f:
         json.dump(events, f, indent=2)
     return jsonify({"ok": True, "events": events})
+
+
+@app.route("/capital/sync", methods=["POST"])
+def capital_sync_endpoint():
+    """Refresh the capital-events ledger from the Coinbase read-only API
+    (deposits/withdrawals/sends; converts & trades excluded). Also runs daily
+    via cron. Needs COINBASE_CDP_* in the environment."""
+    try:
+        import capital_sync
+        res = capital_sync.sync()
+        return jsonify({"ok": True, **res})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
 # ── Engine process management ────────────────────────────
