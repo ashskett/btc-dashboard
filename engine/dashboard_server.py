@@ -263,11 +263,23 @@ def _aggregate_candles(candles_in, period):
 
 
 # ── Candles via ccxt ──────────────────────────────────────
+_ccxt_exchange = None
+def _get_ccxt_exchange():
+    """Cached ccxt Coinbase instance. Building one per /candles request reloaded
+    Coinbase's full markets list every call — ~7s of latency AND a steady memory
+    leak that ballooned the dashboard's RSS (700MB+) and made it feel slow and
+    unresponsive. Create once, reuse: markets load a single time."""
+    global _ccxt_exchange
+    if _ccxt_exchange is None:
+        import ccxt
+        _ccxt_exchange = ccxt.coinbase({"enableRateLimit": True})
+    return _ccxt_exchange
+
+
 @app.route("/candles")
 def candles():
     try:
-        import ccxt
-        exchange = ccxt.coinbase()
+        exchange = _get_ccxt_exchange()
 
         # Coinbase via ccxt only supports these granularities
         # Map UI timeframes to valid ccxt strings
@@ -2086,11 +2098,25 @@ def capital_events_delete(idx):
 def capital_sync_endpoint():
     """Refresh the capital-events ledger from the Coinbase read-only API
     (deposits/withdrawals/sends; converts & trades excluded). Also runs daily
-    via cron. Needs COINBASE_CDP_* in the environment."""
+    via cron. Needs COINBASE_CDP_* in the environment.
+
+    Runs capital_sync.py as a SEPARATE PROCESS — it pulls thousands of Coinbase
+    transactions, and doing that in-process bloats the Flask server's RSS (Python
+    doesn't return freed memory to the OS), which made the dashboard sluggish.
+    The subprocess frees all that memory when it exits.
+    """
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
     try:
-        import capital_sync
-        res = capital_sync.sync()
-        return jsonify({"ok": True, **res})
+        p = subprocess.run([sys.executable, os.path.join(here, "capital_sync.py")],
+                           cwd=here, capture_output=True, text=True, timeout=240)
+        if p.returncode != 0:
+            return jsonify({"ok": False, "error": (p.stderr or p.stdout)[-300:]}), 500
+        events = _load_capital_events()
+        return jsonify({"ok": True, "total": len(events),
+                        "net_usd": round(sum(e.get("amount_usd", 0) for e in events), 2)})
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "sync timed out"}), 504
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
