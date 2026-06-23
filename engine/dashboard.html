@@ -1515,30 +1515,32 @@ function redrawLines(){
   }
 }
 
-// ── ORDER-BOOK WALLS ──────────────────────────────────────
-// Plot the nearest durable bid/ask liquidity walls from status.liquidity. Line
-// thickness scales with persistence (how many cycles the wall has held).
+// ── ORDER-BOOK WALLS (multi-venue) ────────────────────────
+// Plot aggregated liquidity walls from the multi-venue feed (Binance/OKX/Bybit/
+// Kraken) — including walls FAR from price that Coinbase's thin book can't show.
+// Teal = bid (support), magenta = ask (resistance). Solid+thick when durable
+// (persistence>=3). Updated from /multi-orderbook (collected every 2 min).
+let multiWalls = null;
 function drawWalls(){
   wallLines.forEach(l=>{ try{ candles.removePriceLine(l); }catch(e){} });
   wallLines = [];
-  if(!showWalls || !candles || !status || !status.liquidity) return;
-  const liq = status.liquidity;
+  if(!showWalls || !candles || !multiWalls) return;
   const mk = (w, isBid) => {
     if(!w || !w.price) return;
-    const sz = w.size!=null ? `${Number(w.size).toFixed(0)} BTC` : '';
     const persist = w.persistence || 1;
+    const far = Math.abs(w.dist_atr||0) >= 1.5;
     wallLines.push(candles.createPriceLine({
       price: w.price,
-      color: isBid ? '#2dd4bf' : '#e879f9',        // teal bid / magenta ask (avoid amber trendlines)
+      color: isBid ? '#2dd4bf' : '#e879f9',        // teal bid / magenta ask
       lineWidth: persist>=3 ? 2 : 1,
       lineStyle: persist>=3 ? LightweightCharts.LineStyle.Solid
                             : LightweightCharts.LineStyle.Dotted,
       axisLabelVisible: true,
-      title: `${isBid?'Bid':'Ask'} wall ${sz}${persist>=3?' ✓':''}`,
+      title: `${isBid?'Bid':'Ask'} ${Number(w.size).toFixed(0)}BTC${far?' (far)':''}${persist>=3?' ✓':''}`,
     }));
   };
-  mk(liq.nearest_bid_wall, true);
-  mk(liq.nearest_ask_wall, false);
+  (multiWalls.bid_walls||[]).slice(0,6).forEach(w=>mk(w,true));
+  (multiWalls.ask_walls||[]).slice(0,6).forEach(w=>mk(w,false));
 }
 
 // ── STATUS POLL ───────────────────────────────────────────
@@ -1712,6 +1714,10 @@ async function pollStatus(){
     }
 
     redrawLines();
+    try {
+      const rw = await fetch(`${API}/multi-orderbook`);
+      if(rw.ok){ const mw = await rw.json(); if(mw && !mw.error) multiWalls = mw; }
+    } catch(e){ /* keep last walls */ }
     drawWalls();
 
     // Refresh target lines + sidebar if engine reports a target just fired/cleared

@@ -2099,6 +2099,18 @@ def capital_events_post():
     return jsonify({"ok": True, "events": events})
 
 
+@app.route("/multi-orderbook")
+def multi_orderbook_state():
+    """Latest aggregated multi-venue liquidity walls (collected by the separate
+    multi_orderbook.py cron — observability only)."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "multi_orderbook_state.json")
+    try:
+        with open(p) as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({"error": "no data yet"})
+
+
 @app.route("/capital/events/<int:idx>", methods=["DELETE"])
 def capital_events_delete(idx):
     events = _load_capital_events()
