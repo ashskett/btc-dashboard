@@ -1529,7 +1529,7 @@ function drawWalls(){
     const persist = w.persistence || 1;
     wallLines.push(candles.createPriceLine({
       price: w.price,
-      color: isBid ? '#2dd4bf' : '#fb923c',        // teal bid / amber ask
+      color: isBid ? '#2dd4bf' : '#e879f9',        // teal bid / magenta ask (avoid amber trendlines)
       lineWidth: persist>=3 ? 2 : 1,
       lineStyle: persist>=3 ? LightweightCharts.LineStyle.Solid
                             : LightweightCharts.LineStyle.Dotted,
