@@ -525,6 +525,14 @@ _prev_weekend_mode: bool = False
 _sell_only_confirm: int = 0
 SELL_ONLY_CONFIRM_CYCLES: int = 3
 SUPPORT_GUARD_ATR: float = 1.0
+# "Sell on the bounce, not the low" guard (added 2026-06-23). In a sharp dip the
+# grid buys BTC, the ratio tops out, and SELL_ONLY would dump it right at the low.
+# Instead, once confirmed, hold until price has bounced ≥ SELL_BOUNCE_ATR×ATR off
+# the recent low — so we rebalance into a bounce, not the bottom. Capped at
+# SELL_ONLY_MAX_WAIT cycles so a persistent overweight near the low still sells.
+SELL_BOUNCE_ATR: float = 0.4
+SELL_ONLY_MAX_WAIT: int = 12   # ~24 min; fire regardless after this many cycles
+SELL_LOW_LOOKBACK: int = 4     # candles used for the recent-low reference
 # Drift stabilisation: counts consecutive cycles where drift threshold is exceeded.
 # Recentre only fires after DRIFT_CONFIRM_CYCLES cycles — filters single-candle spikes.
 _drift_confirm_cycles: int = 0
@@ -639,21 +647,22 @@ def _recentre_gate_params(trending_down: bool, trending_up: bool):
     return (0.85, DRIFT_CONFIRM_CYCLES, "")
 
 
-def _apply_sell_guards(mode, prev_mode, price, atr, trendline, btc_ratio, confirm_count):
+def _apply_sell_guards(mode, prev_mode, price, atr, trendline, btc_ratio,
+                       confirm_count, recent_low=None):
     """Sell-into-support protection. Given a would-be inventory `mode`, decide
     whether SELL_ONLY (which mass-market-sells BTC) is actually allowed to fire.
 
     Returns (mode, confirm_count, note). Pure — no globals or IO, so it is unit
-    tested directly. Two guards (only SELL_ONLY is affected; BUY_ONLY/NORMAL pass
+    tested directly. Guards (only SELL_ONLY is affected; BUY_ONLY/NORMAL pass
     through):
       1. Support guard — if price sits within SUPPORT_GUARD_ATR×ATR *above* the
-         active support trendline, hold (return NORMAL). This is the worst place
-         to sell (most likely to bounce). Releases automatically once price
-         breaks *below* support (distance goes negative) so capital protection
-         resumes on a confirmed breakdown.
-      2. Fresh-entry confirmation — a brand-new SELL_ONLY trigger must persist
-         SELL_ONLY_CONFIRM_CYCLES cycles before selling, because btc_ratio is
-         noisy/inflated (3Commas counts bot-locked BTC). A single spike holds.
+         active support trendline, hold (NORMAL). Releases once price breaks below.
+      2. Fresh-entry confirmation — a new SELL_ONLY trigger must persist
+         SELL_ONLY_CONFIRM_CYCLES cycles (btc_ratio is noisy/inflated).
+      3. Bounce guard — even once confirmed, don't sell while price is still on the
+         recent low; wait until it has bounced ≥ SELL_BOUNCE_ATR×ATR off it, so we
+         rebalance into strength, not at the bottom of a dip. Bypassed after
+         SELL_ONLY_MAX_WAIT cycles so a stuck overweight still gets sold.
     """
     note = ""
     if mode != "SELL_ONLY":
@@ -664,15 +673,35 @@ def _apply_sell_guards(mode, prev_mode, price, atr, trendline, btc_ratio, confir
             f"SELL suppressed — price ${price:,.0f} within {SUPPORT_GUARD_ATR:.1f}×ATR "
             f"(${SUPPORT_GUARD_ATR * atr:,.0f}) above support ${trendline:,.0f}; "
             f"holding (NORMAL) until it recovers or breaks below.")
-    # Guard 2: fresh-entry confirmation
+
+    # Has price bounced off the recent low yet?
+    bounced = (recent_low is None or atr <= 0
+               or price >= recent_low + SELL_BOUNCE_ATR * atr)
+
+    # Guards 2 + 3: fresh-entry confirmation AND a bounce — unless the overweight
+    # has persisted too long, in which case fire regardless to cap risk.
     if prev_mode != "SELL_ONLY":
         confirm_count += 1
-        if confirm_count < SELL_ONLY_CONFIRM_CYCLES:
+        enough = confirm_count >= SELL_ONLY_CONFIRM_CYCLES
+        timed_out = confirm_count >= SELL_ONLY_MAX_WAIT
+        if (enough and bounced) or timed_out:
+            why = (f"max-wait {confirm_count} cycles" if timed_out
+                   else f"confirmed {confirm_count} cycles + bounced off low")
+            return "SELL_ONLY", confirm_count, f"SELL proceeding ({why})."
+        if not enough:
             return "NORMAL", confirm_count, (
                 f"SELL pending confirm {confirm_count}/{SELL_ONLY_CONFIRM_CYCLES} "
                 f"(ratio {btc_ratio:.0%}) — not acting on a single spike.")
-        return "SELL_ONLY", confirm_count, f"SELL confirmed after {confirm_count} cycles — proceeding."
-    # Already confirmed and staying, not at support → sell proceeds
+        return "NORMAL", confirm_count, (
+            f"SELL holding — price ${price:,.0f} on the recent low ${recent_low:,.0f}; "
+            f"waiting for a bounce (≥{SELL_BOUNCE_ATR:.1f}×ATR) so we don't sell the "
+            f"bottom ({confirm_count}/{SELL_ONLY_MAX_WAIT}).")
+
+    # Already in SELL_ONLY (staying) — keep selling unless we're sitting on the low.
+    if not bounced:
+        return "NORMAL", confirm_count, (
+            f"SELL paused — price ${price:,.0f} on the recent low ${recent_low:,.0f}; "
+            f"waiting for a bounce.")
     return "SELL_ONLY", confirm_count, note
 
 
@@ -889,11 +918,16 @@ def run():
                 state.inventory_mode = "NORMAL"
 
             # ── Sell-into-support protection ────────────────────────────────────
-            # Two guards on SELL_ONLY (which mass-market-sells BTC) — see the pure
+            # Guards on SELL_ONLY (which mass-market-sells BTC) — see the pure
             # helper _apply_sell_guards and the module note above.
+            try:
+                _recent_low = (float(df["low"].tail(SELL_LOW_LOOKBACK).min())
+                               if df is not None and "low" in df.columns and len(df) else None)
+            except Exception:
+                _recent_low = None
             state.inventory_mode, _sell_only_confirm, _sell_guard_note = _apply_sell_guards(
                 state.inventory_mode, _prev_inventory_mode, state.price, state.atr,
-                TRENDLINE, state.btc_ratio, _sell_only_confirm)
+                TRENDLINE, state.btc_ratio, _sell_only_confirm, recent_low=_recent_low)
             if _sell_guard_note:
                 print(f"  {_sell_guard_note}")
             state.sell_guard = _sell_guard_note or None

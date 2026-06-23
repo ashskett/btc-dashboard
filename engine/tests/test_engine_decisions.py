@@ -416,6 +416,39 @@ class TestSellGuards:
             "SELL_ONLY", "NORMAL", 64100, 400, 64000, 0.80, 2)
         assert mode == "NORMAL" and cnt == 0
 
+    # ── Bounce guard: sell on the bounce, not the low (2026-06-23) ──
+    def test_bounce_guard_holds_on_the_low(self):
+        import engine
+        # confirmed (count already past CONFIRM_CYCLES) but price sitting ON the
+        # recent low → hold and wait for a bounce, don't sell the bottom.
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "NORMAL", 62000, 400, None, 0.80, 4, recent_low=62000)
+        assert mode == "NORMAL"
+        assert "bounce" in note.lower()
+
+    def test_bounce_guard_fires_after_bounce(self):
+        import engine
+        # same, but price has bounced ≥0.4×ATR (160) off the low → sell proceeds.
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "NORMAL", 62200, 400, None, 0.80, 4, recent_low=62000)
+        assert mode == "SELL_ONLY"
+
+    def test_bounce_guard_max_wait_fires_anyway(self):
+        import engine
+        # overweight persisting on the low past the max wait → sell regardless.
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "NORMAL", 62000, 400, None, 0.80,
+            engine.SELL_ONLY_MAX_WAIT - 1, recent_low=62000)
+        assert mode == "SELL_ONLY"
+        assert "max-wait" in note.lower()
+
+    def test_bounce_guard_inert_without_recent_low(self):
+        import engine
+        # no recent_low data → bounce guard is inert, confirmation behaves as before
+        mode, cnt, note = engine._apply_sell_guards(
+            "SELL_ONLY", "NORMAL", 62000, 400, None, 0.80, 4, recent_low=None)
+        assert mode == "SELL_ONLY"
+
 
 class _FakeState:
     """Minimal stand-in for the engine state object used by _compute_tier_states."""
