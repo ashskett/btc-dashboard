@@ -752,6 +752,12 @@
       <button class="cbtn on-b" id="tlOn"  onclick="toggleTL(true)">ON</button>
       <button class="cbtn"      id="tlOff" onclick="toggleTL(false)">OFF</button>
     </div>
+
+    <span class="ctl-lbl">Order-Book Walls</span>
+    <div class="btn-row">
+      <button class="cbtn on-b" id="wlOn"  onclick="toggleWalls(true)">ON</button>
+      <button class="cbtn"      id="wlOff" onclick="toggleWalls(false)">OFF</button>
+    </div>
   </div>
 
   <div class="ts">Last sync: <span id="lastSync">—</span></div>
@@ -1257,7 +1263,8 @@ function showAlertModal(message, danger){
 
 const BOT_COLORS = ['#00d4ff','#ff6b35','#b388ff','#00e676'];
 
-let chart, candles, ma200=null, gridLines=[], targetLines=[];
+let chart, candles, ma200=null, gridLines=[], targetLines=[], wallLines=[];
+let showWalls = true;   // order-book liquidity walls overlay (toggle in controls)
 let showGrid=true, showTL=true;
 let priceTargets = [];
 let currentTf='1h';
@@ -1508,6 +1515,32 @@ function redrawLines(){
   }
 }
 
+// ── ORDER-BOOK WALLS ──────────────────────────────────────
+// Plot the nearest durable bid/ask liquidity walls from status.liquidity. Line
+// thickness scales with persistence (how many cycles the wall has held).
+function drawWalls(){
+  wallLines.forEach(l=>{ try{ candles.removePriceLine(l); }catch(e){} });
+  wallLines = [];
+  if(!showWalls || !candles || !status || !status.liquidity) return;
+  const liq = status.liquidity;
+  const mk = (w, isBid) => {
+    if(!w || !w.price) return;
+    const sz = w.size!=null ? `${Number(w.size).toFixed(0)} BTC` : '';
+    const persist = w.persistence || 1;
+    wallLines.push(candles.createPriceLine({
+      price: w.price,
+      color: isBid ? '#2dd4bf' : '#fb923c',        // teal bid / amber ask
+      lineWidth: persist>=3 ? 2 : 1,
+      lineStyle: persist>=3 ? LightweightCharts.LineStyle.Solid
+                            : LightweightCharts.LineStyle.Dotted,
+      axisLabelVisible: true,
+      title: `${isBid?'Bid':'Ask'} wall ${sz}${persist>=3?' ✓':''}`,
+    }));
+  };
+  mk(liq.nearest_bid_wall, true);
+  mk(liq.nearest_ask_wall, false);
+}
+
 // ── STATUS POLL ───────────────────────────────────────────
 async function pollStatus(){
   try {
@@ -1679,6 +1712,7 @@ async function pollStatus(){
     }
 
     redrawLines();
+    drawWalls();
 
     // Refresh target lines + sidebar if engine reports a target just fired/cleared
     if(d.price_target_active !== undefined){
@@ -2297,6 +2331,13 @@ function toggleTL(v){
   document.getElementById('tlOn').className  = `cbtn ${v?'on-b':''}`;
   document.getElementById('tlOff').className = `cbtn ${!v?'on-r':''}`;
   redrawLines();
+}
+
+function toggleWalls(v){
+  showWalls=v;
+  document.getElementById('wlOn').className  = `cbtn ${v?'on-b':''}`;
+  document.getElementById('wlOff').className = `cbtn ${!v?'on-r':''}`;
+  drawWalls();
 }
 
 // ── TIMEFRAME ─────────────────────────────────────────────
