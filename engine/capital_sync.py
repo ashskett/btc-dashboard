@@ -87,7 +87,10 @@ def build_events():
     # BTC+USDC and must not be summed — their effect shows via the USDC/BTC leg.
     rel = [a for a in accs if cc._ccode(a) in {"BTC", "USDC"}]
     INCLUDE = {"send", "advanced_trade_fill", "fiat_deposit", "fiat_withdrawal", "trade", "buy", "sell"}
-    daily = {}  # date -> net GBP flow
+    # date -> {"net": GBP, "ts": timestamp of the largest single tx that day}
+    # Timestamping at the largest tx (not noon) aligns the subtraction with the
+    # actual portfolio_usd jump, so the deposit-adjusted chart doesn't spike.
+    daily = {}
     for a in rel:
         try:
             txs = cc.list_transactions(a.get("id"))
@@ -99,18 +102,30 @@ def build_events():
             nat = float((t.get("native_amount") or {}).get("amount") or 0)  # GBP, signed
             if nat == 0:
                 continue
-            date = (t.get("created_at", "") or "")[:10] or datetime.date.today().isoformat()
-            daily[date] = daily.get(date, 0.0) + nat
+            created = t.get("created_at", "") or ""
+            date = created[:10] or datetime.date.today().isoformat()
+            try:
+                tts = datetime.datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                tts = None
+            rec = daily.setdefault(date, {"net": 0.0, "ts": None, "maxabs": 0.0})
+            rec["net"] += nat
+            if tts is not None and abs(nat) > rec["maxabs"]:
+                rec["maxabs"] = abs(nat)
+                rec["ts"] = tts
 
     out = []
-    for date, gbp in sorted(daily.items()):
+    for date, rec in sorted(daily.items()):
+        gbp = rec["net"]
         if abs(gbp) < 50:   # ignore sub-£50 daily residue (rounding / dust)
             continue
         usd = gbp * (_fiat_to_usd("GBP", date) or 1.33)
-        try:
-            ts = datetime.datetime.fromisoformat(date + "T12:00:00+00:00").timestamp()
-        except Exception:
-            ts = datetime.datetime.now().timestamp()
+        ts = rec["ts"]
+        if ts is None:
+            try:
+                ts = datetime.datetime.fromisoformat(date + "T12:00:00+00:00").timestamp()
+            except Exception:
+                ts = datetime.datetime.now().timestamp()
         out.append({
             "ts": round(ts, 0),
             "amount_usd": round(usd, 2),
