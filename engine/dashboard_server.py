@@ -750,31 +750,46 @@ def account_balance():
     if _balance_cache["data"] is not None and now - _balance_cache["ts"] < 60:
         return jsonify(_balance_cache["data"])
     try:
-        # Trigger 3Commas balance refresh
-        signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
-        time.sleep(2)
+        btc_qty = usdc_qty = btc_usd = usdc_usd = 0.0
+        _source = "coinbase"
+        # Preferred: accurate BTC/USDC from the Coinbase API (fast, and not
+        # inflated by bot-locked BTC the way 3Commas pie_chart is in SELL_ONLY).
+        try:
+            import coinbase_capital
+            bal = coinbase_capital.get_primary_balance()
+            if bal:
+                btc_qty  = float(bal.get("btc_qty") or 0)
+                usdc_qty = float(bal.get("usdc_qty") or 0)
+                # value BTC at the engine's current price
+                price = 0.0
+                try:
+                    with open(STATUS_FILE) as _sf:
+                        price = float(json.load(_sf).get("price") or 0)
+                except Exception:
+                    price = 0.0
+                btc_usd  = btc_qty * price
+                usdc_usd = usdc_qty   # USDC ~= $1
+        except Exception as _ce:
+            print(f"  Coinbase balance fetch failed ({_ce}) — falling back to 3Commas")
+            bal = None
 
-        # Get pie chart data (per-currency breakdown)
-        r = signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
-        pie = r.json() if r.ok else []
-        if not isinstance(pie, list):
-            pie = []
-
-        btc_usd  = 0.0
-        usdc_usd = 0.0
-        btc_qty  = 0.0
-        usdc_qty = 0.0
-        for item in pie:
-            code = (item.get("code") or item.get("currency_code") or "").upper()
-            # API returns "usd_value" (string)
-            val  = float(item.get("usd_value") or item.get("current_value_usd") or 0)
-            qty  = float(item.get("amount") or item.get("quantity") or 0)
-            if code == "BTC":
-                btc_usd = val
-                btc_qty = qty
-            elif code in ("USDC", "USDT", "USD"):
-                usdc_usd += val
-                usdc_qty += qty
+        # Fallback: 3Commas pie_chart (slower, can over-report) only if Coinbase fails.
+        if not bal:
+            _source = "3commas"
+            signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/load_balances")
+            time.sleep(2)
+            r = signed_request("POST", f"/ver1/accounts/{ACCOUNT_ID}/pie_chart_data")
+            pie = r.json() if r.ok else []
+            if not isinstance(pie, list):
+                pie = []
+            for item in pie:
+                code = (item.get("code") or item.get("currency_code") or "").upper()
+                val  = float(item.get("usd_value") or item.get("current_value_usd") or 0)
+                qty  = float(item.get("amount") or item.get("quantity") or 0)
+                if code == "BTC":
+                    btc_usd = val; btc_qty = qty
+                elif code in ("USDC", "USDT", "USD"):
+                    usdc_usd += val; usdc_qty += qty
 
         # Get bot configs to calculate deployed capital
         # investment_quote_currency = USDC held inside the bot
@@ -809,6 +824,7 @@ def account_balance():
             "total_deployed": total_deployed,
             "usdc_idle":      usdc_idle,
             "bots":           bots_capital,
+            "source":         _source,
         }
         _balance_cache = {"data": result, "ts": now}
         return jsonify(result)
