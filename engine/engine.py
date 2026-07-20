@@ -288,23 +288,31 @@ def _make_intensive_sell_tiers(price: float, tiers: list, sell_to_ratio: float |
     return result
 
 
-def _make_ride_tiers(price: float, tiers: list, buy_frac: float = 0.75) -> list:
-    """Buy-heavy + light-sell tiers for RIDE mode (trend-up accumulation).
+def _make_ride_tiers(price: float, tiers: list, btc_ratio: float = None,
+                     atr: float = None) -> list:
+    """RIDE mode = accumulate on DIPS ONLY (Ash 2026-07-21). Trend-up accumulation.
 
-    Unlike the intensive-buy grid (all below price, 60% compressed), the ride grid
-    STRADDLES price — weighted ~75% below (buy every pullback) / ~25% above (a few
-    light sells to bank spike profit), at near-full width so it has room to catch
-    real pullbacks. As the engine trails it up, the buys keep sitting just under
-    price; the small sell band tops up profit without dumping the position.
+    The OLD version straddled price ~75% below / ~25% above — the above-price band
+    forced 3Commas to MARKET-BUY base on enable, so arming ride at a pump top
+    slam-bought ~$18k of BTC at the high (2026-07-20). Fix: place the fraction
+    ABOVE price = CURRENT holdings (btc_ratio), so a redeploy triggers NO market
+    trade — not a buy, not a sell. At entry ride is armed when under-weight
+    (ratio ≈ 0), so the whole grid sits BELOW price → every rung is a buy limit on
+    a pullback, accumulating dips, needing zero base. As it accumulates and trails
+    up, the small above-price band that appears just holds what it bought (never
+    force-sold). Full width for deep-pullback room; width floor 1.2×ATR.
     """
     import copy as _copy
+    _f = max(0.0, min(0.9, btc_ratio)) if (btc_ratio is not None) else 0.0
     result = []
     for tier in tiers:
         t = _copy.deepcopy(tier)
         orig_width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
         new_width  = round(orig_width, 2)                     # full width — pullback room
-        new_low    = round(price - new_width * buy_frac, 2)   # 75% below price → buys
-        new_high   = round(price + new_width * (1 - buy_frac), 2)  # 25% above → light sells
+        if atr and atr > 0:
+            new_width = max(new_width, round(1.2 * atr, 2))
+        new_high   = round(price + _f * new_width, 2)         # base above = current holdings → no market trade
+        new_low    = round(new_high - new_width, 2)           # rest below price → dip buys
         n          = _apply_intensive_fee_guard(t, new_width)
         new_step   = round(new_width / max(n - 1, 1), 2)
         t["grid_high"]   = new_high
@@ -1322,7 +1330,8 @@ def run():
                 # fall through to normal logic (no return) so the engine re-manages
                 # the now-larger BTC position this same cycle
             else:
-                _ride_tiers = _make_ride_tiers(state.price, state.tiers)
+                _ride_tiers = _make_ride_tiers(state.price, state.tiers,
+                                               btc_ratio=state.btc_ratio, atr=state.atr)
                 _entering   = not _prev_ride_active
                 _gw         = state.grid_width or 1
                 _trail      = (state.center is None) or \
