@@ -33,6 +33,8 @@ from market_data import get_btc_data, get_btc_data_short
 import orderbook  # Phase 0: read-only order-book liquidity collector (no decisions)
 import amplitude  # Phase 0: realized swing amplitude vs fee floor (observability)
 import fills_capture  # persist BUY/SELL fills each cycle before 3Commas wipes them
+import realpnl  # real cost-basis P&L (honest realised number per sell, red or green)
+import slide_guard  # Phase 0: sustained-grind ("falling knife") detector (observability)
 import ride_mode  # manually-armed trend-up accumulation mode
 from indicators import add_indicators
 from regime import (detect_regime, trend_strength, compression_exit_fast, get_regime_state,
@@ -181,27 +183,51 @@ def _apply_intensive_fee_guard(tier: dict, width: float) -> int:
     return max(min(levels, max_levels), 2)
 
 
-def _make_intensive_buy_tiers(price: float, tiers: list) -> list:
+def _make_intensive_buy_tiers(price: float, tiers: list, atr: float = None,
+                              btc_ratio: float = None) -> list:
     """
     Build buy-biased tier parameters for BUY_ONLY mode.
 
     Shifts each tier's range entirely below current price so the bot's initial
     orders are buys only (no sell orders sit above price at deployment time).
-    Range is compressed to 60% of normal width to create a denser buy cluster.
+    Range is compressed to 60% of normal width to create a denser buy cluster —
+    45% when BTC is CRITICALLY low (< BUY_CRITICAL_RATIO), so the rungs sit even
+    closer to price and shallow dips refill inventory sooner (Ash 2026-07-06:
+    "the limit orders just need to be closer to price to have more chance of
+    filling, until we get to non critical levels of btc" — big market entries
+    belong to key-level breaks, never the grid).
 
         grid_high = price × 0.9995  (fractional buffer — avoids placing orders
                                      right on the live price spread)
-        grid_low  = grid_high − (original_width × 0.60)
+        grid_low  = grid_high − (original_width × mult)
 
+    Width floor: ≥1.2×ATR. Guards against the degenerate case where the
+    drift-zone cap collapsed the source tier (observed live 2026-07-06: inner
+    deployed $23 wide — 38% of buy capital parked in a $23 slot).
     Levels and step are recalculated proportionally.
     """
     import copy as _copy
     result = []
+    _mult = 0.45 if (btc_ratio is not None and btc_ratio < BUY_CRITICAL_RATIO) else 0.60
+    # Holdings-preserving anchor (added 2026-07-07): a strictly all-below ladder
+    # needs ZERO base, so every chase re-anchor made 3Commas market-DUMP the BTC
+    # the rungs had just accumulated (observed: 0.147 BTC balancing-sold at -$16
+    # then re-bought higher — accumulate/dump churn paying ~0.4% a round trip).
+    # Fix: place the range top so the fraction ABOVE price ≈ the account's
+    # current BTC ratio — the grid keeps holdings as base (no balancing sell; no
+    # buy either, since need ≈ have) and gives them profit-taking sell rungs
+    # above. Same holdings-matching math as threecommas._size_tiers_to_holdings
+    # (live-validated since Jul 1). Ratio ≤3% (dust) keeps the pure all-below
+    # ladder — nothing worth preserving.
+    _hold_f = min(btc_ratio, 0.5) if (btc_ratio is not None and btc_ratio > 0.03) else 0.0
     for tier in tiers:
         t = _copy.deepcopy(tier)
         orig_width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
-        new_width  = round(orig_width * 0.60, 2)
-        new_high   = round(price * 0.9995, 2)
+        new_width  = round(orig_width * _mult, 2)
+        if atr and atr > 0:
+            new_width = max(new_width, round(1.2 * atr, 2))
+        new_high   = round(price + _hold_f * new_width, 2) if _hold_f > 0 \
+                     else round(price * 0.9995, 2)
         new_low    = round(new_high - new_width, 2)
         n          = _apply_intensive_fee_guard(t, new_width)
         new_step   = round(new_width / (n - 1), 2)
@@ -533,6 +559,29 @@ SUPPORT_GUARD_ATR: float = 1.0
 SELL_BOUNCE_ATR: float = 0.4
 SELL_ONLY_MAX_WAIT: int = 12   # ~24 min; fire regardless after this many cycles
 SELL_LOW_LOOKBACK: int = 4     # candles used for the recent-low reference
+# BUY_ONLY chase re-anchor (added 2026-07-06). The old behaviour deployed the buy
+# ladder ONCE on mode entry and suppressed drift — so in a rising market the
+# rungs got left behind and NOTHING refilled inventory (observed: ratio bled to
+# 2.5% while price rallied away from a stale ladder, inner tier $23 wide).
+# Now: while BUY_ONLY is active, if price runs > BUY_CHASE_ATR×ATR above the
+# deployed ladder top, re-anchor the ladder under the new price (limit orders
+# only — market entries belong to key-level breaks, never the grid). Rate-limited
+# to one chase per BUY_CHASE_MIN_SECS so it never churns orders cycle-to-cycle.
+BUY_CHASE_ATR: float = 0.5
+BUY_CHASE_MIN_SECS: int = 1800          # ≥30 min between chase redeploys
+BUY_CRITICAL_RATIO: float = 0.15        # below this, ladder compresses tighter (0.45×)
+_buy_chase = {"ts": 0.0}                # last chase redeploy (mutable, no global stmt)
+# Falling-knife BUY brake (added 2026-07-09). slide_guard sees a sustained
+# down-grind several candles before it confirms as trending_down/TREND_DOWN. In
+# NORMAL mode that gap let the grid keep buying the waterfall — loading up at an
+# avg cost above price, then churning rungs at a real loss (observed 07-07: same
+# Mid rung cycled twice at −$18.45 each; stack accumulated at ~$63k avg while
+# price slid to $62k, −$1k unrealised). Brake = when slide_guard flags DOWN and
+# we're in NORMAL inventory (not underweight/BUY_ONLY where we WANT the bottom),
+# pause inner+mid (stop buying the knife); outer holds; Lower Floor SmartTrade is
+# the hard backstop. Releases when the grind clears (slide_guard status→clear).
+_knife_brake = {"on": False}
+KNIFE_BRAKE_ATR: float = 1.5            # slide_guard cum-move threshold to brake (matches its default)
 # Drift stabilisation: counts consecutive cycles where drift threshold is exceeded.
 # Recentre only fires after DRIFT_CONFIRM_CYCLES cycles — filters single-candle spikes.
 _drift_confirm_cycles: int = 0
@@ -783,6 +832,35 @@ def run():
                 print(f"  Captured {_nf} new fill(s) to fills_log.jsonl")
         except Exception as _fe:
             print(f"Warning: fill capture failed: {_fe}")
+
+        # ===============================
+        # REAL (cost-basis) P&L — the honest number, red or green. On every new
+        # grid SELL, push the TRUE realised P&L vs running avg cost (not the
+        # 3Commas grid-step "profit", which overstates across recentres). Pure
+        # observability; wrapped so it can never interrupt the cycle.
+        # ===============================
+        try:
+            _sells = realpnl.update(GRID_BOTS)
+            if _sells:
+                _msg = "\n\n".join(realpnl.format_sell_alert(e) for e in _sells)
+                print("  Real P&L: %d new sell(s)\n%s" % (len(_sells), _msg))
+                notify_critical(_msg)
+        except Exception as _re:
+            print(f"Warning: real-pnl update failed: {_re}")
+
+        # ===============================
+        # SLIDE GUARD (observability) — flags a sustained staircase grind that the
+        # single-candle flash detector misses. Logs would-fire only; NEVER stops
+        # bots. Wrapped so it can never interrupt the cycle.
+        # ===============================
+        _slide = {}   # ensure defined even if observe throws — read by the knife brake
+        try:
+            _slide = slide_guard.observe(price=state.price, atr=state.atr)
+            if _slide.get("status") == "new":
+                print("  Slide guard would-fire %s — %d consec, %.2fxATR"
+                      % (_slide["direction"], _slide["consec"], _slide["cum_atr"]))
+        except Exception as _se:
+            print(f"Warning: slide_guard observe failed: {_se}")
 
         # ===============================
         # FLASH MOVE DETECTION
@@ -1135,7 +1213,7 @@ def run():
                     # (because _prev_inventory_mode was "BUY_ONLY" throughout the breakout
                     # and the entry condition _prev != current is therefore False).
                     if state.inventory_mode == "BUY_ONLY":
-                        _exhaust_tiers = _make_intensive_buy_tiers(state.price, state.tiers)
+                        _exhaust_tiers = _make_intensive_buy_tiers(state.price, state.tiers, atr=state.atr)
                         _exhaust_note  = " [intensive buy grid — BUY_ONLY still active]"
                     elif state.inventory_mode == "SELL_ONLY":
                         _exhaust_tiers = _make_intensive_sell_tiers(state.price, state.tiers)
@@ -1581,9 +1659,14 @@ def run():
                               f"${_sl_entry:,.0f}) | bots live: {len(_sl_bots_live)}")
 
             else:  # DOWN target (support_failure or breakout DOWN)
-                print(f"  [Target] all bots off (capital protection)")
-                for bot in GRID_BOTS:
-                    _act(bot, False, f"target DOWN: {_pt_label}")
+                # Stop inner + mid for capital protection, but KEEP the outer
+                # (Wider) bot running — its wide range keeps catching oscillation
+                # like it does in TREND_DOWN, instead of parking the whole grid.
+                print(f"  [Target] inner+mid off, outer running (capital protection)")
+                _act(GRID_BOTS[0], False, f"target DOWN: {_pt_label}")
+                _act(GRID_BOTS[1], False, f"target DOWN: {_pt_label}")
+                if len(GRID_BOTS) > 2:
+                    _act(GRID_BOTS[2], True, f"target DOWN: {_pt_label} (outer safety net kept on)")
 
                 # ── SmartTrade sell launch ─────────────────────────────────
                 # On support_failure DOWN, launch a SmartTrade spot sell:
@@ -1724,7 +1807,7 @@ def run():
                         print("[SIMULATION] Would redeploy intensive buy grid for BUY_ONLY dip accumulation")
                     elif _can_act():
                         _record_action()
-                        _dip_tiers = _make_intensive_buy_tiers(state.price, state.tiers)
+                        _dip_tiers = _make_intensive_buy_tiers(state.price, state.tiers, atr=state.atr)
                         redeploy_all_bots(GRID_BOTS, _dip_tiers)
                         _mark_all_bots_started()
                         update_grid_center(state.price, grid_width=state.grid_width,
@@ -1787,15 +1870,24 @@ def run():
                 print(f"  Drift stabilising: {_drift_confirm_cycles}/{_required_confirm} cycles "
                       f"beyond threshold — waiting for confirmation")
                 # Fall through to normal tiered bot decisions on current ranges
-            elif state.inventory_mode in ("BUY_ONLY", "SELL_ONLY") or _prev_weekend_mode:
-                # Biased/weekend mode — grid is intentionally deployed at a specific
-                # geometry. A drift redeployment would overwrite it with normal
-                # symmetric tiers. Suppress and reset counter.
-                _drift_suppress_reason = (
-                    f"{state.inventory_mode} intensive mode" if state.inventory_mode != "NORMAL"
-                    else "weekend tight grid"
-                )
-                print(f"  Drift suppressed — {_drift_suppress_reason} active, preserving biased grid")
+            elif (state.inventory_mode in ("BUY_ONLY", "SELL_ONLY") or _prev_weekend_mode
+                  or state.btc_ratio >= _max_btc or state.btc_ratio <= _min_btc):
+                # Suppress the drift recentre when the grid is intentionally biased
+                # (BUY_ONLY/SELL_ONLY/weekend) OR when we're already over/under-weight
+                # (ratio at/beyond the inventory bands). The latter is what started
+                # the 2026-07-17 cascade: a drift recentre fired at 86% ratio while
+                # mode was still NORMAL, trading base at the day's low. When we're
+                # beyond a band, a mode flip is imminent — let the bounce-guarded
+                # SELL_ONLY/BUY_ONLY logic own the reposition, not a blind recentre.
+                if state.inventory_mode != "NORMAL":
+                    _drift_suppress_reason = f"{state.inventory_mode} intensive mode"
+                elif _prev_weekend_mode:
+                    _drift_suppress_reason = "weekend tight grid"
+                elif state.btc_ratio >= _max_btc:
+                    _drift_suppress_reason = f"over-weight ({state.btc_ratio:.0%}≥{_max_btc:.0%}) — SELL_ONLY owns reposition"
+                else:
+                    _drift_suppress_reason = f"under-weight ({state.btc_ratio:.0%}≤{_min_btc:.0%}) — BUY_ONLY owns reposition"
+                print(f"  Drift suppressed — {_drift_suppress_reason}")
                 _drift_confirm_cycles = 0
             else:
                 # ── Flood-fill guard ──────────────────────────────────────────
@@ -1833,10 +1925,10 @@ def run():
                                   f"{tier['levels']} levels, ${tier['step']:,.0f} step")
                     elif _can_act():
                         _record_action()
-                        redeploy_all_bots(GRID_BOTS, state.tiers)
-                        _mark_all_bots_started()
-                        update_grid_center(state.price, grid_width=state.grid_width,
-                                           deployed_tiers=state.tiers)
+                        if redeploy_all_bots(GRID_BOTS, state.tiers, size_base=True):
+                            _mark_all_bots_started()
+                            update_grid_center(state.price, grid_width=state.grid_width,
+                                               deployed_tiers=state.tiers)
                     else:
                         print(f"Rate limit reached ({MAX_ACTIONS_PER_HOUR}/hr) — skipping drift redeploy")
                         print(f"  Bots remain on current ranges — center NOT advanced")
@@ -1903,10 +1995,10 @@ def run():
                 print(f"[SIMULATION] Would redeploy grid at ${state.price:,.0f}{_mode_note}")
             elif _can_act():
                 _record_action()
-                redeploy_all_bots(GRID_BOTS, _recovery_tiers)
-                _mark_all_bots_started()
-                update_grid_center(state.price, grid_width=state.grid_width,
-                                   deployed_tiers=_recovery_tiers)
+                if redeploy_all_bots(GRID_BOTS, _recovery_tiers, size_base=True):
+                    _mark_all_bots_started()
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       deployed_tiers=_recovery_tiers)
                 if _post_recovery_weekend:
                     _prev_weekend_mode = True
             else:
@@ -1946,10 +2038,10 @@ def run():
                 print(f"  [SIM] Would redeploy normal tiers at ${state.price:,.0f}")
             elif _can_act():
                 _record_action()
-                redeploy_all_bots(GRID_BOTS, state.tiers)
-                _mark_all_bots_started()
-                update_grid_center(state.price, grid_width=state.grid_width,
-                                   deployed_tiers=state.tiers)
+                if redeploy_all_bots(GRID_BOTS, state.tiers, size_base=True):
+                    _mark_all_bots_started()
+                    update_grid_center(state.price, grid_width=state.grid_width,
+                                       deployed_tiers=state.tiers)
             else:
                 print(f"  Rate limit reached — normal redeploy deferred to next cycle")
             _prev_weekend_mode = False
@@ -2056,7 +2148,8 @@ def run():
                     f"BUY ONLY — BTC ratio {state.btc_ratio:.0%} critically low, "
                     f"entering intensive buy mode (grid shifted below price)"
                 )
-                _intensive_tiers = _make_intensive_buy_tiers(state.price, state.tiers)
+                _intensive_tiers = _make_intensive_buy_tiers(state.price, state.tiers,
+                                                             atr=state.atr, btc_ratio=state.btc_ratio)
                 if DRY_RUN:
                     print(f"  [SIM] Would redeploy intensive buy: "
                           f"inner {_intensive_tiers[0]['grid_low']:,.0f}–"
@@ -2067,8 +2160,42 @@ def run():
                     _mark_all_bots_started()
                     update_grid_center(state.price, grid_width=state.grid_width,
                                        deployed_tiers=_intensive_tiers)
+                    _buy_chase["ts"] = time.time()
                 else:
                     print(f"  Rate limit reached — intensive buy redeploy deferred to next cycle")
+            else:
+                # Already in BUY_ONLY — CHASE: if price has run away above the
+                # deployed ladder, re-anchor it under the new price so shallow
+                # dips keep refilling inventory. Limit orders only, never a
+                # market buy (key-level breaks own the big entries).
+                try:
+                    _dep = (get_grid_state() or {}).get("deployed_tiers") or []
+                    _dep_top = max((float(t.get("grid_high") or 0) for t in _dep), default=0.0)
+                except Exception:
+                    _dep_top = 0.0
+                _gap = state.price - _dep_top if _dep_top else 0.0
+                _since = time.time() - _buy_chase["ts"]
+                if (_dep_top and state.atr and _gap > BUY_CHASE_ATR * state.atr
+                        and _since >= BUY_CHASE_MIN_SECS):
+                    print(f"  BUY_ONLY chase — price ${state.price:,.0f} is "
+                          f"${_gap:,.0f} ({_gap/state.atr:.1f}×ATR) above ladder top "
+                          f"${_dep_top:,.0f} — re-anchoring buy ladder")
+                    _chase_tiers = _make_intensive_buy_tiers(state.price, state.tiers,
+                                                             atr=state.atr, btc_ratio=state.btc_ratio)
+                    if DRY_RUN:
+                        print(f"  [SIM] Would chase-redeploy intensive buy under ${state.price:,.0f}")
+                    elif _can_act():
+                        _record_action()
+                        redeploy_all_bots(GRID_BOTS, _chase_tiers)
+                        _mark_all_bots_started()
+                        update_grid_center(state.price, grid_width=state.grid_width,
+                                           deployed_tiers=_chase_tiers)
+                        _buy_chase["ts"] = time.time()
+                        notify(f"BUY_ONLY chase — buy ladder re-anchored under "
+                               f"${state.price:,.0f} (was topping at ${_dep_top:,.0f}); "
+                               f"ratio {state.btc_ratio:.0%}, accumulating via limit orders")
+                    else:
+                        print(f"  Rate limit reached — chase redeploy deferred")
             print(f"BUY ONLY: ratio {state.btc_ratio:.0%} — intensive buy mode active, accumulating below price")
             # Fall through to tiered bot decisions — bots remain ON to accumulate.
 
@@ -2135,10 +2262,35 @@ def run():
                 tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
                 _act(bot, i >= 1, tier_name)  # mid (index 1) and outer (index 2) run
 
+        elif (state.inventory_mode == "NORMAL"
+              and _slide.get("direction") == "DOWN" and _slide.get("would_fire")
+              and float(_slide.get("cum_atr") or 0) >= KNIFE_BRAKE_ATR):
+            # FALLING-KNIFE BUY BRAKE — a sustained down-grind slide_guard caught
+            # before trending_down confirms. Pause inner+mid so the grid stops
+            # buying the waterfall (and stops churning underwater rungs); outer
+            # holds; Lower Floor SmartTrade is the backstop. NORMAL mode only —
+            # in BUY_ONLY we WANT the bottom, and SELL_ONLY already sheds.
+            _consec = _slide.get("consec"); _catr = _slide.get("cum_atr")
+            _decision_summary = (f"KNIFE BRAKE: down-grind {_consec}c/{_catr}×ATR "
+                                 f"— inner+mid paused (stop buying the knife)")
+            if not _knife_brake["on"]:
+                notify(f"Knife brake — sustained down-grind ({_consec} candles, "
+                       f"{_catr}×ATR) at ${state.price:,.0f}. Inner+mid paused to stop "
+                       f"buying the drop; outer holds; Lower Floor SmartTrade is the backstop.")
+            _knife_brake["on"] = True
+            print(f"KNIFE BRAKE — inner+mid off (slide DOWN {_consec}c/{_catr}×ATR)")
+            for i, bot in enumerate(GRID_BOTS):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, i >= 2, tier_name)   # only outer runs
+
         else:
             # RANGE or TREND_UP — all bots run
             if _prev_trending_down:
                 notify(f"Trending DOWN cleared — inner+mid back online at ${state.price:,.0f}")
+            if _knife_brake["on"]:
+                notify(f"Knife brake released — down-grind stabilised at ${state.price:,.0f}; "
+                       f"inner+mid back online.")
+            _knife_brake["on"] = False
             if state.regime == "TREND_UP":
                 _decision_summary = "TREND_UP: all bots on for pullback fills"
                 print("TREND_UP — all bots running")
@@ -2247,17 +2399,56 @@ def run():
             _prev_inventory_mode   = state.inventory_mode
             # _prev_weekend_mode is updated directly in the weekend mode block above
 
-if __name__ == "__main__":
-    schedule.every(2).minutes.do(run)
+_consec_cycle_errors = 0
 
-    # Run once immediately on startup
-    run()
+
+def safe_run():
+    """Run one cycle, but NEVER let an exception escape and kill the engine loop.
+
+    History: on 2026-06-27 a transient Coinbase API error ("INTERNAL / Something
+    went wrong") raised out of get_btc_data() — which sits above the cycle's first
+    try/except — propagated out of the scheduled job, and killed the engine
+    process for ~24h (the grid kept trading on 3Commas, but Griddy managed
+    nothing). A single bad API response must only cost ONE skipped cycle."""
+    global _consec_cycle_errors
+    try:
+        run()
+        _consec_cycle_errors = 0
+    except Exception as _cycle_err:  # noqa: BLE001
+        _consec_cycle_errors += 1
+        import traceback
+        print(f"CYCLE ERROR #{_consec_cycle_errors} (engine stays alive, "
+              f"retrying next cycle): {_cycle_err}")
+        traceback.print_exc()
+        # One transient blip is normal and self-heals next cycle; only alert if
+        # the engine genuinely can't complete cycles for several in a row.
+        if _consec_cycle_errors == 3:
+            try:
+                notify_critical(
+                    f"Griddy engine: 3 consecutive cycle failures "
+                    f"({type(_cycle_err).__name__}: {_cycle_err}). Still retrying "
+                    f"every 2 min — check if it persists.")
+            except Exception:
+                pass
+
+
+if __name__ == "__main__":
+    schedule.every(2).minutes.do(safe_run)
+
+    # Run once immediately on startup (wrapped so a transient boot error can't
+    # stop the loop from starting).
+    safe_run()
 
     print("Engine running...")
 
     try:
         while True:
-            schedule.run_pending()
+            try:
+                schedule.run_pending()
+            except Exception as _loop_err:  # belt-and-braces: never exit the loop
+                import traceback
+                print(f"LOOP ERROR (engine stays alive): {_loop_err}")
+                traceback.print_exc()
             time.sleep(1)
     except KeyboardInterrupt:
         print("\nEngine stopped safely.")

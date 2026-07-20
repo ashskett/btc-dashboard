@@ -60,26 +60,38 @@ def capture(bot_ids):
             data = r.json()
         except Exception:
             continue
-        orders = (data.get("balancing_orders") or []) if isinstance(data, dict) else []
-        for item in orders:
-            if item.get("status_string") != "Filled":
-                continue
-            price = float(item.get("average_price") or item.get("rate") or 0)
-            if not price:
-                continue
-            oid = item.get("order_id")
-            if oid in seen:
-                continue
-            seen.add(oid)
-            new.append({
-                "order_id":  oid,
-                "bot_id":    bid,
-                "bot_index": idx,
-                "time":      item.get("created_at"),
-                "price":     price,
-                "side":      (item.get("order_type") or "").upper(),
-                "qty":       float(item.get("quantity") or 0),
-            })
+        if not isinstance(data, dict):
+            continue
+        # BOTH streams move real BTC: grid_lines_orders = rung fills,
+        # balancing_orders = base-position buys/sells on enable/disable.
+        # (Bug until 2026-07-06: only balancing_orders was read, so every grid
+        # rung fill was missing from fills_log and the chart's fill arrows.)
+        for stream in ("grid_lines_orders", "balancing_orders"):
+            for item in data.get(stream) or []:
+                if item.get("status_string") != "Filled":
+                    continue
+                price = float(item.get("average_price") or item.get("rate") or 0)
+                if not price:
+                    continue
+                ts = (item.get("created_at") or item.get("updated_at")
+                      or item.get("update_at"))
+                oid = item.get("order_id")
+                if oid is None:   # balancing orders can lack an id — synthesise
+                    oid = "%s-%s-%s-%.8f" % (stream[:3], ts,
+                                             (item.get("order_type") or "").upper(),
+                                             float(item.get("quantity") or 0))
+                if oid in seen:
+                    continue
+                seen.add(oid)
+                new.append({
+                    "order_id":  oid,
+                    "bot_id":    bid,
+                    "bot_index": idx,
+                    "time":      ts,
+                    "price":     price,
+                    "side":      (item.get("order_type") or "").upper(),
+                    "qty":       float(item.get("quantity") or 0),
+                })
     if new:
         try:
             with open(FILLS_LOG, "a") as f:

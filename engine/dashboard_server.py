@@ -2111,6 +2111,73 @@ def multi_orderbook_state():
         return jsonify({"error": "no data yet"})
 
 
+@app.route("/slide-guard")
+def slide_guard_state():
+    """Sustained-grind ('falling knife') detector — observability only. Returns
+    current state + recent would-fire events (it never stops bots)."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "slide_guard_log.jsonl")
+    events = []
+    try:
+        with open(p) as f:
+            for line in f.readlines()[-50:]:
+                line = line.strip()
+                if line:
+                    events.append(json.loads(line))
+    except Exception:
+        pass
+    state = {}
+    try:
+        import slide_guard
+        state = slide_guard.get_state()
+    except Exception as e:  # noqa: BLE001
+        state = {"error": str(e)}
+    return jsonify({"state": state, "recent_would_fire": events})
+
+
+@app.route("/audit")
+def audit_view():
+    """Autonomous auditor: current findings (live re-run) + recent alert history."""
+    live = []
+    try:
+        import audit
+        live = audit.run(notify_fn=None)   # re-run read-only; no re-alert
+    except Exception as e:  # noqa: BLE001
+        live = [{"sev": "low", "msg": "audit run failed: %s" % e}]
+    hist = []
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit_log.jsonl")
+    try:
+        with open(p) as f:
+            for line in f.readlines()[-40:]:
+                line = line.strip()
+                if line:
+                    hist.append(json.loads(line))
+    except Exception:
+        pass
+    return jsonify({"current": live, "recent_alerts": hist})
+
+
+@app.route("/realpnl")
+def realpnl_summary():
+    """REAL cost-basis P&L per bot + totals (realised + current unrealised) —
+    the honest number vs 3Commas' grid-step 'profit'. Observability only."""
+    try:
+        import realpnl
+        return jsonify(realpnl.summary(["2743885", "2743889", "2743888"]))
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)})
+
+
+@app.route("/realpnl/seed", methods=["POST"])
+def realpnl_seed():
+    """(Re)seed the real-P&L ledger from 3Commas' current implied cost basis."""
+    try:
+        import realpnl
+        s = realpnl.seed(["2743885", "2743889", "2743888"])
+        return jsonify({"ok": True, "bots": s["bots"], "seed_ts": s["seed_ts"]})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/capital/events/<int:idx>", methods=["DELETE"])
 def capital_events_delete(idx):
     events = _load_capital_events()
@@ -2153,6 +2220,15 @@ def capital_sync_endpoint():
 _engine_proc   = None
 _engine_output = []   # rolling buffer of last 200 lines (for /engine/output)
 _engine_lock   = __import__("threading").Lock()
+
+# Watchdog state: the dashboard (parent) supervises the engine (child) and
+# respawns it if it dies or hangs. _engine_supervise is cleared by a manual
+# /engine/stop so the watchdog won't fight a deliberate stop.
+_engine_supervise   = True
+_engine_down_since  = None   # epoch when watchdog first saw it down (alert dedup)
+_ENGINE_STATUS_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "engine_status.json")
+_STATUS_STALE_SECS  = 8 * 60   # status older than this = engine hung (4 missed cycles)
 
 # Persist engine stdout to disk so history survives past the 200-line memory
 # buffer (previously the only record — making issues like the capital-reset
@@ -2207,6 +2283,151 @@ def _engine_running():
         return False
     return True
 
+
+def _spawn_engine():
+    """Launch engine.py as a managed child with a stdout-drain thread. Shared by
+    the watchdog (and mirrors the auto-start / /engine/start logic)."""
+    global _engine_proc
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    _engine_proc = subprocess.Popen(
+        [sys.executable, "-u", os.path.join(script_dir, "engine.py")],
+        cwd=script_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+    )
+    __import__("threading").Thread(
+        target=_drain_output, args=(_engine_proc,), daemon=True).start()
+    return _engine_proc
+
+
+def _engine_status_age():
+    """Seconds since engine_status.json was last written by a cycle (None if
+    unknown). Catches a HUNG engine — process alive but no longer cycling."""
+    try:
+        import datetime as _dt
+        with open(_ENGINE_STATUS_FILE) as f:
+            ts = json.load(f).get("timestamp")
+        if not ts:
+            return None
+        return (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(ts)).total_seconds()
+    except Exception:
+        return None
+
+
+def _notify_safe(msg):
+    try:
+        import notify
+        notify.notify_critical(msg)
+    except Exception:
+        pass
+
+
+_HB = {"parked_since": None, "parked_ping": 0.0,
+       "mode_since": None, "mode_ping": 0.0, "mode": None}
+_HB_PARKED_AFTER = 30 * 60      # alert if ALL bots off for 30 min...
+_HB_PARKED_EVERY = 30 * 60      # ...and re-ping every 30 min while parked
+_HB_MODE_AFTER   = 2 * 3600     # alert if BUY_ONLY/SELL_ONLY persists 2h...
+_HB_MODE_EVERY   = 4 * 3600     # ...and re-ping every 4h while it persists
+
+
+def _grid_heartbeat():
+    """Silence-breaker: Griddy has twice gone quiet while something big was
+    happening (bots parked by a fired target for 45 min; BUY_ONLY selling the
+    stack to 2.5% over days). The engine only notifies on TRANSITIONS — a
+    persistent abnormal state after a missed/one-off alert is invisible. This
+    reads engine_status.json each watchdog tick and periodically re-pings while
+    (a) ALL bots are off, or (b) an extreme inventory mode persists."""
+    now = time.time()
+    try:
+        with open(_ENGINE_STATUS_FILE) as f:
+            st = json.load(f)
+    except Exception:
+        return
+    # (a) grid parked — every tier disabled
+    tiers = st.get("tier_states") or []
+    parked = bool(tiers) and all(not t.get("enabled") for t in tiers)
+    if parked:
+        if _HB["parked_since"] is None:
+            _HB["parked_since"] = now
+        held = now - _HB["parked_since"]
+        if held >= _HB_PARKED_AFTER and now - _HB["parked_ping"] >= _HB_PARKED_EVERY:
+            _HB["parked_ping"] = now
+            reason = next((t.get("reason") for t in tiers if t.get("reason")), "unknown")
+            _notify_safe("Griddy heartbeat: grid PARKED for %.0f min — all bots off "
+                         "(%s). Price $%s." % (held / 60, reason,
+                                               "{:,.0f}".format(st.get("price") or 0)))
+    else:
+        _HB["parked_since"] = None
+    # (b) extreme inventory mode persisting
+    mode = st.get("inventory_mode")
+    if mode in ("BUY_ONLY", "SELL_ONLY"):
+        if _HB["mode"] != mode:
+            _HB["mode"] = mode
+            _HB["mode_since"] = now
+            _HB["mode_ping"] = 0.0
+        held = now - (_HB["mode_since"] or now)
+        if held >= _HB_MODE_AFTER and now - _HB["mode_ping"] >= _HB_MODE_EVERY:
+            _HB["mode_ping"] = now
+            _notify_safe("Griddy heartbeat: %s active for %.1f h — BTC ratio %.0f%%, "
+                         "price $%s. Still %s via limit orders." % (
+                             mode, held / 3600, 100 * float(st.get("btc_ratio") or 0),
+                             "{:,.0f}".format(st.get("price") or 0),
+                             "accumulating" if mode == "BUY_ONLY" else "distributing"))
+    else:
+        _HB["mode"] = None
+        _HB["mode_since"] = None
+
+
+def _engine_watchdog():
+    """Respawn the engine child if it dies OR hangs, and Telegram-alert on
+    down/recovery so an outage can never again go unnoticed.
+
+    History: 2026-06-27 a transient Coinbase API error killed engine.py and
+    nothing respawned it — Griddy was silently dead ~24h while the grid traded
+    unmanaged on 3Commas. Option A: the parent supervises the child."""
+    global _engine_down_since
+    time.sleep(150)   # let the first cycle write a status before we judge freshness
+    while True:
+        try:
+            if _engine_supervise:
+                alive = _engine_running()
+                age   = _engine_status_age()
+                hung  = (age is not None and age > _STATUS_STALE_SECS)
+                if (not alive) or hung:
+                    reason = "process died" if not alive else f"no cycle for {age/60:.0f} min (hung)"
+                    if alive and hung:   # kill the zombie before respawning
+                        try:
+                            _engine_proc.terminate(); _engine_proc.wait(timeout=5)
+                        except Exception:
+                            try: _engine_proc.kill()
+                            except Exception: pass
+                    try:
+                        _spawn_engine(); ok = True
+                    except Exception:
+                        ok = False
+                    if _engine_down_since is None:
+                        _engine_down_since = time.time()
+                        _notify_safe(
+                            f"Griddy engine watchdog: engine was DOWN ({reason}) — "
+                            f"{'auto-respawned' if ok else 'RESPAWN FAILED, retrying'}. "
+                            f"Grid bots keep trading on 3Commas meanwhile.")
+                elif _engine_down_since is not None:   # healthy again after a down
+                    mins = (time.time() - _engine_down_since) / 60
+                    _notify_safe(f"Griddy engine healthy again (was down ~{mins:.0f} min) — cycles resumed.")
+                    _engine_down_since = None
+            else:
+                _engine_down_since = None
+            _grid_heartbeat()
+            try:
+                import audit
+                audit.run(notify_fn=_notify_safe)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        time.sleep(60)
+
+
 @app.route("/engine/status")
 def engine_status():
     return jsonify({"running": _engine_running()})
@@ -2242,7 +2463,7 @@ def engine_log_tail():
 
 @app.route("/engine/start", methods=["POST"])
 def engine_start():
-    global _engine_proc
+    global _engine_proc, _engine_supervise
     if _engine_running():
         return jsonify({"ok": True, "msg": "Already running"})
     try:
@@ -2267,13 +2488,15 @@ def engine_start():
             with _engine_lock:
                 tail = "\n".join(_engine_output[-20:])
             return jsonify({"ok": False, "msg": f"Engine exited — output:\n{tail}"}), 500
+        _engine_supervise = True   # let the watchdog keep it alive
         return jsonify({"ok": True, "msg": f"Engine started (pid {_engine_proc.pid})"})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 @app.route("/engine/stop", methods=["POST"])
 def engine_stop():
-    global _engine_proc
+    global _engine_proc, _engine_supervise
+    _engine_supervise = False   # deliberate stop — watchdog must NOT respawn it
     if not _engine_running():
         return jsonify({"ok": True, "msg": "Not running"})
     try:
@@ -2635,6 +2858,11 @@ if __name__ == "__main__":
             print(f"Engine auto-started (pid {_engine_proc.pid})")
         except Exception as e:
             print(f"Warning: could not auto-start engine: {e}")
+
+    # Watchdog: respawn the engine if it ever dies or hangs, and Telegram-alert
+    # on down/recovery (Option A — closes the 2026-06-27 silent-24h-outage gap).
+    threading.Thread(target=_engine_watchdog, daemon=True).start()
+    print("Engine watchdog started (respawn + down/recovery alerts)")
 
     # Startup self-heal: re-download static files from the correct branch 20s after
     # startup. This silently fixes any bad webhook overwrite (e.g. webhook running

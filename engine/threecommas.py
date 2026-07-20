@@ -335,16 +335,125 @@ def cancel_smart_trade(smart_trade_id: str) -> dict:
     return r.json() if r.content else {}
 
 
-def redeploy_all_bots(bot_ids, tiers):
+# ── Auto-remediation guards (Ash 2026-07-17: system should protect itself) ──
+REDEPLOY_MIN_GAP_SECS = 480     # (B) min gap between NORMAL redeploys — anti-cascade
+FORCED_TRADE_FRAC     = 0.12    # (A) abort a NORMAL redeploy if any tier would deploy
+                                #     base this far (frac of range) from current holdings
+                                #     → it would force a big base market buy/sell (~$9k@$75k)
+_HERE_TC = os.path.dirname(os.path.abspath(__file__))
+
+
+def _last_redeploy_ts():
+    try:
+        return float(json.load(open(os.path.join(_HERE_TC, "grid_state.json")))
+                     .get("last_redeploy_ts") or 0)
+    except Exception:
+        return 0.0
+
+
+def _tc_notify(msg):
+    try:
+        import notify
+        notify.notify_critical(msg)
+    except Exception:
+        pass
+
+
+def _forced_trade_check(tiers, price, cur_ratio):
+    """(A) Return the worst tier whose deployed base fraction is > FORCED_TRADE_FRAC
+    from current holdings — i.e. enabling it would market buy/sell a big base chunk.
+    None = safe (every tier deploys ≈ at holdings, no forced trade)."""
+    worst = None
+    for t in tiers[:3]:
+        lo = float(t.get("grid_low", 0)); hi = float(t.get("grid_high", 0))
+        w = hi - lo
+        if w <= 0 or not (lo < price < hi):
+            continue
+        f = (hi - price) / w
+        off = abs(f - cur_ratio)
+        if off > FORCED_TRADE_FRAC and (worst is None or off > worst[1]):
+            worst = (t.get("name"), off, f)
+    return worst
+
+
+def _size_tiers_to_holdings(tiers, price, cur_ratio):
+    """Shift each tier's range so the base it acquires on enable ≈ what we ALREADY
+    hold, instead of market-buying a big centred (~50%) base in one shot.
+
+    A 3Commas grid bot's base ≈ the fraction of its range ABOVE price (it must
+    hold BTC to back the sell rungs), and it MARKET-buys that base on enable. A
+    centred grid therefore slams the account toward ~50% BTC on every redeploy —
+    the churn that bought ~$24k at one price on the 2026-06-29 weekend exit. By
+    placing price higher in the range (above-fraction = current ratio), the bot
+    deploys at ~current holdings and acquires/sheds the rest ORGANICALLY via its
+    own limit orders. Width is preserved; only applied when meaningfully off
+    centre and within the NORMAL inventory band (intensive modes own the extremes).
+    Mutates tiers in place; caller saves the shifted ranges to grid_state."""
+    # Deploy at ≈ current holdings so a redeploy triggers NO market order — not a
+    # buy AND not a sell. Two landmines this closes:
+    #   • floor was 0.25 → a low-ratio redeploy deployed CENTRED and market-BOUGHT
+    #     ~50% base (~$29k risk, 2026-07-05).
+    #   • ceiling was 0.75 AND clamp 0.70 → an over-weight redeploy (ratio 86% on a
+    #     drift recentre) deployed CENTRED/clamped-down and market-SOLD ~0.32 BTC
+    #     at the day's LOW (~$450 opportunity cost, 2026-07-17). Shedding must go
+    #     through SELL_ONLY (bounce-guarded), NEVER a blind redeploy sell.
+    # So: apply across the whole realistic band and deploy at cur_ratio, clamped
+    # only at degenerate extremes [0.10, 0.90] (a fully one-sided grid). The clamp
+    # can only ever nudge a BUY at <10% or a SELL above 90% — both far outside
+    # normal operation and tiny. Intensive/ride modes never pass size_base=True.
+    if not (0.02 <= cur_ratio <= 0.98) or abs(cur_ratio - 0.5) <= 0.08:
+        return False
+    target_f = max(0.10, min(0.90, cur_ratio))   # base fraction to deploy at ≈ holdings
+    shifted = False
+    for tier in tiers[:3]:
+        lo = float(tier.get("grid_low", 0)); hi = float(tier.get("grid_high", 0))
+        width = hi - lo
+        if width <= 0 or not (lo < price < hi):
+            continue
+        f_now = (hi - price) / width
+        new_hi = round(price + target_f * width, 2)
+        new_lo = round(new_hi - width, 2)
+        tier["grid_high"] = new_hi
+        tier["grid_low"]  = new_lo
+        if "center" in tier:
+            tier["center"] = round((new_hi + new_lo) / 2, 2)
+        shifted = True
+        _verb = "buys" if target_f > f_now else "sheds"
+        print(f"    [base-size] {tier.get('name')}: holdings {cur_ratio:.0%} BTC → "
+              f"deploy base ~{target_f:.0%} (was ~{f_now:.0%} centred) — "
+              f"range ${new_lo:,.0f}–${new_hi:,.0f}; grid {_verb} the rest via "
+              f"limit orders — NO market buy or sell on this redeploy")
+    return shifted
+
+
+def redeploy_all_bots(bot_ids, tiers, size_base=False):
     """
     Redeploy all bots with their respective tier parameters.
     bot_ids: list of 3Commas bot ID strings
     tiers:   list of tier dicts from calculate_grid_parameters()
+    size_base: if True, shift ranges so the deployed base ≈ current holdings
+               (avoids a big base MARKET buy/sell). Only for NORMAL full-grid
+               redeploys — NOT intensive/ride/exhaust modes which set base on
+               purpose. Internally gated to the normal inventory band anyway.
 
     Applies capital budgets from tier_budgets.json — each tier gets a fixed %
     of total portfolio value. This prevents 3Commas from auto-allocating all
     available capital to whichever bot starts first.
+
+    Returns True if the bots were (re)deployed, False if the redeploy was SKIPPED
+    by a guard (cooldown or forced-trade). Callers MUST gate their follow-up
+    update_grid_center/_mark_all_bots_started on the return, or state desyncs.
     """
+    # ── (B) Cascade cooldown — NORMAL redeploys only. Intensive/safety redeploys
+    # (size_base=False: SELL_ONLY/BUY_ONLY/ride/exhaust) always proceed. Stops the
+    # drift→mode→mode churn (3 redeploys in 3 min, 2026-07-17).
+    if size_base:
+        _gap = time.time() - _last_redeploy_ts()
+        if 0 < _gap < REDEPLOY_MIN_GAP_SECS:
+            print(f"  Redeploy SKIPPED (cooldown) — only {_gap:.0f}s since last "
+                  f"(< {REDEPLOY_MIN_GAP_SECS}s); avoiding cascade churn")
+            return False
+
     # Fetch total portfolio value for budget calculation
     # Three attempts in priority order to avoid the death spiral where
     # low deployed qty → low estimated portfolio → low budget → even lower qty.
@@ -392,6 +501,37 @@ def redeploy_all_bots(bot_ids, tiers):
         for b in budgets:
             pct = b.get("pct", 0)
             print(f"    {b['name']}: {pct}% = ${portfolio_usd * pct / 100:,.0f}")
+
+    # ── Base-sizing: avoid a big base-position MARKET buy/sell on this redeploy ──
+    if size_base and not _skip_sizing:
+        try:
+            from inventory import portfolio_snapshot as _ps
+            _snap = _ps()
+            _price = float(_snap.get("btc_price") or 0) if _snap else 0
+            _btc   = float(_snap.get("btc_qty") or 0) if _snap else 0
+            _ratio = (_btc * _price) / portfolio_usd if (portfolio_usd > 0 and _price) else None
+            if _ratio is not None and _price > 0:
+                if not _size_tiers_to_holdings(tiers, _price, _ratio):
+                    print(f"    [base-size] holdings {_ratio:.0%} BTC near centred — "
+                          f"deploying normally (no shift needed)")
+                # ── (A) Forced-trade hard guard — the last line of defence. After
+                # sizing, EVERY tier should deploy ≈ at holdings. If one still would
+                # force a big base market buy/sell (a skipped/degenerate tier, a
+                # future regression), ABORT the whole redeploy — keep the current
+                # grid, never dump/slam base at the redeploy-moment price.
+                _bad = _forced_trade_check(tiers, _price, _ratio)
+                if _bad:
+                    _nm, _off, _f = _bad
+                    _usd = _off * portfolio_usd
+                    print(f"  Redeploy ABORTED (forced-trade guard) — '{_nm}' tier would "
+                          f"deploy base {_f:.0%} vs holdings {_ratio:.0%} → ~${_usd:,.0f} "
+                          f"market trade. Keeping current grid.")
+                    _tc_notify(f"Griddy GUARD: redeploy aborted — would force ~${_usd:,.0f} "
+                               f"base trade (tier '{_nm}' at {_f:.0%} vs holdings {_ratio:.0%}). "
+                               f"Grid left as-is; check the sizing logic.")
+                    return False
+        except Exception as _bse:
+            print(f"    [base-size] skipped (error: {_bse})")
 
     results = []
     for i, bot_id in enumerate(bot_ids[:3]):

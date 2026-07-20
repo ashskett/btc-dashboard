@@ -1521,6 +1521,8 @@ function redrawLines(){
 // Teal = bid (support), magenta = ask (resistance). Solid+thick when durable
 // (persistence>=3). Updated from /multi-orderbook (collected every 2 min).
 let multiWalls = null;
+const WALL_FAR_ATR = 1.5;   // only draw walls at least this many ATR from price
+const WALL_MAX_PER_SIDE = 4; // cap so the far zone doesn't clutter either
 function drawWalls(){
   wallLines.forEach(l=>{ try{ candles.removePriceLine(l); }catch(e){} });
   wallLines = [];
@@ -1528,7 +1530,7 @@ function drawWalls(){
   const mk = (w, isBid) => {
     if(!w || !w.price) return;
     const persist = w.persistence || 1;
-    const far = Math.abs(w.dist_atr||0) >= 1.5;
+    const atr = Math.abs(w.dist_atr||0);
     wallLines.push(candles.createPriceLine({
       price: w.price,
       color: isBid ? '#2dd4bf' : '#e879f9',        // teal bid / magenta ask
@@ -1536,11 +1538,18 @@ function drawWalls(){
       lineStyle: persist>=3 ? LightweightCharts.LineStyle.Solid
                             : LightweightCharts.LineStyle.Dotted,
       axisLabelVisible: true,
-      title: `${isBid?'Bid':'Ask'} ${Number(w.size).toFixed(0)}BTC${far?' (far)':''}${persist>=3?' ✓':''}`,
+      title: `${isBid?'Bid':'Ask'} ${Number(w.size).toFixed(0)}BTC @${atr.toFixed(1)}×ATR${persist>=3?' ✓':''}`,
     }));
   };
-  (multiWalls.bid_walls||[]).slice(0,6).forEach(w=>mk(w,true));
-  (multiWalls.ask_walls||[]).slice(0,6).forEach(w=>mk(w,false));
+  // FAR walls only — the near cluster around price is hidden. Filter across ALL
+  // walls (not just top-N by size, since far walls are usually smaller), keep
+  // the ones ≥ WALL_FAR_ATR from price, and show the farthest first.
+  const farOnly = arr => (arr||[])
+    .filter(w => w && w.price && Math.abs(w.dist_atr||0) >= WALL_FAR_ATR)
+    .sort((a,b) => Math.abs(b.dist_atr||0) - Math.abs(a.dist_atr||0))
+    .slice(0, WALL_MAX_PER_SIDE);
+  farOnly(multiWalls.bid_walls).forEach(w=>mk(w,true));
+  farOnly(multiWalls.ask_walls).forEach(w=>mk(w,false));
 }
 
 // ── STATUS POLL ───────────────────────────────────────────
@@ -2751,7 +2760,7 @@ function showAddTargetModal(pickedPrice, editTarget){
       <input type="checkbox" id="pt_dca_on" ${isEdit && et.dca_enabled?'checked':''} onchange="_ptToggleDca(this.checked)"
         style="accent-color:var(--purple);width:14px;height:14px;cursor:pointer;"/>
       <span style="font-size:9px;color:var(--purple);text-transform:uppercase;
-        letter-spacing:.08em;font-weight:700;">Launch DCA bot on trigger</span>
+        letter-spacing:.08em;font-weight:700;">Launch DCA bot on breakout (UP only)</span>
     </div>
     <div id="ptDcaFields" style="display:none;">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
@@ -2886,7 +2895,7 @@ function showAddTargetModal(pickedPrice, editTarget){
         <input type="checkbox" id="pt_st_on" ${isEdit && et.smart_trade_enabled?'checked':''} onchange="_ptToggleSt(this.checked)"
           style="accent-color:#f85149;width:14px;height:14px;cursor:pointer;"/>
         <span style="font-size:9px;color:#f85149;text-transform:uppercase;
-          letter-spacing:.08em;font-weight:700;">Open SmartTrade SELL on confirmed failure</span>
+          letter-spacing:.08em;font-weight:700;">Open SmartTrade SELL on breakdown (DOWN only)</span>
       </div>
       <div id="ptStFields" style="display:none;">
         <div style="font-size:8px;color:var(--muted);margin-bottom:8px;line-height:1.5;padding:6px 8px;
@@ -2980,7 +2989,8 @@ function showAddTargetModal(pickedPrice, editTarget){
   if(isEdit){
     _ptOnDirChange(true);
     if(et.direction === 'DOWN' && et.detection_mode === 'support_failure') _ptOnDetectModeChange();
-    if(et.dca_enabled){
+    // DCA only ever applies to UP — ignore any stale dca_enabled on a DOWN level.
+    if(et.dca_enabled && et.direction !== 'DOWN'){
       _ptToggleDca(true);
       // Populate TP rows from existing data
       document.getElementById('ptTpRows').innerHTML = '';
@@ -2990,7 +3000,7 @@ function showAddTargetModal(pickedPrice, editTarget){
       if(et.dca_trailing_enabled) _ptToggleTrailing(true);
       if(et.dca_dual_entry) _ptToggleDual(true);
     }
-    if(et.smart_trade_enabled){
+    if(et.smart_trade_enabled && et.direction === 'DOWN'){
       _ptToggleSt(true);
       // Populate ST TP rows
       document.getElementById('ptStTpRows').innerHTML = '';
@@ -3007,32 +3017,46 @@ function showAddTargetModal(pickedPrice, editTarget){
 function _ptOnDirChange(skipReset = false){
   const dir = document.getElementById('pt_dir').value;
   const isDown = dir === 'DOWN';
-  document.getElementById('ptDetectModeRow').style.display = isDown ? 'block' : 'none';
-  document.getElementById('ptDcaToggleRow').style.display  = isDown ? 'none'  : 'flex';
+  // HARD RULE: UP breaks use DCA (buy the breakout); DOWN breaks use a SmartTrade
+  // SELL (protect on breakdown). Never the other way round, never both.
+  document.getElementById('ptDetectModeRow').style.display    = isDown ? 'block' : 'none';
+  document.getElementById('ptDcaToggleRow').style.display     = isDown ? 'none'  : 'flex';
+  document.getElementById('ptSmartTradeSection').style.display = isDown ? 'block' : 'none';
+  if(isDown){
+    // DCA can never apply to a downward break — force it off and hide its fields.
+    const _dcaOn = document.getElementById('pt_dca_on');
+    if(_dcaOn) _dcaOn.checked = false;
+    document.getElementById('ptDcaFields').style.display = 'none';
+  }
   // Only wipe checkbox state when the user actually changes direction.
   // During edit-mode init (skipReset=true) the template has already set
   // the correct checked values — resetting them here would blank everything.
   if(!skipReset){
-    document.getElementById('ptDcaFields').style.display     = 'none';
-    document.getElementById('pt_dca_on').checked             = false;
-    const _trailEl = document.getElementById('pt_dca_trailing');
-    if(_trailEl) { _trailEl.checked = false; _ptToggleTrailing(false); }
-    const _dualEl = document.getElementById('pt_dca_dual');
-    if(_dualEl) { _dualEl.checked = false; _ptToggleDual(false); }
+    if(!isDown){
+      document.getElementById('ptDcaFields').style.display = 'none';
+      document.getElementById('pt_dca_on').checked         = false;
+      const _trailEl = document.getElementById('pt_dca_trailing');
+      if(_trailEl) { _trailEl.checked = false; _ptToggleTrailing(false); }
+      const _dualEl = document.getElementById('pt_dca_dual');
+      if(_dualEl) { _dualEl.checked = false; _ptToggleDual(false); }
+    } else {
+      const _stOn = document.getElementById('pt_st_on');
+      if(_stOn) { _stOn.checked = false; _ptToggleSt(false); }
+    }
   }
   if(isDown) _ptOnDetectModeChange();
-  else { document.getElementById('ptRetestRow').style.display = 'none';
-         document.getElementById('ptSmartTradeSection').style.display = 'none'; }
+  else { document.getElementById('ptRetestRow').style.display = 'none'; }
 }
 
 function _ptOnDetectModeChange(){
+  // Runs for DOWN targets only. SmartTrade is offered for BOTH detection modes
+  // (plain breakout AND support-failure); DCA is never shown for a DOWN break.
   const mode = document.getElementById('pt_detect_mode').value;
   const isSF = mode === 'support_failure';
   document.getElementById('ptRetestRow').style.display         = isSF ? 'block' : 'none';
-  document.getElementById('ptSmartTradeSection').style.display = isSF ? 'block' : 'none';
-  if(!isSF){ document.getElementById('ptDcaToggleRow').style.display = 'flex'; }
-  else      { document.getElementById('ptDcaToggleRow').style.display = 'none';
-              document.getElementById('ptDcaFields').style.display    = 'none'; }
+  document.getElementById('ptSmartTradeSection').style.display = 'block';
+  document.getElementById('ptDcaToggleRow').style.display      = 'none';
+  document.getElementById('ptDcaFields').style.display         = 'none';
 }
 
 function _ptToggleDca(on){
@@ -3177,21 +3201,28 @@ async function confirmAddTarget(){
     const confirm_closes    = parseInt(document.getElementById('pt_confirm').value) || 2;
     const reversal_atr_mult = parseFloat(document.getElementById('pt_rev').value) || 2.0;
     const rearm_cooldown_h  = parseFloat(document.getElementById('pt_cool').value) || 4;
-    const dca_enabled       = document.getElementById('pt_dca_on').checked;
+    const isDown            = dir === 'DOWN';
     const detect_mode_el    = document.getElementById('pt_detect_mode');
-    const detection_mode    = (dir === 'DOWN' && detect_mode_el) ? detect_mode_el.value : 'breakout';
+    const detection_mode    = (isDown && detect_mode_el) ? detect_mode_el.value : 'breakout';
+    // HARD RULE: DCA is UP-only, SmartTrade is DOWN-only.
+    const dca_enabled       = isDown ? false : document.getElementById('pt_dca_on').checked;
 
     if(!label){ toast('Label required','err'); return; }
     if(!trigger || isNaN(trigger)){ toast('Trigger price required','err'); return; }
 
     const body = { label, trigger_price: trigger, direction: dir,
       price_target: tp, confirm_closes, reversal_atr_mult, rearm_cooldown_h,
-      dca_enabled, detection_mode };
+      dca_enabled, detection_mode,
+      // Always send both flags explicitly so a direction switch can never leave a
+      // stale DCA on a DOWN level (or a stale SmartTrade on an UP level).
+      smart_trade_enabled: false };
 
-    // Support failure fields
-    if(detection_mode === 'support_failure'){
-      body.retest_tolerance_pct = parseFloat(document.getElementById('pt_retest_tol').value) || 0.5;
-      body.smart_trade_enabled  = document.getElementById('pt_st_on').checked;
+    // DOWN break → SmartTrade SELL (offered for both detection modes).
+    if(isDown){
+      if(detection_mode === 'support_failure'){
+        body.retest_tolerance_pct = parseFloat(document.getElementById('pt_retest_tol').value) || 0.5;
+      }
+      body.smart_trade_enabled = document.getElementById('pt_st_on').checked;
       if(body.smart_trade_enabled){
         body.smart_trade_sell_pct = parseFloat(document.getElementById('pt_st_sell_pct').value) || 25;
         body.smart_trade_sl_pct   = parseFloat(document.getElementById('pt_st_sl_pct').value)   || 1.5;

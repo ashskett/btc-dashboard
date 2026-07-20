@@ -2,6 +2,47 @@
 
 > Updated by the last agent to work on this project. Read this before starting.
 
+## Session 2026-07-07 (scheduled task) — Multi-venue far-wall backtest: DON'T BUILD
+
+Ran the planned backtest of `multi_orderbook_log.jsonl` (13.4 days / 9630
+snapshots since the multi-venue collector went live). Read-only analysis, no
+code changes, no deploy. Answers the standing question: build a 4th
+"order-book grid" bot bounded by durable multi-venue liquidity walls?
+
+- **Q1 — do durable far walls hold?** Defining durable = persistence ≥30
+  cycles (~1h continuously in the top-10) and far = |dist_atr| ≥1.5: **58.3%
+  hold rate (63/108 conclusive episodes)** vs a **54.0% base rate** (167/309)
+  measured at random comparable-distance non-wall price levels. Only a ~4pt
+  edge over the null. Reran across a 3×3 persistence/distance sweep
+  (persist 10/15/30 × far_atr 1.0/1.2/1.5) — hold rate stayed in a **55-67%**
+  band throughout, never a decisive signal.
+- **Q2 — would a wall-bounded grid be profitable?** Simulated a grid bounded
+  by the nearest durable bid+ask far wall, recentred whenever either bound
+  wall vanishes from the top-10 (not merely "gets near" — fixed a bug where
+  the far-distance filter itself was mistakenly used as the recentre
+  trigger), fee-gated at the live `ROUND_TRIP_FEE=0.0020`/`FEE_BUFFER=1.5`.
+  **Both-side durable-far-wall coverage bracketing price was only 0.2-1.6% of
+  all ticks across the sweep — the bot would sit idle 98-99.8% of the time.**
+  Net P&L was **negative in every single configuration tested**: -$347 to
+  -$1,947 per BTC over the 13.4-day window (win rate 6-20%, average
+  deployment lifetime as short as ~1h before a forced recentre-close at a
+  small loss, well before any round trips complete).
+- **Verdict: DO NOT build the 4th order-book grid bot.** Same negative
+  conclusion as the earlier Coinbase-only test, for a different reason this
+  time — it's not that walls are too tight for fees (multi-venue walls are
+  plenty far/wide), it's that (a) "durable" walls barely beat a random base
+  rate, and (b) a bid+ask pair durable enough to actually bound a grid rarely
+  co-occurs, so the strategy is idle almost always and still loses money on
+  the rare deployments it gets.
+- **multi_orderbook.py collector left running** (cron `*/2 * * * *`, unchanged)
+  — more data won't hurt, but don't re-attempt this build without a materially
+  different premise (e.g. wider tolerance, different persistence definition,
+  or trading the hold/break signal directly rather than bounding a range with
+  it). Temp backtest script was scp'd to the droplet and deleted after the run
+  (not committed — no reusable backtest module added to the repo this
+  session; happy to formalize into `multi_orderbook_report.py` if this line of
+  research continues).
+
 ## Session 2026-06-17 — SELL_ONLY root cause fixed (was BUYING BTC)
 
 - **Root cause of the support dump + ratio swings:** `_make_intensive_sell_tiers`
