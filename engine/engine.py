@@ -1334,8 +1334,13 @@ def run():
                                                btc_ratio=state.btc_ratio, atr=state.atr)
                 _entering   = not _prev_ride_active
                 _gw         = state.grid_width or 1
+                # Trail tightened 0.5→0.30 (2026-07-21): at 0.5×gw (~$950) the ride
+                # grid lagged a strong rise so far that the OLD straddle's stranded
+                # sell rungs bled BTC to 5% before it re-anchored. A tighter trail
+                # keeps the (now dip-only) buy ladder following price up so it
+                # accumulates pullbacks instead of getting left behind.
                 _trail      = (state.center is None) or \
-                              ((state.price - (state.center or state.price)) > _gw * 0.5)
+                              ((state.price - (state.center or state.price)) > _gw * 0.30)
                 if _entering or _trail:
                     _why = "entering" if _entering else "trailing up"
                     print(f"[Ride] {_why} — buy-heavy accumulation grid at ${state.price:,.0f}")
