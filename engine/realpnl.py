@@ -215,6 +215,69 @@ def summary(bot_ids):
     }
 
 
+def true_pnl(days=30, price_tol=0.015):
+    """TRUE mark-to-market P&L over ~`days`: portfolio now vs then AT THE SAME BTC
+    PRICE, adjusted for deposits/withdrawals. This is the number that cannot lie.
+
+    WHY (2026-07-29): cumulative per-sell realised printed +$5,790 for a month in
+    which the flow-adjusted account was DOWN ~$1,200 at equal price — cost-basis
+    resets across mode-churn make Σrealised ≠ account P&L. Per-sell alerts stay
+    (they're honest per trade); THIS is the headline.
+
+    Benchmark: median portfolio_usd of snapshots aged [days-6, days+8] whose
+    btc_price is within price_tol of now. If price has moved too much for an
+    equal-price match, says so honestly instead of faking a number."""
+    import statistics
+    here = os.path.dirname(os.path.abspath(__file__))
+    # bounded tail read (~10MB ≈ 45+ days of 2-min snapshots)
+    try:
+        path = os.path.join(here, "portfolio_log.jsonl")
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > 10_000_000:
+                f.seek(-10_000_000, os.SEEK_END); f.readline()
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except Exception as e:
+        return {"ok": False, "error": "portfolio_log unreadable: %s" % e}
+    snaps = []
+    for l in lines:
+        try:
+            e = json.loads(l)
+            if e.get("ts") and e.get("btc_price") and e.get("portfolio_usd"):
+                snaps.append(e)
+        except Exception:
+            continue
+    if not snaps:
+        return {"ok": False, "error": "no snapshots"}
+    now = snaps[-1]
+    px_now, port_now = float(now["btc_price"]), float(now["portfolio_usd"])
+    t_now = float(now["ts"])
+    lo, hi = t_now - (days + 8) * 86400, t_now - (days - 6) * 86400
+    matches = [float(s["portfolio_usd"]) for s in snaps
+               if lo <= float(s["ts"]) <= hi
+               and abs(float(s["btc_price"]) - px_now) / px_now <= price_tol]
+    # net capital flows since the start of the benchmark window
+    flows = 0.0
+    try:
+        for ev in json.load(open(os.path.join(here, "capital_events.json"))):
+            if lo <= float(ev.get("ts") or 0) <= t_now:
+                flows += float(ev.get("amount_usd") or 0)
+    except Exception:
+        pass
+    out = {"ok": True, "price_now": round(px_now, 0), "portfolio_now": round(port_now, 0),
+           "net_flows_usd": round(flows, 0), "window_days": days,
+           "n_benchmark_snaps": len(matches)}
+    if len(matches) >= 10:
+        then = statistics.median(matches)
+        out["portfolio_then_same_price"] = round(then, 0)
+        out["true_pnl_usd"] = round(port_now - then - flows, 0)
+    else:
+        out["true_pnl_usd"] = None
+        out["note"] = ("no equal-price benchmark ~%dd ago (price then differed >%.1f%%) — "
+                       "true P&L not computable at matched price" % (days, price_tol * 100))
+    return out
+
+
 def format_sell_alert(ev):
     """Telegram text with the REAL P&L number FIRST, so it shows in the phone
     notification preview. Honest: red when it's red."""

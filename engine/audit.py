@@ -244,6 +244,59 @@ def _check_realised_drop(st):
     return []
 
 
+DIVERGENCE_USD = 1500.0   # alert when Σrealised outruns true account drift by this
+
+
+def _check_pnl_divergence(st, status):
+    """THE JULY LESSON (2026-07-29): cumulative per-sell realised printed +$5,790
+    while the flow-adjusted account was DOWN ~$1,200 at equal price — cost-basis
+    resets across mode churn make Σrealised ≠ account P&L, and the gap went
+    unnoticed for a month. This check keeps one sample/day of (realised_cum,
+    portfolio, price, cum flows) and compares: over any stored window with an
+    equal-price endpoint (±2%), gap = Δrealised − (Δportfolio − Δflows). Alerts
+    when the ledger's claim outruns reality by > DIVERGENCE_USD."""
+    rp = _load(RPNL_FILE)
+    realised = sum(b.get("realised_cum", 0.0) for b in (rp.get("bots") or {}).values())
+    price = float(status.get("price") or 0)
+    ports = _recent_ports(30)
+    if not ports or not price:
+        return []
+    port_now = float(ports[-1].get("portfolio_usd") or 0)
+    flows_cum = 0.0
+    try:
+        flows_cum = sum(float(e.get("amount_usd") or 0)
+                        for e in _load(os.path.join(HERE, "capital_events.json"), []))
+    except Exception:
+        pass
+    now = time.time()
+    hist = st.get("pnl_div_hist", [])
+    if not hist or now - hist[-1][0] >= 86400:   # one sample per day
+        hist.append([now, round(realised, 2), round(port_now, 2),
+                     round(price, 2), round(flows_cum, 2)])
+        st["pnl_div_hist"] = hist[-60:]          # keep ~2 months
+    findings = []
+    # oldest sample ≥5 days old whose price is within 2% of now = fair benchmark
+    for s in hist:
+        s_ts, s_real, s_port, s_px, s_flows = s
+        if now - s_ts < 5 * 86400 or not s_px:
+            continue
+        if abs(s_px - price) / price > 0.02:
+            continue
+        claimed = realised - s_real
+        actual = (port_now - s_port) - (flows_cum - s_flows)
+        gap = claimed - actual
+        if gap > DIVERGENCE_USD:
+            days = (now - s_ts) / 86400
+            findings.append({"key": "pnl_divergence", "sev": "high",
+                             "msg": ("P&L DIVERGENCE: ledger claims {:+,.0f} realised over "
+                                     "{:.0f}d but the flow-adjusted account moved {:+,.0f} "
+                                     "at equal price — ${:,.0f} of reported profit is not "
+                                     "in the account. Check churn (mode flips/redeploys).")
+                             .format(claimed, days, actual, gap)})
+            break
+    return findings
+
+
 CHECKS_STATUS = [_check_sell_near_low, _check_buy_near_high]  # need (st, ports, atr, price)
 
 
@@ -277,6 +330,7 @@ def run(notify_fn=None):
     _safe(_check_redeploy_cascade, st)
     _safe(_check_ratio_extreme, st, status)
     _safe(_check_realised_drop, st)
+    _safe(_check_pnl_divergence, st, status)
 
     seen = st.get("seen", {})
     now = time.time()

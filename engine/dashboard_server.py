@@ -2162,7 +2162,12 @@ def realpnl_summary():
     the honest number vs 3Commas' grid-step 'profit'. Observability only."""
     try:
         import realpnl
-        return jsonify(realpnl.summary(["2743885", "2743889", "2743888"]))
+        out = realpnl.summary(["2743885", "2743889", "2743888"])
+        try:
+            out["true_pnl_30d"] = realpnl.true_pnl(30)
+        except Exception as _te:  # noqa: BLE001
+            out["true_pnl_30d"] = {"ok": False, "error": str(_te)}
+        return jsonify(out)
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": str(e)})
 
@@ -2376,6 +2381,26 @@ def _grid_heartbeat():
     else:
         _HB["mode"] = None
         _HB["mode_since"] = None
+    # (c) daily TRUE P&L one-liner (08:00 UTC) — the mark-to-market number that
+    # cannot lie, so the honest figure is in Ash's face daily, not just the
+    # flattering per-sell realised (which diverged +$5.8k vs −$1.2k truth in July).
+    try:
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        if (_dt.datetime.utcnow().hour >= 8
+                and _HB.get("truepnl_day") != today):
+            _HB["truepnl_day"] = today
+            import realpnl
+            tp = realpnl.true_pnl(30)
+            if tp.get("ok") and tp.get("true_pnl_usd") is not None:
+                v = tp["true_pnl_usd"]
+                _notify_safe("Griddy TRUE 30d P&L: %s$%s (mark-to-market at $%s, "
+                             "flow-adjusted). Portfolio $%s." % (
+                                 "+" if v >= 0 else "-", "{:,.0f}".format(abs(v)),
+                                 "{:,.0f}".format(tp["price_now"]),
+                                 "{:,.0f}".format(tp["portfolio_now"])))
+    except Exception:
+        pass
 
 
 def _engine_watchdog():
