@@ -242,7 +242,8 @@ def _make_intensive_buy_tiers(price: float, tiers: list, atr: float = None,
     return result
 
 
-def _make_intensive_sell_tiers(price: float, tiers: list, sell_to_ratio: float | None = None) -> list:
+def _make_intensive_sell_tiers(price: float, tiers: list, sell_to_ratio: float | None = None,
+                               cur_ratio: float | None = None) -> list:
     """Reposition each tier so the bot SHEDS BTC down toward target on deploy —
     without ever buying BTC.
 
@@ -267,14 +268,27 @@ def _make_intensive_sell_tiers(price: float, tiers: list, sell_to_ratio: float |
     if sell_to_ratio is None:
         sell_to_ratio = get_inventory_settings().get("target_btc", 0.45)
     sell_to_ratio = min(max(float(sell_to_ratio), 0.05), 0.95)  # clamp to sane band
+    # Holdings-preserving (2026-07-31): placing only `sell_to_ratio` above price
+    # made 3Commas balancing-SELL the excess (held − needed) AT MARKET on enable —
+    # observed dumping 0.34–0.40 BTC within $40 of the local low twice on 07-31
+    # when the bounce guard's max-wait expired in a grind-down. Now the above-price
+    # fraction = CURRENT holdings (never below target), so enable trades NOTHING;
+    # the sell RUNGS covering the excess shed it via limit fills as price rises —
+    # selling bounces by construction, never the low. Mirror of the buy-side fix.
+    above_f = sell_to_ratio
+    if cur_ratio is not None:
+        # Always deploy at ≈ holdings — above target it prevents the market DUMP
+        # of the excess; below target it prevents a balancing BUY (deploying a
+        # "sell" grid must never buy). Strict zero-trade invariant.
+        above_f = min(max(float(cur_ratio), 0.05), 0.95)
 
     import copy as _copy
     result = []
     for tier in tiers:
         t = _copy.deepcopy(tier)
         width = float(t.get("grid_high", price + 1000)) - float(t.get("grid_low", price - 1000))
-        new_high = round(price + width * sell_to_ratio, 2)          # sell side above price
-        new_low  = round(price - width * (1.0 - sell_to_ratio), 2)  # buy side below price
+        new_high = round(price + width * above_f, 2)          # sell side above price
+        new_low  = round(price - width * (1.0 - above_f), 2)  # buy side below price
         n        = _apply_intensive_fee_guard(t, width)
         new_step = round(width / (n - 1), 2)
         t["grid_high"]   = new_high
@@ -1224,7 +1238,7 @@ def run():
                         _exhaust_tiers = _make_intensive_buy_tiers(state.price, state.tiers, atr=state.atr)
                         _exhaust_note  = " [intensive buy grid — BUY_ONLY still active]"
                     elif state.inventory_mode == "SELL_ONLY":
-                        _exhaust_tiers = _make_intensive_sell_tiers(state.price, state.tiers)
+                        _exhaust_tiers = _make_intensive_sell_tiers(state.price, state.tiers, cur_ratio=state.btc_ratio)
                         _exhaust_note  = " [intensive sell grid — SELL_ONLY still active]"
                     else:
                         _exhaust_tiers = state.tiers
@@ -2135,7 +2149,7 @@ def run():
                     f"SELL ONLY — BTC ratio {state.btc_ratio:.0%} too high, "
                     f"entering intensive sell mode (grid shifted above price)"
                 )
-                _intensive_tiers = _make_intensive_sell_tiers(state.price, state.tiers)
+                _intensive_tiers = _make_intensive_sell_tiers(state.price, state.tiers, cur_ratio=state.btc_ratio)
                 if DRY_RUN:
                     print(f"  [SIM] Would redeploy intensive sell: "
                           f"inner {_intensive_tiers[0]['grid_low']:,.0f}–"
