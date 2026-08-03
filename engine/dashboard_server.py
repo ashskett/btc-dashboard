@@ -2134,6 +2134,84 @@ def slide_guard_state():
     return jsonify({"state": state, "recent_would_fire": events})
 
 
+def _zero_deploy(tiers):
+    """Deploy static tiers holdings-preserving (zero-trade; guard A enforces)."""
+    from threecommas import redeploy_all_bots
+    from grid_logic import update_grid_center
+    bots = ["2743885", "2743889", "2743888"]
+    ok = redeploy_all_bots(bots, tiers, size_base=True)
+    if ok:
+        try:
+            px = float((_load_json_safe(_ENGINE_STATUS_FILE) or {}).get("price") or 0)
+        except Exception:
+            px = 0
+        gw = max(t["grid_high"] for t in tiers) - min(t["grid_low"] for t in tiers)
+        update_grid_center(px or (tiers[0]["grid_high"] + tiers[0]["grid_low"]) / 2,
+                           grid_width=gw, deployed_tiers=tiers)
+    return ok
+
+
+def _load_json_safe(p):
+    try:
+        return json.load(open(p))
+    except Exception:
+        return {}
+
+
+@app.route("/zero")
+def zero_state():
+    import zero_mode
+    return jsonify(zero_mode.get_state())
+
+
+@app.route("/zero/activate", methods=["POST"])
+def zero_activate():
+    """Enter GRIDDY ZERO: build static tiers at current price (or accept posted
+    tiers), deploy once (holdings-preserving), and freeze the reactive layer."""
+    import zero_mode
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        tiers = body.get("tiers")
+        if not tiers:
+            px = float((_load_json_safe(_ENGINE_STATUS_FILE) or {}).get("price") or 0)
+            if not px:
+                return jsonify({"ok": False, "msg": "no live price"}), 500
+            tiers = zero_mode.make_static_tiers(px)
+        if not _zero_deploy(tiers):
+            return jsonify({"ok": False, "msg": "deploy skipped by guard/cooldown — retry shortly"}), 409
+        s = zero_mode.activate(tiers)
+        _notify_safe("GRIDDY ZERO ACTIVE — static grid deployed ({} tiers, ${:,.0f}-${:,.0f}). "
+                     "Ladder rests; key levels own risk.".format(
+                         len(tiers), min(t["grid_low"] for t in tiers),
+                         max(t["grid_high"] for t in tiers)))
+        return jsonify({"ok": True, "state": s})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/zero/approve")
+def zero_approve():
+    """One-click (Telegram link) approval of the pending range re-centre."""
+    import zero_mode
+    p = zero_mode.take_pending_proposal()
+    if not p:
+        return jsonify({"ok": False, "msg": "no pending proposal"}), 404
+    if not _zero_deploy(p):
+        return jsonify({"ok": False, "msg": "deploy skipped by guard/cooldown — retry shortly"}), 409
+    zero_mode.activate(p)   # re-store tiers + reset outside-tracking
+    _notify_safe("GRIDDY ZERO — new static range approved & deployed: ${:,.0f}-${:,.0f}.".format(
+        min(t["grid_low"] for t in p), max(t["grid_high"] for t in p)))
+    return jsonify({"ok": True, "tiers": p})
+
+
+@app.route("/zero/deactivate", methods=["POST"])
+def zero_deactivate():
+    import zero_mode
+    s = zero_mode.deactivate()
+    _notify_safe("GRIDDY ZERO deactivated — adaptive engine logic resumes next cycle.")
+    return jsonify({"ok": True, "state": s})
+
+
 @app.route("/audit")
 def audit_view():
     """Autonomous auditor: current findings (live re-run) + recent alert history."""

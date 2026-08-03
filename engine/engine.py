@@ -36,6 +36,7 @@ import fills_capture  # persist BUY/SELL fills each cycle before 3Commas wipes t
 import realpnl  # real cost-basis P&L (honest realised number per sell, red or green)
 import slide_guard  # Phase 0: sustained-grind ("falling knife") detector (observability)
 import ride_mode  # manually-armed trend-up accumulation mode
+import zero_mode  # GRIDDY ZERO: static-grid mode — reactive subsystems observe-only
 from indicators import add_indicators
 from regime import (detect_regime, trend_strength, compression_exit_fast, get_regime_state,
                     TRENDING_UP_EXIT, TRENDING_DOWN_EXIT)
@@ -777,6 +778,7 @@ def _apply_sell_guards(mode, prev_mode, price, atr, trendline, btc_ratio,
 
 
 def run():
+    _zero = zero_mode.is_active()   # GRIDDY ZERO: static grid, ladder rests
     global _last_run_ts, _prev_regime, _prev_trending_down, _prev_inventory_mode, _prev_weekend_mode, _bot_action_cycle, _drift_confirm_cycles, _prev_ride_active, _sell_only_confirm
     now = time.time()
     if now - _last_run_ts < 100:
@@ -888,7 +890,9 @@ def run():
         # FLASH MOVE DETECTION
         # ===============================
         _flash = detect_flash_move(state.price, state.atr)
-        if _flash["status"] == "new":
+        if _zero and _flash["status"] in ("new", "active"):
+            print("  [ZERO] flash-move %s observed — static grid holds (key levels own protection)" % _flash["status"])
+        elif _flash["status"] == "new":
             print(f"FLASH MOVE {_flash['direction']} — ${_flash['magnitude']:,.0f} move "
                   f"({_flash['magnitude']/state.atr:.1f}×ATR) — stopping all bots, "
                   f"cooldown {_flash['cooldown_remaining']} cycles")
@@ -1183,7 +1187,9 @@ def run():
             print(f"PROXIMITY ALERT — price approaching outer grid edge ({_prox})")
 
         # If already in an active breakout, check for reversion/recovery/exhaustion
-        if _bo_state.get("active") in ("UP", "DOWN"):
+        if _zero and _bo_state.get("active"):
+            print("  [ZERO] breakout state %s observed — static grid holds (no bot stops)" % _bo_state.get("active"))
+        elif _bo_state.get("active") in ("UP", "DOWN"):
             _active_dir   = _bo_state["active"]
             _fire_price   = _bo_state.get("fire_price", state.price)
             _price_change = state.price - _fire_price
@@ -1330,7 +1336,9 @@ def run():
             _ride = ride_mode.get_state()
         except Exception:
             _ride = {"armed": False}
-        if _ride.get("armed"):
+        if _ride.get("armed") and _zero:
+            print("  [ZERO] ride mode armed but ignored — static grid holds (disarm or exit zero mode)")
+        elif _ride.get("armed"):
             ride_mode.update_trailing_high(state.price)
             _ride = ride_mode.get_state()
             if ride_mode.should_auto_disarm(state.price):
@@ -1797,7 +1805,7 @@ def run():
                 return   # skip fresh breakout detection AND drift while target is live
 
         # Fresh breakout detection
-        _direction = breakout_detected(df, regime=state.regime, gap_ratio=state.gap_ratio)
+        _direction = None if _zero else breakout_detected(df, regime=state.regime, gap_ratio=state.gap_ratio)
         if _direction:
             print(f"BREAKOUT DETECTED — direction: {_direction}")
             notify_critical(f"Breakout {_direction} detected at ${state.price:,.0f} — grid bots adjusting")
@@ -1886,7 +1894,9 @@ def run():
         print(f"  Drift check: deploy_gw=${_drift_gw:,.0f}  current_gw=${state.grid_width:,.0f}"
               f"  dist=${abs(state.price - (state.center + (state.tilt or 0))):,.0f}"
               f"  threshold=${_drift_threshold:,.0f}{_drift_tag}")
-        if drift_detected(state.price, state.center, _drift_gw,
+        if _zero:
+            pass   # GRIDDY ZERO: static grid — drift never recentres
+        elif drift_detected(state.price, state.center, _drift_gw,
                           tilt=state.tilt or 0, threshold_mult=_drift_mult):
             _drift_confirm_cycles += 1
             state.drift_triggered = True
@@ -2055,8 +2065,8 @@ def run():
             and state.inventory_mode == "NORMAL"
             and not _bo_state.get("active")
         )
-        _entering_weekend = _weekend_eligible and not _prev_weekend_mode
-        _exiting_weekend  = _prev_weekend_mode and not _weekend_hours   # time-based exit only
+        _entering_weekend = _weekend_eligible and not _prev_weekend_mode and not _zero
+        _exiting_weekend  = _prev_weekend_mode and not _weekend_hours and not _zero   # time-based exit only
 
         if _exiting_weekend:
             # Monday 07:00 UTC — return to full-width normal grid
@@ -2136,6 +2146,9 @@ def run():
         # ===============================
         # INVENTORY PROTECTION
         # ===============================
+        if _zero and state.inventory_mode != "NORMAL":
+            print("  [ZERO] inventory mode %s observed — static grid holds (no intensive redeploy)" % state.inventory_mode)
+            state.inventory_mode = "NORMAL"
         if state.inventory_mode == "SELL_ONLY":
             if _prev_inventory_mode != "SELL_ONLY":
                 # First cycle at critically high BTC ratio — redeploy in intensive
@@ -2248,7 +2261,23 @@ def run():
         # COMPRESSION             │  OFF  │  OFF  │  ON   │ Outer wide enough for low-vol oscillations
         # Note: trending_up in RANGE regime = price above support, NOT a trend — all bots ON
 
-        if state.regime == "COMPRESSION":
+        if _zero:
+            # GRIDDY ZERO — the ladder rests. All bots ON, orders left alone;
+            # key-level targets (handled above) own protection/breakout risk.
+            _decision_summary = "GRIDDY ZERO: static grid, all bots on, ladder resting"
+            print("ZERO MODE — static grid holding; all bots ON (key-level targets live)")
+            for i, bot in enumerate(GRID_BOTS):
+                tier_name = ["inner", "mid", "outer"][i] if i < 3 else f"bot{i}"
+                _act(bot, True, tier_name + " (ZERO static)")
+            _knife_brake["on"] = False
+            _prev_weekend_mode = False
+            try:
+                _zmsg = zero_mode.check_range_exit(state.price)
+                if _zmsg:
+                    notify_critical(_zmsg)
+            except Exception as _ze:
+                print(f"Warning: zero range-exit check failed: {_ze}")
+        elif state.regime == "COMPRESSION":
             _decision_summary = "COMPRESSION: inner+mid off; outer on to catch low-volatility oscillations"
             if _prev_regime != "COMPRESSION":
                 notify(f"COMPRESSION — inner+mid off, outer running at ${state.price:,.0f}")
