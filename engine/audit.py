@@ -209,7 +209,11 @@ def _check_ratio_extreme(st, status):
     inv = _load(os.path.join(HERE, "inventory_settings.json"),
                 {"min_btc": 0.2, "max_btc": 0.7})
     hi, lo = inv.get("max_btc", 0.7), inv.get("min_btc", 0.2)
-    extreme = ratio >= hi or ratio <= lo
+    # UNDER-weight alerts removed (Ash 2026-08-03): in the static grid, low BTC
+    # near the range top is DESIGN — the ladder rebuilds via dip fills only.
+    # Only OVER-weight persists as a finding (heavy exposure = when the DOWN
+    # key level actually matters).
+    extreme = ratio >= hi
     now = time.time()
     if not extreme:
         st["ratio_extreme_since"] = None
