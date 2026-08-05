@@ -1355,7 +1355,7 @@ def run():
             else:
                 _ride_tiers = _make_ride_tiers(state.price, state.tiers,
                                                btc_ratio=state.btc_ratio, atr=state.atr)
-                _entering   = not _prev_ride_active
+                _entering   = not _ride.get("deployed")   # persisted — survives engine restarts
                 _gw         = state.grid_width or 1
                 # Trail tightened 0.5→0.30 (2026-07-21): at 0.5×gw (~$950) the ride
                 # grid lagged a strong rise so far that the OLD straddle's stranded
@@ -1376,6 +1376,7 @@ def run():
                         _mark_all_bots_started()
                         update_grid_center(state.price, grid_width=state.grid_width,
                                            deployed_tiers=_ride_tiers)
+                        ride_mode.mark_deployed()
                         if _zero:
                             # keep Zero's stored range in sync so range-exit
                             # alerts track the LIVE (ride) ladder, not the old one

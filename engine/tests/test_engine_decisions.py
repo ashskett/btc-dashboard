@@ -600,15 +600,28 @@ class TestBreakoutBuyOnlyOverride:
 class TestRideMode:
     """Manually-armed trend-up accumulation overrides inventory + tiered logic."""
 
-    def test_make_ride_tiers_straddles_price_75_25(self):
+    def test_make_ride_tiers_dip_only_holdings_preserving(self):
+        """2026-07-21 contract: ride accumulates on DIPS ONLY. The above-price
+        fraction = current holdings ratio, so enable never market-trades base.
+        (The old 75/25 straddle market-BOUGHT base on arm — slam-bought ~$18k at
+        a pump top on 2026-07-20. That behaviour must never return.)"""
         import engine
         tiers = [{"name": "inner", "grid_low": 64000, "grid_high": 66000,
                   "levels": 6, "min_step": 100}]
-        out = engine._make_ride_tiers(65000, tiers, buy_frac=0.75)[0]
-        below = 65000 - out["grid_low"]
-        above = out["grid_high"] - 65000
-        assert out["grid_low"] < 65000 < out["grid_high"]      # straddles price
-        assert abs(below - 1500) < 60 and abs(above - 500) < 60  # 75% / 25% of 2000
+        # All-cash arm (ratio ~0): whole ladder must sit BELOW price — pure dip buys.
+        out = engine._make_ride_tiers(65000, tiers, btc_ratio=0.0)[0]
+        assert out["grid_high"] <= 65000
+        assert abs((out["grid_high"] - out["grid_low"]) - 2000) < 1  # width preserved
+        # Holding 40%: above-price fraction ≈ holdings → zero balancing trade.
+        out = engine._make_ride_tiers(65000, tiers, btc_ratio=0.40)[0]
+        width = out["grid_high"] - out["grid_low"]
+        above = (out["grid_high"] - 65000) / width
+        assert abs(above - 0.40) < 0.02
+        # Width floor: degenerate source tier gets floored to 1.2×ATR.
+        thin = [{"name": "inner", "grid_low": 64990, "grid_high": 65010,
+                 "levels": 6, "min_step": 100}]
+        out = engine._make_ride_tiers(65000, thin, btc_ratio=0.0, atr=500.0)[0]
+        assert (out["grid_high"] - out["grid_low"]) >= 600  # 1.2 × 500
 
     @staticmethod
     def _no_flash(p):

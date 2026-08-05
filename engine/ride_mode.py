@@ -57,6 +57,7 @@ def arm(price: float, disarm_pct: float = DEFAULT_DISARM_PCT) -> dict:
     """Arm ride mode at the current price."""
     s = {
         "armed": True,
+        "deployed": False,
         "armed_at": time.time(),
         "armed_price": float(price),
         "trailing_high": float(price),
@@ -66,6 +67,17 @@ def arm(price: float, disarm_pct: float = DEFAULT_DISARM_PCT) -> dict:
     }
     _save(s)
     print(f"[Ride] ARMED at ${price:,.0f} (auto-disarm {disarm_pct:.1f}% below high)")
+    return s
+
+
+def mark_deployed() -> dict:
+    """Persist that the ride grid has been deployed for this arm session — so an
+    engine RESTART does not re-run the entry redeploy (2026-08-05: every deploy
+    restart re-triggered '[Ride] entering' + a full redeploy because the flag
+    lived in process memory)."""
+    s = _load()
+    s["deployed"] = True
+    _save(s)
     return s
 
 
