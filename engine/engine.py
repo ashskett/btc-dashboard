@@ -1336,9 +1336,10 @@ def run():
             _ride = ride_mode.get_state()
         except Exception:
             _ride = {"armed": False}
-        if _ride.get("armed") and _zero:
-            print("  [ZERO] ride mode armed but ignored — static grid holds (disarm or exit zero mode)")
-        elif _ride.get("armed"):
+        if _ride.get("armed"):
+            # RIDE runs under ZERO too (2026-08-05): it is human-armed, dip-only
+            # and holdings-preserving — the one adaptive tool Zero keeps, because
+            # it obeys Zero's law: limit orders only, never a market trade.
             ride_mode.update_trailing_high(state.price)
             _ride = ride_mode.get_state()
             if ride_mode.should_auto_disarm(state.price):
@@ -1375,6 +1376,13 @@ def run():
                         _mark_all_bots_started()
                         update_grid_center(state.price, grid_width=state.grid_width,
                                            deployed_tiers=_ride_tiers)
+                        if _zero:
+                            # keep Zero's stored range in sync so range-exit
+                            # alerts track the LIVE (ride) ladder, not the old one
+                            try:
+                                zero_mode.activate(_ride_tiers)
+                            except Exception:
+                                pass
                     else:
                         print(f"  Rate limit reached — ride deploy deferred to next cycle")
                 for i, bot in enumerate(GRID_BOTS[:3]):
