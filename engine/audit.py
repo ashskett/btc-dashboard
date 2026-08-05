@@ -430,9 +430,13 @@ def run(notify_fn=None):
     seen = st.get("seen", {})
     now = time.time()
     fresh = []
+    # Slow-moving P&L conditions persist for days as their windows roll — hourly
+    # re-pings are spam. They re-alert every 12h instead (2026-08-06).
+    _SLOW = {"pnl_divergence": 12 * 3600, "chop_loss": 12 * 3600,
+             "engine_alpha_30d": 12 * 3600, "ratio_extreme": 6 * 3600}
     for f in findings:
         last = seen.get(f["key"], 0)
-        if now - last >= ALERT_COOLDOWN_S:
+        if now - last >= _SLOW.get(f["key"], ALERT_COOLDOWN_S):
             seen[f["key"]] = now
             fresh.append(f)
     st["seen"] = seen
