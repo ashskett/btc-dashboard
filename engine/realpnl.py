@@ -354,6 +354,61 @@ def anchored_pnl():
     return out
 
 
+def monthly_decomposition():
+    """Per-month split of account change into MARKET (what the month-start mix
+    would have done held untouched) vs ENGINE (everything the machine's activity
+    added/destroyed on top). Built 2026-08-05 after the project reckoning:
+    −$8.8k total ≈ −$4.7k market (BTC −12.5%) + −$4.1k engine — Ash: 'whose
+    fault is it' must always be answerable at a glance.
+
+      market  = start_port × start_btc_ratio × (px_end/px_start − 1)
+      actual  = end_port − start_port − flows_in_month
+      engine  = actual − market   (fees, churn, timing — the machine's doing)
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    months = {}
+    try:
+        for l in open(os.path.join(here, "portfolio_log.jsonl")):
+            try:
+                e = json.loads(l)
+            except Exception:
+                continue
+            ts = e.get("ts")
+            if not (ts and e.get("portfolio_usd") and e.get("btc_price")):
+                continue
+            import datetime as _dt
+            key = _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m")
+            m = months.setdefault(key, {"first": e, "last": e})
+            if ts < m["first"]["ts"]:
+                m["first"] = e
+            if ts > m["last"]["ts"]:
+                m["last"] = e
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+    events = []
+    try:
+        events = json.load(open(os.path.join(here, "capital_events.json")))
+    except Exception:
+        pass
+    rows = []
+    tot_m = tot_e = tot_a = 0.0
+    for key in sorted(months):
+        f, l = months[key]["first"], months[key]["last"]
+        flows = sum(float(ev.get("amount_usd") or 0) for ev in events
+                    if f["ts"] <= float(ev.get("ts") or 0) <= l["ts"])
+        px0, px1 = float(f["btc_price"]), float(l["btc_price"])
+        market = float(f["portfolio_usd"]) * float(f.get("btc_ratio") or 0) * (px1 / px0 - 1)
+        actual = float(l["portfolio_usd"]) - float(f["portfolio_usd"]) - flows
+        engine = actual - market
+        rows.append({"month": key, "market": round(market), "engine": round(engine),
+                     "actual": round(actual), "flows": round(flows),
+                     "px_start": round(px0), "px_end": round(px1)})
+        tot_m += market; tot_e += engine; tot_a += actual
+    return {"ok": True, "rows": rows,
+            "total": {"market": round(tot_m), "engine": round(tot_e),
+                      "actual": round(tot_a)}}
+
+
 def format_sell_alert(ev):
     """Telegram text with the REAL P&L number FIRST, so it shows in the phone
     notification preview. Honest: red when it's red."""

@@ -84,8 +84,20 @@ def _iso_to_ts(s):
 
 def _recent_ports(mins):
     cut = time.time() - mins * 60
-    return [e for e in _load_jsonl_tail(PORT_FILE)
-            if e.get("ts") and e["ts"] >= cut]
+    # scale the tail read to the window: ~1 snapshot/2min × ~250B, 1.5x headroom
+    need = int((mins / 2) * 250 * 1.5) + 100_000
+    out = []
+    for line in _tail(PORT_FILE, max_bytes=min(need, 12_000_000)).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if e.get("ts") and e["ts"] >= cut:
+            out.append(e)
+    return out
 
 
 def _recent_fills(mins):
@@ -249,6 +261,83 @@ def _check_realised_drop(st):
 
 
 DIVERGENCE_USD = 1500.0   # alert when Σrealised outruns true account drift by this
+CHOP_LOSS_USD    = 250.0  # losing this much over 7d in a SIDEWAYS market ⇒ alert
+CHOP_BAND_PCT    = 0.03   # |7d price change| below this = "chop" (grid's home turf)
+ALPHA_30D_USD    = 1500.0 # engine effect (vs month-start-mix HODL) worse than this ⇒ alert
+
+
+def _check_chop_loss(st, status):
+    """ASH'S JULY WOUND, GUARDED (2026-08-05): 'losing money with bitcoin trading
+    perfectly for a grid engine'. In sideways markets the grid MUST make money —
+    that is its entire edge. If price is flat over ~7d but the flow-adjusted
+    account is DOWN meaningfully, the machine is malfunctioning economically even
+    if no single trade looks wrong. Alert loudly and early."""
+    ports = _recent_ports(60 * 24 * 8)   # ~8 days
+    if len(ports) < 100:
+        return []
+    now_p = ports[-1]
+    then_p = None
+    for p in ports:
+        if (now_p["ts"] - p["ts"]) <= 7.5 * 86400:
+            then_p = p
+            break
+    if not then_p or (now_p["ts"] - then_p["ts"]) < 6 * 86400:
+        return []
+    px0, px1 = float(then_p.get("btc_price") or 0), float(now_p.get("btc_price") or 0)
+    if not px0 or abs(px1 / px0 - 1) > CHOP_BAND_PCT:
+        return []   # trending market — grid-vs-price divergence is expected there
+    flows = 0.0
+    try:
+        for ev in _load(os.path.join(HERE, "capital_events.json"), []):
+            if then_p["ts"] <= float(ev.get("ts") or 0) <= now_p["ts"]:
+                flows += float(ev.get("amount_usd") or 0)
+    except Exception:
+        pass
+    change = float(now_p["portfolio_usd"]) - float(then_p["portfolio_usd"]) - flows
+    if change < -CHOP_LOSS_USD:
+        return [{"key": "chop_loss", "sev": "high",
+                 "msg": ("LOSING IN CHOP: price flat over 7d (${:,.0f}→${:,.0f}, "
+                         "{:+.1f}%) but account is {:,.0f} flow-adjusted. A grid "
+                         "must profit in sideways markets — investigate NOW "
+                         "(churn? fees? repositioning?).").format(
+                             px0, px1, 100 * (px1 / px0 - 1), change)}]
+    return []
+
+
+def _check_engine_alpha_30d(st, status):
+    """Engine-vs-HODL guard: compares the account against 'held the 30d-ago mix,
+    did nothing'. In a strong rally a grid legitimately lags HODL (it sells on
+    the way up), so the threshold is generous — this catches sustained
+    destruction like July (engine −$4.1k vs HODL), not normal grid behaviour."""
+    ports = _recent_ports(60 * 24 * 32)
+    if len(ports) < 500:
+        return []
+    now_p = ports[-1]
+    then_p = ports[0]
+    if (now_p["ts"] - then_p["ts"]) < 25 * 86400:
+        return []
+    px0, px1 = float(then_p.get("btc_price") or 0), float(now_p.get("btc_price") or 0)
+    r0 = float(then_p.get("btc_ratio") or 0)
+    if not px0:
+        return []
+    flows = 0.0
+    try:
+        for ev in _load(os.path.join(HERE, "capital_events.json"), []):
+            if then_p["ts"] <= float(ev.get("ts") or 0) <= now_p["ts"]:
+                flows += float(ev.get("amount_usd") or 0)
+    except Exception:
+        pass
+    market = float(then_p["portfolio_usd"]) * r0 * (px1 / px0 - 1)
+    actual = float(now_p["portfolio_usd"]) - float(then_p["portfolio_usd"]) - flows
+    engine = actual - market
+    if engine < -ALPHA_30D_USD:
+        return [{"key": "engine_alpha_30d", "sev": "high",
+                 "msg": ("ENGINE DESTROYING VALUE: over ~30d the machine's activity "
+                         "cost ${:,.0f} versus simply holding the month-ago mix "
+                         "(market {:+,.0f}, actual {:+,.0f}). This is the July "
+                         "failure pattern — review /alpha and consider freezing.")
+                 .format(-engine, market, actual)}]
+    return []
 
 
 def _check_pnl_divergence(st, status):
@@ -335,6 +424,8 @@ def run(notify_fn=None):
     _safe(_check_ratio_extreme, st, status)
     _safe(_check_realised_drop, st)
     _safe(_check_pnl_divergence, st, status)
+    _safe(_check_chop_loss, st, status)
+    _safe(_check_engine_alpha_30d, st, status)
 
     seen = st.get("seen", {})
     now = time.time()

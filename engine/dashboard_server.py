@@ -2158,6 +2158,16 @@ def _load_json_safe(p):
         return {}
 
 
+@app.route("/alpha")
+def alpha_view():
+    """Market-vs-engine monthly decomposition ('whose fault is it')."""
+    try:
+        import realpnl
+        return jsonify(realpnl.monthly_decomposition())
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/zero")
 def zero_state():
     import zero_mode

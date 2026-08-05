@@ -204,6 +204,21 @@
   </div>
 </div>
 
+<!-- MARKET vs ENGINE — whose fault is it, per month -->
+<div class="sec" style="margin-top:14px;">
+  <div class="chart-head" style="display:flex;align-items:baseline;gap:10px;">
+    <span class="chart-title">Market vs Engine (monthly)</span>
+    <span style="font-size:9px;color:var(--muted);">market = what the month-start mix would have done held untouched · engine = what the machine's activity added/destroyed on top</span>
+  </div>
+  <table id="mvePanel" style="width:100%;border-collapse:collapse;font-family:'Space Mono',monospace;font-size:11px;margin-top:8px;">
+    <thead><tr style="color:var(--muted);font-size:9px;text-transform:uppercase;text-align:right;">
+      <th style="text-align:left;padding:4px 8px;">Month</th><th style="padding:4px 8px;">BTC</th>
+      <th style="padding:4px 8px;">Market</th><th style="padding:4px 8px;">Engine</th><th style="padding:4px 8px;">Actual</th>
+    </tr></thead>
+    <tbody id="mveBody"><tr><td colspan="5" style="padding:8px;color:var(--muted);">loading…</td></tr></tbody>
+  </table>
+</div>
+
 <!-- PORTFOLIO VALUE CHART -->
 <div class="chart-section">
   <div class="chart-header">
@@ -972,6 +987,33 @@ setInterval(loadGridProfit, 300000);  // refresh every 5 min
       bits.push(`30d MTM: ${fmt(tp.true_pnl_usd)}`);
     sub.textContent = `since 16 Mar · ` + bits.join(' · ');
   }catch(e){ console.warn('project pnl load failed', e); }
+})();
+
+// ── MARKET vs ENGINE monthly panel ──
+(async function loadMve(){
+  try{
+    const r = await fetch('/alpha');
+    const d = await r.json();
+    const body = document.getElementById('mveBody');
+    if(!d || !d.ok){ body.innerHTML = `<tr><td colspan="5" style="padding:8px;color:#f85149;">${(d&&d.error)||'unavailable'}</td></tr>`; return; }
+    const fmt = v => `<span style="color:${v>=0?'var(--green,#56d364)':'#f85149'}">${v>=0?'+$':'-$'}${Math.abs(v).toLocaleString()}</span>`;
+    let html = '';
+    for(const row of d.rows){
+      html += `<tr style="text-align:right;border-top:1px solid rgba(255,255,255,.05);">
+        <td style="text-align:left;padding:4px 8px;">${row.month}</td>
+        <td style="padding:4px 8px;color:var(--muted);">$${row.px_start.toLocaleString()}→$${row.px_end.toLocaleString()}</td>
+        <td style="padding:4px 8px;">${fmt(row.market)}</td>
+        <td style="padding:4px 8px;font-weight:700;">${fmt(row.engine)}</td>
+        <td style="padding:4px 8px;">${fmt(row.actual)}</td></tr>`;
+    }
+    const t = d.total;
+    html += `<tr style="text-align:right;border-top:2px solid rgba(255,171,0,.4);font-weight:700;">
+      <td style="text-align:left;padding:6px 8px;color:#ffab00;">TOTAL</td><td></td>
+      <td style="padding:6px 8px;">${fmt(t.market)}</td>
+      <td style="padding:6px 8px;">${fmt(t.engine)}</td>
+      <td style="padding:6px 8px;">${fmt(t.actual)}</td></tr>`;
+    body.innerHTML = html;
+  }catch(e){ console.warn('mve load failed', e); }
 })();
 </script>
 </body>
