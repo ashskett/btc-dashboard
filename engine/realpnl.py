@@ -278,6 +278,82 @@ def true_pnl(days=30, price_tol=0.015):
     return out
 
 
+ANCHORS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "real_pnl_anchors.json")
+
+
+def anchored_pnl():
+    """EXACT P&L vs fixed anchors — no sliding windows, no benchmark matching,
+    identical methodology every day (Ash 2026-08-05: daily wobble in the 30d
+    equal-price figure was benchmark composition, not money; and 'the baseline
+    is March when I started').
+
+      project — since the first portfolio snapshot (2026-03-16)
+      reset   — since the Griddy Zero static reset (2026-07-31)
+
+    pnl = portfolio_now − anchor_portfolio − net_capital_flows(anchor→now)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        anchors = json.load(open(ANCHORS_FILE))
+    except Exception:
+        anchors = None
+    if not anchors:
+        first = None
+        for l in open(os.path.join(here, "portfolio_log.jsonl")):
+            try:
+                e = json.loads(l)
+                if e.get("ts") and e.get("portfolio_usd"):
+                    first = e
+                    break
+            except Exception:
+                continue
+        if not first:
+            return {"ok": False, "error": "no snapshots"}
+        anchors = {"project": {"ts": first["ts"], "portfolio": first["portfolio_usd"],
+                               "label": "since 16 Mar"},
+                   "reset": {"ts": 1785768872.72, "portfolio": 73016.0,
+                             "label": "since 31 Jul reset"}}
+        try:
+            json.dump(anchors, open(ANCHORS_FILE, "w"), indent=2)
+        except Exception:
+            pass
+    # latest snapshot (bounded tail read)
+    try:
+        path = os.path.join(here, "portfolio_log.jsonl")
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > 200_000:
+                f.seek(-200_000, os.SEEK_END); f.readline()
+            tail = f.read().decode("utf-8", "replace").splitlines()
+        now = None
+        for l in reversed(tail):
+            try:
+                e = json.loads(l)
+                if e.get("portfolio_usd"):
+                    now = e
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if not now:
+        return {"ok": False, "error": "no current snapshot"}
+    events = []
+    try:
+        events = json.load(open(os.path.join(here, "capital_events.json")))
+    except Exception:
+        pass
+    out = {"ok": True, "portfolio_now": round(now["portfolio_usd"], 0),
+           "price_now": round(now.get("btc_price") or 0, 0)}
+    for key, a in anchors.items():
+        flows = sum(float(ev.get("amount_usd") or 0) for ev in events
+                    if float(ev.get("ts") or 0) >= float(a["ts"]))
+        out[key] = {"label": a["label"],
+                    "pnl_usd": round(now["portfolio_usd"] - a["portfolio"] - flows, 0),
+                    "flows_usd": round(flows, 0)}
+    return out
+
+
 def format_sell_alert(ev):
     """Telegram text with the REAL P&L number FIRST, so it shows in the phone
     notification preview. Honest: red when it's red."""

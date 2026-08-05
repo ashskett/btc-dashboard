@@ -182,10 +182,10 @@
     <div class="kpi-val" id="k7d">--</div>
     <div class="kpi-sub" id="k7dSub"></div>
   </div>
-  <div class="kpi" style="border:1px solid rgba(255,171,0,.35);" title="Portfolio now vs ~30d ago AT THE SAME BTC price, adjusted for deposits/withdrawals. The honest bottom line — per-sell realised can overstate across mode churn (July: ledger +$5.8k vs true −$1.2k).">
-    <div class="kpi-lbl" style="color:#ffab00;">TRUE 30d P&amp;L ★</div>
+  <div class="kpi" style="border:1px solid rgba(255,171,0,.35);" title="Exact flow-adjusted P&L vs fixed anchors: PROJECT = since the first snapshot (16 Mar 2026); reset = since the Griddy Zero static reset (31 Jul). No sliding benchmarks — identical methodology every day. 30d MTM (equal-price) shown as context; it wobbles with which historical days match the current price.">
+    <div class="kpi-lbl" style="color:#ffab00;">PROJECT P&amp;L ★</div>
     <div class="kpi-val" id="kTruePnl">--</div>
-    <div class="kpi-sub" id="kTruePnlSub">mark-to-market, flow-adjusted</div>
+    <div class="kpi-sub" id="kTruePnlSub">since 16 Mar, flow-adjusted</div>
   </div>
   <div class="kpi">
     <div class="kpi-lbl">BTC Holdings</div>
@@ -949,25 +949,29 @@ loadGridProfit();
 setInterval(loadData, 60000);
 setInterval(loadGridProfit, 300000);  // refresh every 5 min
 
-// ── TRUE 30d P&L (mark-to-market, flow-adjusted) — the number that cannot lie ──
+// ── PROJECT P&L (fixed anchors, exact) — headline; reset + 30d MTM as context ──
 (async function loadTruePnl(){
   try{
     const r = await fetch('/realpnl');
     const d = await r.json();
+    const a = d && d.anchored;
     const tp = d && d.true_pnl_30d;
     const el = document.getElementById('kTruePnl');
     const sub = document.getElementById('kTruePnlSub');
-    if(!tp || !tp.ok || tp.true_pnl_usd === null || tp.true_pnl_usd === undefined){
+    const fmt = v => (v >= 0 ? '+$' : '-$') + Math.abs(v).toLocaleString();
+    if(!a || !a.ok){
       el.textContent = 'n/a';
-      sub.textContent = (tp && tp.note) ? tp.note : 'no equal-price benchmark';
+      sub.textContent = (a && a.error) || 'anchored pnl unavailable';
       return;
     }
-    const v = tp.true_pnl_usd;
-    el.textContent = (v >= 0 ? '+$' : '-$') + Math.abs(v).toLocaleString();
+    const v = a.project.pnl_usd;
+    el.textContent = fmt(v);
     el.style.color = v >= 0 ? 'var(--green, #56d364)' : '#f85149';
-    sub.textContent = `vs ~30d ago at $${Number(tp.price_now).toLocaleString()}` +
-      (tp.net_flows_usd ? ` · flows $${Number(tp.net_flows_usd).toLocaleString()}` : '');
-  }catch(e){ console.warn('true pnl load failed', e); }
+    let bits = [`reset: ${fmt(a.reset.pnl_usd)}`];
+    if(tp && tp.ok && tp.true_pnl_usd !== null && tp.true_pnl_usd !== undefined)
+      bits.push(`30d MTM: ${fmt(tp.true_pnl_usd)}`);
+    sub.textContent = `since 16 Mar · ` + bits.join(' · ');
+  }catch(e){ console.warn('project pnl load failed', e); }
 })();
 </script>
 </body>

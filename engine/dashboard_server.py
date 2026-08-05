@@ -2245,6 +2245,10 @@ def realpnl_summary():
             out["true_pnl_30d"] = realpnl.true_pnl(30)
         except Exception as _te:  # noqa: BLE001
             out["true_pnl_30d"] = {"ok": False, "error": str(_te)}
+        try:
+            out["anchored"] = realpnl.anchored_pnl()
+        except Exception as _ae:  # noqa: BLE001
+            out["anchored"] = {"ok": False, "error": str(_ae)}
         return jsonify(out)
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": str(e)})
@@ -2469,14 +2473,22 @@ def _grid_heartbeat():
                 and _HB.get("truepnl_day") != today):
             _HB["truepnl_day"] = today
             import realpnl
+            a = realpnl.anchored_pnl()
             tp = realpnl.true_pnl(30)
-            if tp.get("ok") and tp.get("true_pnl_usd") is not None:
-                v = tp["true_pnl_usd"]
-                _notify_safe("Griddy TRUE 30d P&L: %s$%s (mark-to-market at $%s, "
-                             "flow-adjusted). Portfolio $%s." % (
-                                 "+" if v >= 0 else "-", "{:,.0f}".format(abs(v)),
-                                 "{:,.0f}".format(tp["price_now"]),
-                                 "{:,.0f}".format(tp["portfolio_now"])))
+            if a.get("ok"):
+                def _fmt(v):
+                    return ("+$" if v >= 0 else "-$") + "{:,.0f}".format(abs(v))
+                extra = ""
+                if tp.get("ok") and tp.get("true_pnl_usd") is not None:
+                    extra = " · 30d MTM %s" % _fmt(tp["true_pnl_usd"])
+                _notify_safe("Griddy P&L — project (%s): %s · reset (%s): %s%s. "
+                             "Portfolio $%s @ $%s." % (
+                                 a["project"]["label"].replace("since ", ""),
+                                 _fmt(a["project"]["pnl_usd"]),
+                                 a["reset"]["label"].replace("since ", "").replace(" reset", ""),
+                                 _fmt(a["reset"]["pnl_usd"]), extra,
+                                 "{:,.0f}".format(a["portfolio_now"]),
+                                 "{:,.0f}".format(a["price_now"])))
     except Exception:
         pass
 
