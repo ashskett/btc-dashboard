@@ -2241,7 +2241,27 @@ def audit_view():
                     hist.append(json.loads(line))
     except Exception:
         pass
-    return jsonify({"current": live, "recent_alerts": hist})
+    reg = _load_json_safe(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "audit_open_findings.json"))
+    return jsonify({"current": live, "open_findings": reg, "recent_alerts": hist})
+
+
+@app.route("/audit/resolve/<key>", methods=["POST"])
+def audit_resolve(key):
+    """Close a tracked finding — used from Ash's Claude control session after the
+    problem is actually addressed (the ONLY authority for system changes)."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "audit_open_findings.json")
+    reg = _load_json_safe(p)
+    if key not in reg:
+        return jsonify({"ok": False, "msg": "unknown finding key"}), 404
+    body = request.get_json(force=True, silent=True) or {}
+    reg[key]["status"] = "resolved"
+    reg[key]["resolved_at"] = int(time.time())
+    reg[key]["resolution"] = body.get("note", "resolved via control session")
+    with open(p, "w") as f:
+        json.dump(reg, f, indent=2)
+    return jsonify({"ok": True, "finding": reg[key]})
 
 
 @app.route("/realpnl")

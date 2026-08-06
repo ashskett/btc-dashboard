@@ -29,6 +29,7 @@ GRID_FILE    = os.path.join(HERE, "grid_state.json")
 PORT_FILE    = os.path.join(HERE, "portfolio_log.jsonl")
 FILLS_FILE   = os.path.join(HERE, "fills_log.jsonl")
 RPNL_FILE    = os.path.join(HERE, "real_pnl_state.json")
+OPEN_FILE    = os.path.join(HERE, "audit_open_findings.json")
 
 # ── Tunables ────────────────────────────────────────────────────────────────
 NEAR_EXTREME_ATR   = 0.5     # a fill is "near" the window low/high within this ×ATR
@@ -446,6 +447,20 @@ def run(notify_fn=None):
     except Exception:
         pass
 
+    # ── Open-findings register (2026-08-06): every finding is a tracked issue —
+    # open until explicitly resolved from Ash's Claude control session (the ONLY
+    # authority that changes the system; alerts route humans there, never to an
+    # uninformed AI). POST /audit/resolve/<key> closes with a note.
+    try:
+        reg = _load(OPEN_FILE, {})
+        for x in findings:
+            r = reg.get(x["key"]) or {"first_seen": int(now), "status": "open"}
+            r.update({"last_seen": int(now), "sev": x["sev"], "msg": x["msg"],
+                      "status": "open"})
+            reg[x["key"]] = r
+        json.dump(reg, open(OPEN_FILE, "w"), indent=2)
+    except Exception:
+        pass
     if fresh:
         try:
             with open(LOG_FILE, "a") as f:
@@ -457,7 +472,10 @@ def run(notify_fn=None):
             icon = {"critical": "🚨", "high": "⚠", "medium": "•", "low": "·"}
             body = "\n".join("%s %s" % (icon.get(x["sev"], "•"), x["msg"]) for x in fresh)
             try:
-                notify_fn("Griddy AUDIT — %d issue(s):\n%s" % (len(fresh), body))
+                notify_fn("Griddy AUDIT — %d issue(s):\n%s\n"
+                          "→ To act: open your Griddy control session in Claude "
+                          "and say 'address audit'. Only that session (full "
+                          "history) may change the system." % (len(fresh), body))
             except Exception:
                 pass
     return findings
