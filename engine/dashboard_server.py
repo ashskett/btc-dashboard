@@ -2523,6 +2523,79 @@ def _grid_heartbeat():
         pass
 
 
+_REMOTE_CMDS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "remote_commands.json")
+
+
+def _telegram_command_poller():
+    """Mobile control loop (Ash 2026-08-06): Ash replies to a Griddy alert IN
+    TELEGRAM (message starting 'act' or 'griddy'); this poller queues it; the
+    launchd agent on Ash's MAC pulls the queue and runs an INFORMED headless
+    Claude there (same memory files + doctrine as the control session — never a
+    cold cloud AI), then posts the result back to Telegram. Only messages from
+    TELEGRAM_CHAT_ID are accepted."""
+    import requests as _rq
+    from dotenv import load_dotenv as _ld
+    _ld()
+    tok = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat = str(os.getenv("TELEGRAM_CHAT_ID", ""))
+    if not tok or not chat:
+        print("telegram poller: no token/chat — disabled")
+        return
+    offset = 0
+    while True:
+        try:
+            r = _rq.get("https://api.telegram.org/bot%s/getUpdates" % tok,
+                        params={"offset": offset, "timeout": 25}, timeout=35)
+            for u in (r.json().get("result") or []):
+                offset = max(offset, u["update_id"] + 1)
+                m = u.get("message") or {}
+                if str((m.get("chat") or {}).get("id")) != chat:
+                    continue
+                text = (m.get("text") or "").strip()
+                if not text or not text.lower().startswith(("act", "griddy")):
+                    continue
+                q = _load_json_safe(_REMOTE_CMDS) or {"cmds": []}
+                cid = "c%d" % int(time.time())
+                q["cmds"].append({"id": cid, "ts": int(time.time()),
+                                  "text": text, "status": "queued"})
+                json.dump(q, open(_REMOTE_CMDS, "w"), indent=2)
+                _notify_safe("Command received — your Mac's Griddy agent will pick "
+                             "it up within ~2 min and report back here.")
+        except Exception:
+            time.sleep(10)
+        time.sleep(3)
+
+
+@app.route("/remote/next")
+def remote_next():
+    """Mac agent polls this: pops the oldest queued command."""
+    q = _load_json_safe(_REMOTE_CMDS) or {"cmds": []}
+    for c in q["cmds"]:
+        if c["status"] == "queued":
+            c["status"] = "running"
+            c["started"] = int(time.time())
+            json.dump(q, open(_REMOTE_CMDS, "w"), indent=2)
+            return jsonify({"cmd": c})
+    return jsonify({"cmd": None})
+
+
+@app.route("/remote/done/<cid>", methods=["POST"])
+def remote_done(cid):
+    """Mac agent posts the result; it is relayed to Ash on Telegram."""
+    body = request.get_json(force=True, silent=True) or {}
+    q = _load_json_safe(_REMOTE_CMDS) or {"cmds": []}
+    for c in q["cmds"]:
+        if c["id"] == cid:
+            c["status"] = "done"
+            c["finished"] = int(time.time())
+            json.dump(q, open(_REMOTE_CMDS, "w"), indent=2)
+            break
+    res = (body.get("result") or "(no output)")[:3500]
+    _notify_safe("Griddy agent report:\n%s" % res)
+    return jsonify({"ok": True})
+
+
 def _engine_watchdog():
     """Respawn the engine child if it dies OR hangs, and Telegram-alert on
     down/recovery so an outage can never again go unnoticed.
@@ -3008,6 +3081,8 @@ if __name__ == "__main__":
     # on down/recovery (Option A — closes the 2026-06-27 silent-24h-outage gap).
     threading.Thread(target=_engine_watchdog, daemon=True).start()
     print("Engine watchdog started (respawn + down/recovery alerts)")
+    threading.Thread(target=_telegram_command_poller, daemon=True).start()
+    print("Telegram command poller started (mobile → Mac agent bridge)")
 
     # Startup self-heal: re-download static files from the correct branch 20s after
     # startup. This silently fixes any bad webhook overwrite (e.g. webhook running
