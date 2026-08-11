@@ -39,13 +39,34 @@ RANGE_ALERT_EVERY_H = 6.0  # re-alert cadence while still outside
 def _load():
     try:
         return json.load(open(STATE_FILE))
-    except Exception:
+    except FileNotFoundError:
         return {"active": False}
+    except Exception:
+        # Corrupt state must NOT silently disable zero mode (2026-08-11 incident:
+        # truncated file -> adaptive layer woke unnoticed). Fail SAFE: treat as
+        # active-with-no-tiers (ladder holds, range checks skip) and scream.
+        try:
+            import notify
+            notify.notify_critical("ZERO MODE STATE FILE CORRUPT — holding static "
+                                   "posture; repair zero_mode.json / re-activate.")
+        except Exception:
+            pass
+        return {"active": True, "tiers": [], "corrupt": True}
 
 
 def _save(s):
+    """ATOMIC write (2026-08-12): a plain json.dump was truncated mid-write on
+    2026-08-11 20:35, corrupting the state file — _load() then failed and
+    is_active() silently returned False, waking the ENTIRE adaptive layer for
+    2+ hours (SELL_ONLY entered at 96%). tmp+rename is atomic on POSIX: readers
+    see the old file or the new file, never a partial one."""
     try:
-        json.dump(s, open(STATE_FILE, "w"), indent=2)
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(s, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, STATE_FILE)
     except Exception:
         pass
 
