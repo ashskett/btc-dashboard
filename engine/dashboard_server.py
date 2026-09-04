@@ -2168,6 +2168,50 @@ def alpha_view():
         return jsonify({"ok": False, "error": str(e)})
 
 
+def _direct_paper_loop():
+    """GRIDDY DIRECT paper simulator: poll spot every 30s, advance the ladder.
+    No orders are ever placed in paper mode; validates the executor for days
+    before any live cutover (which happens only on Ash's explicit go)."""
+    import requests as _rq
+    import griddy_direct
+    while True:
+        try:
+            px = float(_rq.get("https://api.coinbase.com/v2/prices/BTC-USD/spot",
+                               timeout=10).json()["data"]["amount"])
+            griddy_direct.tick(px)
+        except Exception:
+            pass
+        time.sleep(30)
+
+
+@app.route("/direct")
+def direct_state():
+    import griddy_direct
+    return jsonify(griddy_direct.summary())
+
+
+@app.route("/direct/activate", methods=["POST"])
+def direct_activate():
+    """(Re)build the PAPER ladder at current spot. Paper only — no orders."""
+    import requests as _rq
+    import griddy_direct
+    try:
+        px = float(_rq.get("https://api.coinbase.com/v2/prices/BTC-USD/spot",
+                           timeout=10).json()["data"]["amount"])
+        port = 70000.0
+        try:
+            e = json.loads(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                             "portfolio_log.jsonl")).readlines()[-1])
+            port = float(e.get("portfolio_usd") or port)
+        except Exception:
+            pass
+        s = griddy_direct.activate_paper(px, port)
+        return jsonify({"ok": True, "rungs": len(s["rungs"]), "anchor": px,
+                        "portfolio": port})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 @app.route("/zero")
 def zero_state():
     import zero_mode
@@ -3083,6 +3127,8 @@ if __name__ == "__main__":
     print("Engine watchdog started (respawn + down/recovery alerts)")
     threading.Thread(target=_telegram_command_poller, daemon=True).start()
     print("Telegram command poller started (mobile → Mac agent bridge)")
+    threading.Thread(target=_direct_paper_loop, daemon=True).start()
+    print("Griddy Direct PAPER simulator started (30s spot ticks, no orders)")
 
     # Startup self-heal: re-download static files from the correct branch 20s after
     # startup. This silently fixes any bad webhook overwrite (e.g. webhook running
