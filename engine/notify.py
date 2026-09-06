@@ -16,10 +16,21 @@ _CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 _last_notify_ts = 0.0
 _COOLDOWN = 30  # seconds between non-critical messages
 
+# Global mute (Ash 2026-09-04, "turn off all griddy notifications while we
+# rethink the plan"): when this file exists, ALL pushes are suppressed (still
+# logged to stdout so nothing is lost). Replies to Ash's OWN Telegram commands
+# bypass via send_direct() - muting answers to questions he just asked would
+# only break the mobile bridge. Unmute: delete the file.
+_MUTE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "notifications_muted")
 
-def _send(text: str) -> bool:
+
+def _send(text: str, force: bool = False) -> bool:
     """POST to Telegram. Returns True on success, False on failure."""
     if not _TOKEN or not _CHAT_ID:
+        return False
+    if os.path.exists(_MUTE_FILE) and not force:
+        print(f"[notify MUTED] {text[:160]}")
         return False
     try:
         r = requests.post(
@@ -48,3 +59,9 @@ def notify_critical(msg: str):
     global _last_notify_ts
     _last_notify_ts = time.time()
     _send(msg)
+
+
+def send_direct(msg: str):
+    """Bypasses the global mute - ONLY for replies to Ash's own commands
+    (mobile bridge). Never use for engine/audit chatter."""
+    _send(msg, force=True)

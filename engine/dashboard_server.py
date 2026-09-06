@@ -2604,8 +2604,7 @@ def _telegram_command_poller():
                 q["cmds"].append({"id": cid, "ts": int(time.time()),
                                   "text": text, "status": "queued"})
                 json.dump(q, open(_REMOTE_CMDS, "w"), indent=2)
-                _notify_safe("Command received — your Mac's Griddy agent will pick "
-                             "it up within ~2 min and report back here.")
+                __import__("notify").send_direct("Command received - your Mac agent will pick it up within ~2 min and report back here.")
         except Exception:
             time.sleep(10)
         time.sleep(3)
@@ -2636,7 +2635,7 @@ def remote_done(cid):
             json.dump(q, open(_REMOTE_CMDS, "w"), indent=2)
             break
     res = (body.get("result") or "(no output)")[:3500]
-    _notify_safe("Griddy agent report:\n%s" % res)
+    __import__("notify").send_direct("Griddy agent report:\n%s" % res)
     return jsonify({"ok": True})
 
 
