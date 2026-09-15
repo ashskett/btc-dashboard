@@ -417,3 +417,31 @@ def _calculate_inventory_live():
     )
 
     return btc_ratio, skew, btc, quote_usd, btc_price
+
+# ── 2026-09-15: 3Commas v1 API is DEAD (every call returns their website HTML
+# since ~Sep 11; v2 keys never issued, subscription lapsed, and we are exiting
+# 3Commas anyway — see griddy_direct). Balances now come straight from Coinbase
+# via the read-only CDP key. Same return contract as the old live fetch:
+# (btc_ratio, skew, btc_qty, usdc_qty, btc_price). Cache/sanity logic upstream
+# is unchanged.
+def _calculate_inventory_live_coinbase():
+    from dotenv import load_dotenv as _ld
+    _ld(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    import coinbase_capital as _cc
+    import requests as _rq
+    btc = usdc = 0.0
+    for a in _cc.list_accounts():
+        code = _cc._ccode(a)
+        amt = float((a.get("balance") or {}).get("amount") or 0)
+        if code == "BTC":
+            btc += amt
+        elif code in ("USDC", "USD"):
+            usdc += amt
+    px = float(_rq.get("https://api.coinbase.com/v2/prices/BTC-USD/spot",
+                       timeout=10).json()["data"]["amount"])
+    total = btc * px + usdc
+    ratio = (btc * px / total) if total > 0 else 0.5
+    return ratio, _calculate_skew(ratio), btc, usdc, px
+
+
+_calculate_inventory_live = _calculate_inventory_live_coinbase

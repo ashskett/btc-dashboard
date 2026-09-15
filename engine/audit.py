@@ -394,6 +394,24 @@ def _check_pnl_divergence(st, status):
 CHECKS_STATUS = [_check_sell_near_low, _check_buy_near_high]  # need (st, ports, atr, price)
 
 
+def _check_stale_telemetry(st, status):
+    """TWICE-BITTEN (Aug 21 flagged, Sep 15 bitten again): portfolio snapshots
+    silently stopped (engine parked; then 3Commas v1 API death) while every
+    port-based number — true P&L, anchored P&L, divergence, daily ping — served
+    stale data as if live. A frozen snapshot must never masquerade as a number."""
+    try:
+        import os as _os
+        age_min = (time.time() - _os.path.getmtime(PORT_FILE)) / 60
+    except Exception:
+        return []
+    if age_min > 30:
+        return [{"key": "stale_telemetry", "sev": "critical",
+                 "msg": ("TELEMETRY STALE: no portfolio snapshot for {:.0f} min — "
+                         "every P&L figure is frozen at old data. Check engine "
+                         "cycle / balance source.").format(age_min)}]
+    return []
+
+
 def run(notify_fn=None):
     """Run all checks; alert new findings; append to audit_log. Returns findings."""
     st = _load(STATE_FILE, {})
@@ -425,6 +443,7 @@ def run(notify_fn=None):
     _safe(_check_ratio_extreme, st, status)
     _safe(_check_realised_drop, st)
     _safe(_check_pnl_divergence, st, status)
+    _safe(_check_stale_telemetry, st, status)
     _safe(_check_chop_loss, st, status)
     _safe(_check_engine_alpha_30d, st, status)
 
