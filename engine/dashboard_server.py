@@ -2179,6 +2179,7 @@ def _direct_paper_loop():
             px = float(_rq.get("https://api.coinbase.com/v2/prices/BTC-USD/spot",
                                timeout=10).json()["data"]["amount"])
             griddy_direct.tick(px)
+            griddy_direct.tick_buyonly(px)
         except Exception:
             pass
         time.sleep(30)
@@ -2208,6 +2209,29 @@ def direct_activate():
         s = griddy_direct.activate_paper(px, port)
         return jsonify({"ok": True, "rungs": len(s["rungs"]), "anchor": px,
                         "portfolio": port})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/direct/buyonly")
+def direct_buyonly_state():
+    import griddy_direct
+    return jsonify(griddy_direct.summary_buyonly())
+
+
+@app.route("/direct/buyonly/activate", methods=["POST"])
+def direct_buyonly_activate():
+    """(Re)build the BUY-ONLY paper ladder at current spot. Paper only."""
+    import requests as _rq
+    import griddy_direct
+    try:
+        px = float(_rq.get("https://api.coinbase.com/v2/prices/BTC-USD/spot",
+                           timeout=10).json()["data"]["amount"])
+        cap = float((request.get_json(silent=True) or {}).get("capital", 30000.0))
+        s = griddy_direct.activate_buyonly_paper(px, cap)
+        return jsonify({"ok": True, "rungs": len(s["rungs"]), "anchor": px,
+                        "capital": cap,
+                        "floor": s["rungs"][-1]["price"] if s["rungs"] else None})
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "msg": str(e)}), 500
 

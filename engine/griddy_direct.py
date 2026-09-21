@@ -151,3 +151,132 @@ def summary():
             "paper_cash": round(s["cash"], 2), "fees_paid": round(s["fees"], 2),
             "rung_spread_realised": round(s["realised"], 2),
             "mark_to_market_pnl": round(mtm, 2)}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BUY-ONLY ladder (Ash, 2026-09-22): wide dip-catching net for the restart.
+# Rungs only BELOW the anchor; a filled buy places a TP sell one step up sized
+# to that clip alone, and when the TP fills the buy rung re-arms (all rungs
+# recycle — Ash's call). Existing holdings are structurally untouchable: the
+# ladder never holds a sell against anything it didn't buy itself.
+# Backtest basis (Jun 1 anchor, $30k): 18%span/1.5%step +$1,944 over ~4mo,
+# zero bags after the full down-up cycle. Runs alongside the bidirectional
+# paper ladder (separate state) as its own experiment.
+# ─────────────────────────────────────────────────────────────────────────────
+BO_STATE_FILE = os.path.join(HERE, "direct_buyonly_state.json")
+BO_FILLS_FILE = os.path.join(HERE, "direct_buyonly_fills.jsonl")
+BO_SPAN = 0.16        # ladder reaches 16% below anchor
+BO_STEP = 0.015       # geometric 1.5% rung spacing
+
+
+def _bo_load():
+    try:
+        return json.load(open(BO_STATE_FILE))
+    except Exception:
+        return {"active": False}
+
+
+def _bo_save(s):
+    try:
+        tmp = BO_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(s, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, BO_STATE_FILE)
+    except Exception:
+        pass
+
+
+def build_buyonly_ladder(price, capital=30000.0):
+    rungs = []
+    k = 1
+    while True:
+        lvl = price * (1 - BO_STEP) ** k
+        if lvl < price * (1 - BO_SPAN):
+            break
+        rungs.append(lvl)
+        k += 1
+    per = capital / len(rungs)
+    out = []
+    for i, lvl in enumerate(rungs):
+        out.append({"id": "b%d" % (i + 1), "price": round(lvl, 2),
+                    "tp": round(lvl * (1 + BO_STEP), 2),
+                    "size": round(per / lvl, 6), "status": "armed"})
+    return {"active": True, "mode": "paper", "created": time.time(),
+            "anchor_price": price, "capital": capital, "rungs": out,
+            "cash": 0.0, "btc": 0.0, "realised": 0.0, "fees": 0.0,
+            "fills": 0, "roundtrips": 0,
+            "last_price": price, "last_tick": time.time()}
+
+
+def activate_buyonly_paper(price, capital=30000.0):
+    s = build_buyonly_ladder(price, capital)
+    _bo_save(s)
+    return s
+
+
+def tick_buyonly(price):
+    """Advance the buy-only paper sim. armed rung: BUY fills when price crosses
+    down through it, rung goes 'holding' with a TP one step up. holding rung:
+    TP SELL fills when price crosses up through it, spread is booked, rung
+    re-arms. Spot polling misses wicks, so paper UNDERcounts fills."""
+    s = _bo_load()
+    if not s.get("active") or s.get("mode") != "paper":
+        return None
+    last = s.get("last_price") or price
+    filled = []
+    for r in s["rungs"]:
+        if r["status"] == "armed" and price <= r["price"] <= last:
+            cost = r["size"] * r["price"]
+            fee = cost * FEE_RATE
+            s["btc"] += r["size"]
+            s["cash"] -= cost + fee
+            s["fees"] += fee
+            s["fills"] += 1
+            r["status"] = "holding"
+            filled.append({"ts": int(time.time()), "side": "BUY",
+                           "price": r["price"], "size": r["size"], "rung": r["id"]})
+        elif r["status"] == "holding" and last <= r["tp"] <= price:
+            proceeds = r["size"] * r["tp"]
+            fee = proceeds * FEE_RATE
+            s["btc"] -= r["size"]
+            s["cash"] += proceeds - fee
+            s["fees"] += fee
+            s["fills"] += 1
+            s["roundtrips"] += 1
+            s["realised"] += r["size"] * (r["tp"] - r["price"]) - proceeds * FEE_RATE * 2
+            r["status"] = "armed"
+            filled.append({"ts": int(time.time()), "side": "SELL",
+                           "price": r["tp"], "size": r["size"], "rung": r["id"]})
+    s["last_price"] = price
+    s["last_tick"] = time.time()
+    _bo_save(s)
+    if filled:
+        try:
+            with open(BO_FILLS_FILE, "a") as f:
+                for x in filled:
+                    f.write(json.dumps(x) + "\n")
+        except Exception:
+            pass
+    return filled
+
+
+def summary_buyonly():
+    s = _bo_load()
+    if not s.get("active"):
+        return {"active": False}
+    px = s.get("last_price") or 0
+    armed = sum(1 for r in s["rungs"] if r["status"] == "armed")
+    holding = sum(1 for r in s["rungs"] if r["status"] == "holding")
+    mtm = s["cash"] + s["btc"] * px
+    return {"active": True, "mode": s["mode"], "kind": "buy_only",
+            "since": s.get("created"), "anchor_price": s.get("anchor_price"),
+            "capital": s.get("capital"), "last_price": px,
+            "age_min": round((time.time() - s.get("last_tick", 0)) / 60, 1),
+            "rungs": {"armed": armed, "holding": holding,
+                      "floor": s["rungs"][-1]["price"] if s["rungs"] else None},
+            "fills": s["fills"], "roundtrips": s["roundtrips"],
+            "paper_btc": round(s["btc"], 6), "paper_cash": round(s["cash"], 2),
+            "fees_paid": round(s["fees"], 2),
+            "rung_spread_realised": round(s["realised"], 2),
+            "mark_to_market_pnl": round(mtm, 2)}
