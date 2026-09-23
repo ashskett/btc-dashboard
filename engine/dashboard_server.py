@@ -2213,6 +2213,25 @@ def direct_activate():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+@app.route("/lab")
+def lab_results():
+    """Latest Signal Lab result per hypothesis (candidate-library view)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "datalake", "lab_results.jsonl")
+    latest = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    latest[r.get("hypothesis", "?")] = r
+                except Exception:
+                    pass
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "no lab results yet"})
+    return jsonify({"ok": True, "results": latest})
+
+
 @app.route("/datalake")
 def datalake_status():
     """Data-lake health: per-domain file size, row estimate, last-row age."""
