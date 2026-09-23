@@ -412,6 +412,29 @@ def _check_stale_telemetry(st, status):
     return []
 
 
+def _check_datalake_stale(st, status):
+    """The data lake (datalake/, fed by data_collector.py cron every 5 min)
+    is the Signal Lab's raw material — a silently dead cron would rot months
+    of research data before anyone noticed. Fresh = any domain file written
+    in the last 30 min."""
+    import os as _os
+    lake = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "datalake")
+    try:
+        mtimes = [_os.path.getmtime(_os.path.join(lake, f))
+                  for f in _os.listdir(lake) if f.endswith(".jsonl")]
+    except Exception:
+        return []
+    if not mtimes:
+        return []
+    age_min = (time.time() - max(mtimes)) / 60
+    if age_min > 30:
+        return [{"key": "datalake_stale", "sev": "high",
+                 "msg": ("DATA LAKE STALE: no collector write for {:.0f} min — "
+                         "data_collector.py cron is dead. Research data is "
+                         "gapping.").format(age_min)}]
+    return []
+
+
 def run(notify_fn=None):
     """Run all checks; alert new findings; append to audit_log. Returns findings."""
     st = _load(STATE_FILE, {})
@@ -444,6 +467,7 @@ def run(notify_fn=None):
     _safe(_check_realised_drop, st)
     _safe(_check_pnl_divergence, st, status)
     _safe(_check_stale_telemetry, st, status)
+    _safe(_check_datalake_stale, st, status)
     _safe(_check_chop_loss, st, status)
     _safe(_check_engine_alpha_30d, st, status)
 

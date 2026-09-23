@@ -2213,6 +2213,35 @@ def direct_activate():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+@app.route("/datalake")
+def datalake_status():
+    """Data-lake health: per-domain file size, row estimate, last-row age."""
+    lake = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datalake")
+    out = {}
+    try:
+        for fn in sorted(os.listdir(lake)):
+            if not fn.endswith(".jsonl"):
+                continue
+            p = os.path.join(lake, fn)
+            sz = os.path.getsize(p)
+            last_ts = None
+            try:
+                with open(p, "rb") as f:
+                    f.seek(max(0, sz - 4096))
+                    lines = f.read().decode(errors="ignore").strip().splitlines()
+                if lines:
+                    last_ts = json.loads(lines[-1]).get("ts")
+            except Exception:
+                pass
+            out[fn[:-6]] = {
+                "size_kb": round(sz / 1024, 1),
+                "age_min": round((time.time() - last_ts) / 60, 1) if last_ts else None,
+                "mtime_age_min": round((time.time() - os.path.getmtime(p)) / 60, 1)}
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "datalake/ not created yet"})
+    return jsonify({"ok": True, "domains": out})
+
+
 @app.route("/direct/buyonly")
 def direct_buyonly_state():
     import griddy_direct
