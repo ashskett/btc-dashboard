@@ -425,18 +425,30 @@ def _calculate_inventory_live():
 # (btc_ratio, skew, btc_qty, usdc_qty, btc_price). Cache/sanity logic upstream
 # is unchanged.
 def _calculate_inventory_live_coinbase():
+    """Balances from the v3 brokerage accounts endpoint, counting
+    available + hold. The v2 wallet balance EXCLUDES funds reserved for open
+    orders — Ash's two resting BTC bids made ~$19.7k of USDC vanish from
+    telemetry (2026-10-05), faking transfers and audit alarms. Totals that
+    include holds are also invariant to Griddy Direct placing/cancelling
+    orders, which keeps the capital-flow auto-detector honest once live."""
     from dotenv import load_dotenv as _ld
     _ld(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
     import coinbase_capital as _cc
     import requests as _rq
     btc = usdc = 0.0
-    for a in _cc.list_accounts():
-        code = _cc._ccode(a)
-        amt = float((a.get("balance") or {}).get("amount") or 0)
-        if code == "BTC":
+    d = _cc._get("/api/v3/brokerage/accounts", {"limit": 250})
+    for a in d.get("accounts") or []:
+        cur = a.get("currency")
+        if cur not in ("BTC", "USDC", "USD"):
+            continue
+        amt = (float((a.get("available_balance") or {}).get("value") or 0) +
+               float((a.get("hold") or {}).get("value") or 0))
+        if cur == "BTC":
             btc += amt
-        elif code in ("USDC", "USD"):
+        else:
             usdc += amt
+    if btc <= 0 and usdc <= 0:
+        raise RuntimeError("v3 accounts returned no BTC/USDC balances")
     px = float(_rq.get("https://api.coinbase.com/v2/prices/BTC-USD/spot",
                        timeout=10).json()["data"]["amount"])
     total = btc * px + usdc

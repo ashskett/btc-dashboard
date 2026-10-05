@@ -2261,6 +2261,66 @@ def datalake_status():
     return jsonify({"ok": True, "domains": out})
 
 
+def _direct_live_loop():
+    """GRIDDY DIRECT LIVE: reconcile the real ladder every 60s. Does nothing
+    until a ladder is activated; dry_run ladders never place orders."""
+    import requests as _rq
+    import griddy_direct_live as gdl
+    while True:
+        try:
+            if gdl.get_state().get("active"):
+                px = float(_rq.get(
+                    "https://api.coinbase.com/v2/prices/BTC-USD/spot",
+                    timeout=10).json()["data"]["amount"])
+                gdl.tick(px)
+        except Exception as e:
+            print("[direct-live] loop error: %s" % e, flush=True)
+        time.sleep(60)
+
+
+@app.route("/direct/live")
+def direct_live_state():
+    import griddy_direct_live as gdl
+    return jsonify(gdl.summary())
+
+
+@app.route("/direct/live/activate", methods=["POST"])
+def direct_live_activate():
+    """Arm the live ladder. dry_run defaults True; going live requires BOTH
+    dry_run=false AND confirm="GO-LIVE" (Ash's explicit word, per doctrine)."""
+    import requests as _rq
+    import griddy_direct_live as gdl
+    b = request.get_json(silent=True) or {}
+    dry = bool(b.get("dry_run", True))
+    if not dry and b.get("confirm") != "GO-LIVE":
+        return jsonify({"ok": False,
+                        "msg": 'live mode needs confirm:"GO-LIVE"'}), 400
+    try:
+        px = float(_rq.get("https://api.coinbase.com/v2/prices/BTC-USD/spot",
+                           timeout=10).json()["data"]["amount"])
+        s = gdl.activate(px, per_rung_usd=float(b.get("per_rung_usd", 500)),
+                         top_n=int(b.get("top_n", 3)), dry_run=dry)
+        return jsonify({"ok": True, "mode": "DRY-RUN" if dry else "LIVE",
+                        "ladder_id": s["ladder_id"], "anchor": px,
+                        "rungs": [(r["price"], r["tp"]) for r in s["rungs"]],
+                        "capital": s["capital"]})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/direct/live/kill", methods=["POST"])
+def direct_live_kill():
+    """Cancel-all kill switch."""
+    import griddy_direct_live as gdl
+    try:
+        return jsonify({"ok": True,
+                        "killed": gdl.kill(
+                            (request.get_json(silent=True) or {}).get(
+                                "reason", "manual"))})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 @app.route("/direct/buyonly")
 def direct_buyonly_state():
     import griddy_direct
@@ -3199,6 +3259,7 @@ if __name__ == "__main__":
     threading.Thread(target=_telegram_command_poller, daemon=True).start()
     print("Telegram command poller started (mobile → Mac agent bridge)")
     threading.Thread(target=_direct_paper_loop, daemon=True).start()
+    threading.Thread(target=_direct_live_loop, daemon=True).start()
     print("Griddy Direct PAPER simulator started (30s spot ticks, no orders)")
 
     # Startup self-heal: re-download static files from the correct branch 20s after
