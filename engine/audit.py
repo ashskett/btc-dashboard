@@ -437,6 +437,13 @@ def _check_datalake_stale(st, status):
 
 def run(notify_fn=None):
     """Run all checks; alert new findings; append to audit_log. Returns findings."""
+    # Keep the capital-flow ledger current FIRST — untracked transfers made the
+    # P&L checks blame the engine for Ash's own Sep withdrawals (2026-10-05).
+    try:
+        import realpnl as _rp
+        _rp.detect_flows()
+    except Exception:
+        pass
     st = _load(STATE_FILE, {})
     status = _load(STATUS_FILE)
     grid_ok = True

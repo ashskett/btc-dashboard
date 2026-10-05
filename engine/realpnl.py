@@ -431,6 +431,72 @@ def format_sell_alert(ev):
              qty=ev["qty"], price=ev["price"], avg=ev["avg_cost"], cum=cum_str)
 
 
+def detect_flows(days=40):
+    """Auto-detect capital flows from portfolio snapshots and upsert them into
+    capital_events.json.
+
+    WHY (2026-10-05): Ash's Sep USDC withdrawals/deposits (~$14.4k net out)
+    were never recorded as capital events, so alpha/divergence/chop audits
+    blamed the (inert!) engine for "losing" transferred money. Rule: between
+    adjacent snapshots a ONE-SIDED jump (USDC moves > $300 while BTC moves
+    < 0.003, or BTC moves > 0.003 while USDC moves < $300) is a TRANSFER —
+    a trade moves both legs in opposite directions with similar USD value,
+    so this stays correct after Griddy Direct goes live. Idempotent via
+    txid=autoflow-<snapshot ts>."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    ev_path = os.path.join(here, "capital_events.json")
+    try:
+        events = json.load(open(ev_path))
+    except Exception:
+        events = []
+    known = {e.get("txid") for e in events}
+    cutoff = time.time() - days * 86400
+    snaps = []
+    try:
+        with open(os.path.join(here, "portfolio_log.jsonl")) as f:
+            for line in f:
+                try:
+                    s = json.loads(line)
+                    if float(s.get("ts") or 0) >= cutoff and \
+                            s.get("btc_qty") is not None and \
+                            s.get("usdc_qty") is not None:
+                        snaps.append(s)
+                except Exception:
+                    pass
+    except Exception:
+        return []
+    snaps.sort(key=lambda s: float(s["ts"]))
+    new = []
+    for prev, cur in zip(snaps, snaps[1:]):
+        if float(cur["ts"]) - float(prev["ts"]) > 1800:
+            continue   # across a telemetry gap we can't attribute the change
+        db = float(cur["btc_qty"]) - float(prev["btc_qty"])
+        du = float(cur["usdc_qty"]) - float(prev["usdc_qty"])
+        px = float(cur.get("btc_price") or 0) or 1.0
+        usdc_moved, btc_moved = abs(du) > 300, abs(db) > 0.003
+        if usdc_moved == btc_moved:
+            continue   # neither (noise) or both (a trade) — not a transfer
+        amt = du if usdc_moved else db * px
+        txid = "autoflow-%d" % int(float(cur["ts"]))
+        if txid in known:
+            continue
+        ev = {"ts": float(cur["ts"]), "amount_usd": round(amt, 2),
+              "label": "auto-detected {} transfer ({})".format(
+                  "USDC" if usdc_moved else "BTC",
+                  "in" if amt > 0 else "out"),
+              "txid": txid, "type": "netflow", "source": "autodetect"}
+        events.append(ev)
+        known.add(txid)
+        new.append(ev)
+    if new:
+        events.sort(key=lambda e: float(e.get("ts") or 0))
+        tmp = ev_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(events, f, indent=2)
+        os.replace(tmp, ev_path)
+    return new
+
+
 if __name__ == "__main__":
     import sys
     bots = ["2743885", "2743889", "2743888"]

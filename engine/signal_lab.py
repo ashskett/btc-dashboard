@@ -270,7 +270,84 @@ def hyp_fear_greed():
     return res
 
 
+def hyp_funding_capitulation_wf():
+    """Walk-forward + parameter sensitivity for the first-batch winner
+    (funding percentile low AND 24h dip). Promotion test: pick params on PAST
+    data only, each year 2021-2026, measure that year out-of-sample NET."""
+    fh = _load_jsonl("funding_hist")
+    fh = fh[fh["sym"] == "BTCUSDT"].sort_values("ts")
+    s = pd.Series(fh["funding_rate"].values,
+                  index=pd.to_datetime(fh["ts"], unit="s", utc=True))
+    s = s.resample("1h").last().ffill(limit=9)
+    p = build_panel(features={"funding": s})
+    p["fpctl"] = p["funding"].rolling(24 * 30).rank(pct=True)
+    p = p.dropna(subset=["fpctl"])
+
+    def _ev(mask, sub, hz):
+        """De-clustered event mean fwd return on subset `sub`."""
+        col = "fwd_%dh" % hz
+        idx, last = [], None
+        for t in mask[mask].index:
+            if last is None or (t - last) >= pd.Timedelta(hours=hz):
+                idx.append(t)
+                last = t
+        ev = sub.loc[[t for t in idx if t in sub.index], col].dropna()
+        return len(ev), (float(ev.mean()) if len(ev) else None)
+
+    grid = [(pc, dp) for pc in (0.02, 0.05, 0.10)
+            for dp in (-0.02, -0.03, -0.05)]
+    res = {"sensitivity": {}, "walk_forward": {}}
+
+    # full-sample sensitivity (context only — NOT the promotion criterion)
+    for hz in (24, 72):
+        tbl = {}
+        for pc, dp in grid:
+            mask = (p["fpctl"] < pc) & (p["ret_24h"] < dp)
+            n, m = _ev(mask, p, hz)
+            tbl["pctl<{:.0%} dip<{:.0%}".format(pc, dp)] = {
+                "n": n, "net_bps": round((m - COST_RT) * 1e4, 1) if m is not None else None}
+        res["sensitivity"][hz] = tbl
+
+    # walk-forward: choose params on data strictly BEFORE the test year
+    for hz in (24, 72):
+        oos = {}
+        for year in range(2021, 2027):
+            cut = pd.Timestamp(year=year, month=1, day=1, tz="UTC")
+            train = p[p.index < cut]
+            test = p[(p.index >= cut) & (p.index < cut + pd.DateOffset(years=1))]
+            best, best_net = None, None
+            for pc, dp in grid:
+                mask = (train["fpctl"] < pc) & (train["ret_24h"] < dp)
+                n, m = _ev(mask, train, hz)
+                if m is None or n < 25:
+                    continue
+                net = m - COST_RT
+                if best_net is None or net > best_net:
+                    best, best_net = (pc, dp), net
+            if best is None:
+                continue
+            pc, dp = best
+            mask = (test["fpctl"] < pc) & (test["ret_24h"] < dp)
+            n, m = _ev(mask, test, hz)
+            oos[year] = {"params": "pctl<{:.0%} dip<{:.0%}".format(pc, dp),
+                         "train_net_bps": round(best_net * 1e4, 1),
+                         "oos_n": n,
+                         "oos_net_bps": round((m - COST_RT) * 1e4, 1) if m is not None else None}
+        vals = [(v["oos_n"], v["oos_net_bps"]) for v in oos.values()
+                if v["oos_net_bps"] is not None and v["oos_n"] > 0]
+        tot_n = sum(n for n, _ in vals)
+        res["walk_forward"][hz] = {
+            "by_year": oos,
+            "oos_total_events": tot_n,
+            "oos_weighted_net_bps": round(
+                sum(n * b for n, b in vals) / tot_n, 1) if tot_n else None,
+            "oos_years_positive": "{}/{}".format(
+                sum(1 for _, b in vals if b > 0), len(vals))}
+    return res
+
+
 HYPOTHESES = {
+    "funding_capitulation_wf": hyp_funding_capitulation_wf,
     "funding_extreme": hyp_funding_extreme,
     "dip_buy": hyp_dip_buy,
     "momentum": hyp_momentum,
