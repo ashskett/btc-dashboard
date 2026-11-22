@@ -2278,6 +2278,60 @@ def _direct_live_loop():
         time.sleep(60)
 
 
+# ── Notification digest (2026-11-22): info-level pushes queue in
+# notify_queue.jsonl and go out as ONE Telegram digest at the UTC hours in
+# notify_settings.json. Marker file prevents a double flush within an hour
+# (survives restarts).
+_DIGEST_MARKER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "notify_digest_last")
+
+
+def _notify_digest_loop():
+    import datetime as _dt
+    import notify
+    while True:
+        try:
+            now = _dt.datetime.utcnow()
+            hours = [int(h) for h in (notify.load_settings().get("digest_utc_hours") or [])]
+            if now.hour in hours and now.minute <= 1:
+                slot = now.strftime("%Y-%m-%d-%H")
+                try:
+                    last = open(_DIGEST_MARKER).read().strip()
+                except Exception:
+                    last = ""
+                if last != slot:
+                    with open(_DIGEST_MARKER, "w") as f:
+                        f.write(slot)
+                    n = notify.flush_digest()
+                    print("[notify-digest] {} flushed {}".format(slot, n), flush=True)
+        except Exception as e:
+            print("[notify-digest] loop error: {}".format(e), flush=True)
+        time.sleep(60)
+
+
+@app.route("/notify/flush", methods=["POST"])
+def notify_flush():
+    import notify
+    try:
+        return jsonify({"ok": True, "flushed": notify.flush_digest()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/notify/settings", methods=["GET", "POST"])
+def notify_settings():
+    import notify
+    if request.method == "POST":
+        b = request.get_json(silent=True)
+        if not isinstance(b, dict):
+            return jsonify({"ok": False, "error": "JSON object body required"}), 400
+        try:
+            return jsonify({"ok": True, "settings": notify.save_settings(b)})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify(notify.load_settings())
+
+
 @app.route("/direct/live")
 def direct_live_state():
     import griddy_direct_live as gdl
@@ -3260,6 +3314,8 @@ if __name__ == "__main__":
     print("Telegram command poller started (mobile → Mac agent bridge)")
     threading.Thread(target=_direct_paper_loop, daemon=True).start()
     threading.Thread(target=_direct_live_loop, daemon=True).start()
+    threading.Thread(target=_notify_digest_loop, daemon=True).start()
+    print("Notify digest loop started (info pushes batched at digest_utc_hours)")
     print("Griddy Direct PAPER simulator started (30s spot ticks, no orders)")
 
     # Startup self-heal: re-download static files from the correct branch 20s after

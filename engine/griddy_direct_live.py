@@ -45,10 +45,20 @@ def _log(msg):
     print("[direct-live] {}".format(msg), flush=True)
 
 
+_CRIT_MARKERS = ("KILLED", "ARMED", "RECONCILIATION", "place failed",
+                 "fetch failed", "kill flag", "KILL:")
+
+
 def _notify(msg):
     try:
         import notify
-        notify.send("GRIDDY DIRECT LIVE: " + msg)
+        text = "GRIDDY DIRECT LIVE: " + msg
+        if any(m in msg for m in _CRIT_MARKERS):
+            notify.send(text, level="critical")
+        elif "fill" in msg:
+            notify.send(text, level="info", key="fill")
+        else:
+            notify.send(text, level="info")
     except Exception:
         pass
     _log(msg)

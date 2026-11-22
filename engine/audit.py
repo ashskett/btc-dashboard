@@ -486,9 +486,11 @@ def run(notify_fn=None):
     _SLOW = {"pnl_divergence": 12 * 3600, "chop_loss": 12 * 3600,
              "engine_alpha_30d": 12 * 3600, "ratio_extreme": 6 * 3600}
     for f in findings:
+        first = f["key"] not in seen
         last = seen.get(f["key"], 0)
         if now - last >= _SLOW.get(f["key"], ALERT_COOLDOWN_S):
             seen[f["key"]] = now
+            f = dict(f, _first=first)
             fresh.append(f)
     st["seen"] = seen
     st["last_run"] = now
@@ -515,19 +517,32 @@ def run(notify_fn=None):
         try:
             with open(LOG_FILE, "a") as f:
                 for x in fresh:
-                    f.write(json.dumps({"ts": int(now), **x}) + "\n")
+                    f.write(json.dumps({"ts": int(now), **{k: v for k, v in x.items() if k != "_first"}}) + "\n")
         except Exception:
             pass
         if notify_fn:
+            # Tiers (2026-11-22): a finding's FIRST-ever alert goes out
+            # immediately (via notify_fn); re-pings of still-open findings are
+            # queued for the twice-daily digest instead of pinging Ash.
             icon = {"critical": "🚨", "high": "⚠", "medium": "•", "low": "·"}
-            body = "\n".join("%s %s" % (icon.get(x["sev"], "•"), x["msg"]) for x in fresh)
-            try:
-                notify_fn("Griddy AUDIT — %d issue(s):\n%s\n"
-                          "→ To act: open your Griddy control session in Claude "
-                          "and say 'address audit'. Only that session (full "
-                          "history) may change the system." % (len(fresh), body))
-            except Exception:
-                pass
+            new_f = [x for x in fresh if x.get("_first")]
+            rep_f = [x for x in fresh if not x.get("_first")]
+            if new_f:
+                body = "\n".join("%s %s" % (icon.get(x["sev"], "•"), x["msg"]) for x in new_f)
+                try:
+                    notify_fn("Griddy AUDIT — %d issue(s):\n%s\n"
+                              "→ To act: open your Griddy control session in Claude "
+                              "and say 'address audit'. Only that session (full "
+                              "history) may change the system." % (len(new_f), body))
+                except Exception:
+                    pass
+            for x in rep_f:
+                try:
+                    import notify as _nt
+                    _nt.send("Audit still open: %s %s" % (icon.get(x["sev"], "•"), x["msg"]),
+                             level="info", key=x["key"])
+                except Exception:
+                    pass
     return findings
 
 
