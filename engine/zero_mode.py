@@ -67,8 +67,9 @@ def _save(s):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, STATE_FILE)
-    except Exception:
-        pass
+    except Exception as e:  # never raise, but never hide either — a silent
+        # save failure cost a day of 2-minute Telegram spam (2026-11-23)
+        print("[zero_mode] STATE SAVE FAILED: {}".format(e), flush=True)
 
 
 def is_active():
@@ -83,6 +84,11 @@ def make_static_tiers(price):
     """Nested static tiers centred near `price`, spans mirroring the classic
     inner/mid/outer widths, level counts kept comfortably above the fee floor
     (min_step ≈ 0.6% of price; steps below are 0.9–3%)."""
+    # The engine passes a numpy float off the pandas pipeline; tiers built
+    # from it are not JSON serializable, which made _save fail silently on
+    # every range-exit alert — the cooldown never persisted and Telegram got
+    # a re-alert every cycle (2026-11-23).
+    price = float(price)
     p = round(price, -2)
     tiers = [
         {"name": "inner", "grid_low": p - 2000, "grid_high": p + 2000, "levels": 10},

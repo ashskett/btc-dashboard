@@ -2283,7 +2283,11 @@ def run():
             try:
                 _zmsg = zero_mode.check_range_exit(state.price)
                 if _zmsg:
-                    notify_critical(_zmsg)
+                    # digest, not immediate: during a long excursion this
+                    # repeats every 6h, and the proposal is one-click whenever
+                    # Ash gets to it (2026-11-23)
+                    import notify as _nt
+                    _nt.send(_zmsg, level="info", key="zero_range")
             except Exception as _ze:
                 print(f"Warning: zero range-exit check failed: {_ze}")
         elif state.regime == "COMPRESSION":
