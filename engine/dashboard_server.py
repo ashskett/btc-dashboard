@@ -2435,13 +2435,23 @@ def zero_approve():
     import zero_mode
     p = zero_mode.take_pending_proposal()
     if not p:
-        return jsonify({"ok": False, "msg": "no pending proposal"}), 404
-    if not _zero_deploy(p):
-        return jsonify({"ok": False, "msg": "deploy skipped by guard/cooldown — retry shortly"}), 409
+        return jsonify({"ok": False, "msg": "no pending proposal (it may have "
+                        "been consumed by an earlier failed click — the next "
+                        "range-exit alert regenerates it)"}), 404
+    # Store the new range FIRST. The old order (deploy, then store) consumed
+    # the proposal and 409'd when the 3Commas redeploy failed — with 3Commas
+    # dead the recentre could never succeed (bitten 2026-11-27). The bot
+    # redeploy is best-effort legacy: the 3Commas bots are inert.
     zero_mode.activate(p)   # re-store tiers + reset outside-tracking
-    _notify_safe("GRIDDY ZERO — new static range approved & deployed: ${:,.0f}-${:,.0f}.".format(
-        min(t["grid_low"] for t in p), max(t["grid_high"] for t in p)))
-    return jsonify({"ok": True, "tiers": p})
+    deployed = False
+    try:
+        deployed = bool(_zero_deploy(p))
+    except Exception:
+        pass
+    _notify_safe("GRIDDY ZERO — new static range approved: ${:,.0f}-${:,.0f}{}".format(
+        min(t["grid_low"] for t in p), max(t["grid_high"] for t in p),
+        "" if deployed else " (bot redeploy skipped — 3Commas inert)"))
+    return jsonify({"ok": True, "tiers": p, "bots_redeployed": deployed})
 
 
 @app.route("/zero/deactivate", methods=["POST"])
